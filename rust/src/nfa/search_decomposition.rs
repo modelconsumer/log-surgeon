@@ -16,7 +16,6 @@ pub enum PathComponent {
 	},
 	QueryWildcard,
 	PatternWildcard,
-	// Unknown,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -26,6 +25,16 @@ pub struct TarjanSccData {
 	pub on_stack: bool,
 	pub scc: usize,
 }
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+enum PathEdge {
+	Literal(char),
+	Capture { sub_rule: SubRule, start: bool },
+	QueryWildcard,
+	PatternWildcard,
+}
+
+type PartialPath = Vec<PathEdge>;
 
 #[derive(Debug, Clone, Copy)]
 struct StatePair<'a> {
@@ -76,6 +85,33 @@ impl std::fmt::Display for Path {
 			part.fmt(fmt)?;
 		}
 		Ok(())
+	}
+}
+
+impl PathEdge {
+	fn condense(edges: &mut Vec<PathEdge>) {
+		let mut i: usize = 1;
+		while i < edges.len() {
+			let previous: &PathEdge = &edges[i - 1];
+			let current: &PathEdge = &edges[i];
+			match (previous, current) {
+				// (PathEdge::Literal(s1), PathEdge::Literal(s2)) => {
+				// 	let s: String = s1.to_owned() + s2;
+				// 	edges[i - 1] = PathEdge::Literal(s);
+				// 	edges.remove(i);
+				// },
+				(
+					PathEdge::QueryWildcard | PathEdge::PatternWildcard,
+					PathEdge::QueryWildcard | PathEdge::PatternWildcard,
+				) => {
+					edges[i - 1] = PathEdge::QueryWildcard;
+					edges.remove(i);
+				},
+				_ => {
+					i += 1;
+				},
+			}
+		}
 	}
 }
 
@@ -155,20 +191,68 @@ impl std::fmt::Display for PathComponent {
 	}
 }
 
-impl PathComponent {
-	fn is_wildcard(&self) -> bool {
-		match self {
-			Self::Literal(_) => false,
-			Self::QueryWildcard => true,
-			Self::PatternWildcard => false,
-			Self::Capture { contents, .. } => contents.iter().all(Self::is_wildcard),
-		}
-	}
-}
+// impl PathComponent {
+// 	fn is_wildcard(&self) -> bool {
+// 		match self {
+// 			Self::Literal(_) => false,
+// 			Self::QueryWildcard => true,
+// 			Self::PatternWildcard => false,
+// 			Self::Capture { contents, .. } => contents.iter().all(Self::is_wildcard),
+// 		}
+// 	}
+// }
+
+// impl PathEdge {
+// 	fn is_wildcard(&self) -> bool {
+// 		match self {
+// 			Self::QueryWildcard => true,
+// 			_ => false,
+// 		}
+// 	}
+// }
 
 impl Tnfa {
 	pub fn intersect(&self, other: &Self) -> Self {
+		// println!(
+		// 	"intersecting nfas with states {}, {}",
+		// 	self.states.len(),
+		// 	other.states.len()
+		// );
 		let begin: NfaIdx = NfaIdx::BEGIN;
+
+		let extra_accept2: Vec<bool> = vec![false; other.states.len()];
+		// {
+		// 	let mut stack: Vec<&NfaState> = vec![&other[begin]];
+		// 	let mut seen: BTreeSet<NfaIdx> = BTreeSet::from_iter(stack.iter().map(|state| state.idx));
+		// 	while let Some(state) = stack.pop() {
+		// 		match &state.transitions {
+		// 			Transitions::Spontaneous(spontaneous) => {
+		// 				for transition in spontaneous.iter() {
+		// 					if let SpontaneousTransitionKind::Positive(Tag::StartCapture(capture)) = &transition.kind {
+		// 						assert_eq!(capture.name, "");
+		// 						assert_eq!(capture.id, NonZero::<u16>::MAX);
+		// 						extra_accept2[state.idx.0] = true;
+		// 					}
+		// 					if matches!(transition.kind, SpontaneousTransitionKind::Epsilon) {
+		// 						if extra_accept2[state.idx.0] {
+		// 							extra_accept2[transition.target.0] = true;
+		// 						}
+		// 					}
+		// 					if seen.insert(transition.target) {
+		// 						stack.push(&other[transition.target]);
+		// 					}
+		// 				}
+		// 			},
+		// 			Transitions::Interval(transitions) => {
+		// 				for (_, &target) in transitions.iter() {
+		// 					if seen.insert(target) {
+		// 						stack.push(&other[target]);
+		// 					}
+		// 				}
+		// 			},
+		// 		}
+		// 	}
+		// }
 
 		let mut stack: Vec<(StatePair<'_>, NfaIdx)> = vec![(StatePair::new(self, other, begin, begin), begin)];
 		let mut seen: BTreeMap<StatePair<'_>, NfaIdx> = BTreeMap::from_iter(stack.iter().copied());
@@ -185,9 +269,13 @@ impl Tnfa {
 
 		while let Some((pair, state)) = stack.pop() {
 			if let Some(rule) = pair.state1().maybe_accepts_for_rule
-				&& pair.state2().is_accepting()
+				&& (pair.state2().is_accepting() || extra_accept2[pair.state2().idx.0])
 			{
 				intersection[state].maybe_accepts_for_rule = Some(rule);
+				// if extra_accept2[pair.state2().idx.0] {
+				// 	intersection[state].data = 1;
+				// }
+				// continue;
 				assert_eq!(intersection[state].transitions.len(), 0);
 				continue;
 			}
@@ -208,6 +296,7 @@ impl Tnfa {
 							spontaneous1
 								.iter()
 								.map(|transition1| {
+									// assert_eq!(transition2.kind, SpontaneousTransitionKind::Epsilon);
 									let next: NfaIdx = lookup_state(
 										StatePair::new(self, other, transition1.target, pair.states.1),
 										&mut intersection,
@@ -220,55 +309,101 @@ impl Tnfa {
 								.collect::<Vec<_>>(),
 						);
 					} else {
-						assert!(!spontaneous2.is_empty());
 						intersection[state].transitions = Transitions::Spontaneous(
 							spontaneous2
 								.iter()
 								.map(|transition2| {
-									assert_eq!(transition2.kind, SpontaneousTransitionKind::Epsilon);
-									let next: NfaIdx = lookup_state(
+									// assert_eq!(transition2.kind, SpontaneousTransitionKind::Epsilon);
+									let target: NfaIdx = lookup_state(
 										StatePair::new(self, other, pair.states.0, transition2.target),
 										&mut intersection,
 									);
 									SpontaneousTransition {
 										kind: SpontaneousTransitionKind::Epsilon,
-										target: next,
+										target,
 									}
 								})
 								.collect::<Vec<_>>(),
 						);
 					}
 				},
-				(Transitions::Spontaneous(spontaneous), _) => {
+				// (Transitions::Spontaneous(_), Transitions::Spontaneous(_)) => {
+				// 	let targets1: Vec<&NfaState> = self.reachable_through_epsilons(pair.state1());
+				// 	let targets2: Vec<&NfaState> = other.reachable_through_epsilons(pair.state2());
+				// 	let mut targets: Vec<SpontaneousTransition> = Vec::new();
+				// 	for &target1 in targets1.iter() {
+				// 		for &target2 in targets2.iter() {
+				// 			let target: NfaIdx =
+				// 				lookup_state(StatePair::new(self, other, target1.idx, target2.idx), &mut intersection);
+				// 			targets.push(SpontaneousTransition {
+				// 				kind: SpontaneousTransitionKind::Epsilon,
+				// 				target,
+				// 			});
+				// 		}
+				// 	}
+				// 	intersection[state].transitions = Transitions::Spontaneous(targets);
+				// },
+				(Transitions::Spontaneous(transitions1), _) => {
+					// intersection[state].transitions = Transitions::Spontaneous(
+					// 	transitions1
+					// 		.iter()
+					// 		.map(|spontaneous1| self.reachable_through_epsilons(spontaneous1.target))
+					// 		.flatten()
+					// 		.map(|target| {
+					// 			let next: NfaIdx =
+					// 				lookup_state(StatePair::new(self, other, target, pair.states.1), &mut intersection);
+					// 			SpontaneousTransition {
+					// 				kind: spontaneous1.kind.clone(),
+					// 				target: next,
+					// 			}
+					// 		})
+					// 		.collect::<Vec<_>>(),
+					// );
+					// let targets1: Vec<&NfaState> = self.reachable_through_epsilons(pair.state1());
+					// let mut targets: Vec<SpontaneousTransition> = Vec::new();
+					// for &target1 in targets1.iter() {
+					// 	let target: NfaIdx = lookup_state(
+					// 		StatePair::new(self, other, target1.idx, pair.state2().idx),
+					// 		&mut intersection,
+					// 	);
+					// 	targets.push(SpontaneousTransition {
+					// 		kind: SpontaneousTransitionKind::Epsilon,
+					// 		target,
+					// 	});
+					// }
 					intersection[state].transitions = Transitions::Spontaneous(
-						spontaneous
+						transitions1
 							.iter()
-							.map(|transition1| {
+							.map(|spontaneous1| {
 								let next: NfaIdx = lookup_state(
-									StatePair::new(self, other, transition1.target, pair.states.1),
+									StatePair::new(self, other, spontaneous1.target, pair.states.1),
 									&mut intersection,
 								);
+								// intersection[next].maybe_accepts_for_rule = intersection[state].maybe_accepts_for_rule;
+								// intersection[next].data = 1;
+								// intersection[state].maybe_accepts_for_rule = None;
+								// intersection[state].data = 0;
 								SpontaneousTransition {
-									kind: transition1.kind.clone(),
+									kind: spontaneous1.kind.clone(),
 									target: next,
 								}
 							})
 							.collect::<Vec<_>>(),
 					);
 				},
-				(_, Transitions::Spontaneous(spontaneous)) => {
+				(_, Transitions::Spontaneous(transitions)) => {
 					intersection[state].transitions = Transitions::Spontaneous(
-						spontaneous
+						transitions
 							.iter()
-							.map(|transition2| {
-								assert_eq!(transition2.kind, SpontaneousTransitionKind::Epsilon);
-								let next: NfaIdx = lookup_state(
-									StatePair::new(self, other, pair.states.0, transition2.target),
+							.map(|spontaneous2| {
+								// assert_eq!(transition2.kind, SpontaneousTransitionKind::Epsilon);
+								let target: NfaIdx = lookup_state(
+									StatePair::new(self, other, pair.states.0, spontaneous2.target),
 									&mut intersection,
 								);
 								SpontaneousTransition {
 									kind: SpontaneousTransitionKind::Epsilon,
-									target: next,
+									target,
 								}
 							})
 							.collect::<Vec<_>>(),
@@ -287,9 +422,11 @@ impl Tnfa {
 									lookup_state(StatePair::new(self, other, target1, target2), &mut intersection);
 								combined.insert(Interval::new(0, u32::MAX), next, PolicyUnique);
 							} else {
+								assert_eq!(interval2.start(), interval2.end());
 								let Some(overlap): Option<Interval<u32>> = interval1.overlap(&interval2) else {
 									continue;
 								};
+								assert_eq!(overlap, interval2);
 								let next: NfaIdx =
 									lookup_state(StatePair::new(self, other, target1, target2), &mut intersection);
 								// println!("inserting interval {overlap:?}");
@@ -302,36 +439,48 @@ impl Tnfa {
 			}
 		}
 
+		let can_accept: Vec<bool> = intersection.can_accept();
+		let n: usize = can_accept.iter().filter(|&&b| b).count();
+		// println!("- {}/{} can accept", n, can_accept.len());
+		for state in intersection.states.iter_mut() {
+			match &mut state.transitions {
+				Transitions::Interval(transitions) => {
+					transitions.retain(|&(_interval, target)| can_accept[target.0]);
+				},
+				Transitions::Spontaneous(transitions) => {
+					transitions.retain(|transition| can_accept[transition.target.0]);
+				},
+			}
+		}
+
 		intersection
 	}
 
-	pub fn can_accept(&self) -> bool {
-		let reachable: Vec<bool> = self.compute_reachability();
-		reachable.iter().any(|&b| b)
-	}
+	pub fn can_accept(&self) -> Vec<bool> {
+		let mut acceptable: Vec<bool> = vec![false; self.states.len()];
 
-	fn compute_reachability(&self) -> Vec<bool> {
-		let mut reachable: Vec<bool> = vec![false; self.states.len()];
+		for state in self.states.iter() {
+			if state.is_accepting() {
+				acceptable[state.idx.0] = true;
+			}
+		}
 
-		reachable[0] = true;
 		let mut changed: bool = true;
 		while changed {
 			changed = false;
 			for state in self.states.iter() {
-				if !reachable[state.idx.0] {
-					continue;
-				}
-				for idx in state.transitions.successors() {
-					let target: &NfaState = &self[idx];
-					let old_reachable: bool = std::mem::replace(&mut reachable[target.idx.0], true);
-					if !old_reachable {
-						changed = true;
+				for target_idx in state.transitions.successors() {
+					if acceptable[target_idx.0] {
+						let old_can_accept: bool = std::mem::replace(&mut acceptable[state.idx.0], true);
+						if !old_can_accept {
+							changed = true;
+						}
 					}
 				}
 			}
 		}
 
-		reachable
+		acceptable
 	}
 
 	pub fn tarjan_scc(&self) -> (Vec<Vec<NfaIdx>>, Vec<TarjanSccData>, Vec<NfaIdx>) {
@@ -414,14 +563,120 @@ impl Tnfa {
 	pub fn compute_paths(&self) -> Vec<Path> {
 		let (sccs, data, _indices): (Vec<Vec<NfaIdx>>, Vec<TarjanSccData>, Vec<NfaIdx>) = self.tarjan_scc();
 
-		let mut finished: Vec<Vec<PathComponent>> = Vec::new();
+		println!("computing paths for {} states", self.states.len());
 
+		let mut cache: Vec<Option<Vec<(NfaIdx, PartialPath, RuleIdx)>>> = vec![None; self.states.len()];
+
+		if self[NfaIdx::BEGIN].transitions.len() == 0 {
+			return Vec::new();
+		}
+
+		let prefix: PartialPath = Vec::new();
+		let mut seen_prefix: BTreeMap<NfaIdx, BTreeSet<PartialPath>> = BTreeMap::new();
+		let mut finished: Vec<(PartialPath, RuleIdx)> = Vec::new();
+		// time_this!("hi", {
+		self.compute_paths_internal(
+			&self[NfaIdx::BEGIN],
+			&prefix,
+			&mut seen_prefix,
+			&sccs,
+			&data,
+			&mut cache,
+			&mut finished,
+		);
+		// });
+		let mut finished: Vec<Vec<PathComponent>> = Vec::new();
+		// for state in self.states.iter() {
+		// 	if state.transitions.len() == 0 {
+		// 		continue;
+		// 	}
+		// 	let scc: &Vec<NfaIdx> = &sccs[data[state.idx.0].scc];
+		// 	assert!(!scc.is_empty());
+		// 	if scc.len() == 1 {
+		// 		self.compute_paths_internal(state, &sccs, &data, &mut cache);
+		// 	} else {
+		// 		cache[state.idx.0].get_or_insert_with(|| self.compute_scc_path(state, &sccs, &data));
+		// 	}
+		// }
+		// println!("=== done first step");
+		// for state in self.states.iter() {
+		// 	if state.transitions.len() > 0 {
+		// 		if let Some(paths) = &cache[state.idx.0] {
+		// 			println!("- {}: {}", state.idx, paths.len());
+		// 		}
+		// 	}
+		// }
+		let paths: &Vec<(NfaIdx, PartialPath, RuleIdx)> = cache[0].as_ref().unwrap();
+
+		now!(t1);
+		for (_, edges, rule_idx) in paths.iter() {
+			let mut path: Vec<PathComponent> = Vec::new();
+			let mut maybe_capture: Option<(SubRule, Vec<PathComponent>)> = None;
+			// let all_wildcards: bool = scc_path.iter().all(PathEdge::is_wildcard);
+
+			// TODO code duplication
+			for edge in edges.iter().rev() {
+				match edge {
+					PathEdge::Literal(ch) => {
+						// TODO
+						if let Some((_sub_rule, capture_path)) = maybe_capture.as_mut() {
+							capture_path.push(PathComponent::Literal(ch.to_string()));
+						} else {
+							path.push(PathComponent::Literal(ch.to_string()));
+						}
+					},
+					PathEdge::Capture { sub_rule, start } => {
+						if let Some((current_rule, capture_path)) = maybe_capture {
+							assert!(!start);
+							assert_eq!(sub_rule, &current_rule);
+							path.push(PathComponent::Capture {
+								rule_idx: *rule_idx,
+								qualified_name: sub_rule.qualified_name.clone(),
+								contents: capture_path,
+							});
+							maybe_capture = None;
+						} else {
+							assert!(start);
+							maybe_capture = Some((sub_rule.clone(), Vec::new()));
+						}
+					},
+					PathEdge::QueryWildcard => {
+						if let Some((_sub_rule, capture_path)) = maybe_capture.as_mut() {
+							capture_path.push(PathComponent::QueryWildcard);
+						} else {
+							path.push(PathComponent::QueryWildcard);
+						}
+					},
+					PathEdge::PatternWildcard => {
+						if let Some((_sub_rule, capture_path)) = maybe_capture.as_mut() {
+							capture_path.push(PathComponent::PatternWildcard);
+						} else {
+							path.push(PathComponent::PatternWildcard);
+						}
+					},
+				}
+			}
+
+			finished.push(path);
+		}
+		finished.iter_mut().for_each(Path::condense);
+		println!("\t- took {:?}", how_long!(t1));
+		return finished.into_iter().map(Path::new).collect::<Vec<_>>();
+
+		/*
 		let mut stack: Vec<(&NfaState, Option<(SubRule, Vec<PathComponent>)>, Vec<PathComponent>)> =
 			vec![(&self[NfaIdx::BEGIN], None, Vec::new())];
 
 		while let Some((entry, mut maybe_capture, mut path)) = stack.pop() {
 			let scc: &Vec<NfaIdx> = &sccs[data[entry.idx.0].scc];
 			assert!(!scc.is_empty());
+			// println!(
+			// 	"- scc {} / {}, len {}, stack has {}",
+			// 	data[entry.idx.0].scc,
+			// 	sccs.len(),
+			// 	scc.len(),
+			// 	stack.len(),
+			// );
 			if let Some(accepting_rule) = entry.maybe_accepts_for_rule {
 				assert_eq!(scc.len(), 1);
 				assert_eq!(entry.transitions.len(), 0);
@@ -431,14 +686,19 @@ impl Tnfa {
 						*rule_idx = accepting_rule;
 					}
 				}
+				assert_eq!(entry.transitions.len(), 0);
 				finished.push(path);
 				continue;
 			}
 			if scc.len() == 1 {
+				assert!(entry.transitions.len() > 0);
 				match &entry.transitions {
 					Transitions::Interval(transitions) => {
-						for (interval, &target) in transitions.iter() {
-							assert!(data[target.0].index > data[entry.idx.0].index);
+						// println!("- state {} has {} interval transitions", entry.idx, transitions.len());
+						for ((interval, &target), mut path) in
+							transitions.iter().zip(std::iter::repeat_n(path, transitions.len()))
+						{
+							assert!(data[target.0].index > data[entry.idx.0].index,);
 							assert!(data[target.0].scc > data[entry.idx.0].scc);
 							let ch: PathComponent = if interval.start() == interval.end() {
 								let ch: char = char::try_from(interval.start()).unwrap();
@@ -448,7 +708,6 @@ impl Tnfa {
 							} else {
 								PathComponent::PatternWildcard
 							};
-							let mut path: Vec<PathComponent> = path.clone();
 							if let Some((capture, mut capture_path)) = maybe_capture.clone() {
 								capture_path.push(ch);
 								stack.push((&self[target], Some((capture, capture_path)), path));
@@ -459,9 +718,15 @@ impl Tnfa {
 						}
 					},
 					Transitions::Spontaneous(transitions) => {
-						for transition in transitions.iter() {
+						// println!(
+						// 	"- state {} has {} spontaneous transitions",
+						// 	entry.idx,
+						// 	transitions.len()
+						// );
+						for (transition, mut path) in
+							transitions.iter().zip(std::iter::repeat_n(path, transitions.len()))
+						{
 							assert!(data[transition.target.0].scc > data[entry.idx.0].scc);
-							let mut path: Vec<PathComponent> = path.clone();
 							match &transition.kind {
 								SpontaneousTransitionKind::Positive(Tag::StartCapture(sub_rule)) => {
 									if sub_rule.is_leaf() {
@@ -497,127 +762,352 @@ impl Tnfa {
 				}
 			} else {
 				assert!(!entry.is_accepting());
+
 				if let Some((_capture, capture_path)) = &mut maybe_capture {
 					capture_path.push(PathComponent::PatternWildcard);
 				} else {
 					path.push(PathComponent::PatternWildcard);
 				};
-				let mut finished: Vec<(NfaIdx, Option<(SubRule, Vec<PathComponent>)>, Vec<PathComponent>)> = Vec::new();
-				{
-					let mut stack: Vec<(
-						&NfaState,
-						Option<(SubRule, Vec<PathComponent>)>,
-						Vec<PathComponent>,
-						BTreeSet<NfaIdx>,
-					)> = vec![(entry, maybe_capture, Vec::new(), BTreeSet::from([entry.idx]))];
-					while let Some((state, maybe_capture, path, seen)) = stack.pop() {
-						match &state.transitions {
-							Transitions::Interval(transitions) => {
-								for (interval, &target) in transitions.iter() {
-									assert_eq!(data[target.0].scc, data[entry.idx.0].scc);
-									let mut seen: BTreeSet<NfaIdx> = seen.clone();
-									let inserted: bool = seen.insert(target);
-									assert!(inserted);
-									let ch: PathComponent = if interval.start() == interval.end() {
-										let ch: char = char::try_from(interval.start()).unwrap();
-										PathComponent::Literal(ch.to_string())
-									} else if (interval.start() == 0) && (interval.end() == u32::MAX) {
-										PathComponent::QueryWildcard
-									} else {
-										PathComponent::PatternWildcard
-									};
-									let mut path: Vec<PathComponent> = path.clone();
-									if let Some((capture, mut capture_path)) = maybe_capture.clone() {
-										capture_path.push(ch);
-										stack.push((&self[target], Some((capture, capture_path)), path, seen));
-									} else {
-										path.push(ch);
-										stack.push((&self[target], None, path, seen));
-									}
-								}
-							},
-							Transitions::Spontaneous(transitions) => {
-								for transition in transitions.iter() {
-									assert!(data[transition.target.0].scc >= data[entry.idx.0].scc);
-									if data[transition.target.0].scc != data[entry.idx.0].scc {
-										finished.push((transition.target, maybe_capture.clone(), path.clone()));
-										continue;
-									}
-									let mut seen: BTreeSet<NfaIdx> = seen.clone();
-									if !seen.insert(transition.target) {
-										continue;
-									}
-									let mut path: Vec<PathComponent> = path.clone();
-									match &transition.kind {
-										SpontaneousTransitionKind::Positive(Tag::StartCapture(sub_rule)) => {
-											if sub_rule.is_leaf() {
-												assert_eq!(maybe_capture, None);
-												stack.push((
-													&self[transition.target],
-													Some((sub_rule.clone(), Vec::new())),
-													path,
-													seen,
-												));
-												continue;
-											}
-										},
-										SpontaneousTransitionKind::Positive(Tag::StopCapture(sub_rule)) => {
-											if sub_rule.is_leaf() {
-												let (current_capture, capture_path): (SubRule, Vec<PathComponent>) =
-													maybe_capture.clone().unwrap();
-												assert_eq!(&current_capture, sub_rule);
-												path.push(PathComponent::Capture {
-													rule_idx: RuleIdx::NIL,
-													qualified_name: sub_rule.qualified_name.clone(),
-													contents: capture_path,
-												});
-												stack.push((&self[transition.target], None, path, seen));
-												continue;
-											}
-										},
-										SpontaneousTransitionKind::Negative(_) => (),
-										SpontaneousTransitionKind::Epsilon => (),
-									}
-									stack.push((&self[transition.target], maybe_capture.clone(), path, seen));
-								}
-							},
-						}
-					}
-				}
 
-				for (exit, maybe_capture, scc_path) in finished.into_iter() {
+				let scc_paths: &Vec<(&NfaState, PartialPath)> =
+					cache[entry.idx.0].get_or_insert_with(|| self.compute_scc_path(entry, &sccs, &data));
+
+				assert!(!scc_paths.is_empty());
+
+				for (exit, scc_path) in scc_paths.iter() {
 					let mut path: Vec<PathComponent> = path.clone();
-					let all_wildcards: bool = scc_path.iter().all(PathComponent::is_wildcard);
-					// && maybe_capture
-					// 	.as_ref()
-					// 	.map_or(&[] as &[PathComponent], |(_, capture_path)| &capture_path[..])
-					// 	.iter()
-					// 	.all(PathComponent::is_wildcard);
-					if let Some((capture, mut capture_path)) = maybe_capture {
-						if all_wildcards {
-							if capture_path.iter().all(PathComponent::is_wildcard) {
-								capture_path.clear();
-								// capture_path.push(PathComponent::Unknown);
-							}
-							// path.push(PathComponent::PatternWildcard);
-						} else {
-							path.extend(scc_path.into_iter());
+					let mut maybe_capture: Option<(SubRule, Vec<PathComponent>)> = maybe_capture.clone();
+					// let all_wildcards: bool = scc_path.iter().all(PathEdge::is_wildcard);
+
+					// TODO code duplication
+					for edge in scc_path.iter() {
+						match edge {
+							PathEdge::Literal(ch) => {
+								// TODO
+								if let Some((_sub_rule, capture_path)) = maybe_capture.as_mut() {
+									capture_path.push(PathComponent::Literal(ch.to_string()));
+								} else {
+									path.push(PathComponent::Literal(ch.to_string()));
+								}
+							},
+							PathEdge::Capture { sub_rule, start } => {
+								if let Some((current_rule, capture_path)) = maybe_capture {
+									assert!(!start);
+									assert_eq!(sub_rule, &current_rule);
+									path.push(PathComponent::Capture {
+										rule_idx: RuleIdx::NIL,
+										qualified_name: sub_rule.qualified_name.clone(),
+										contents: capture_path,
+									});
+									maybe_capture = None;
+								} else {
+									assert!(start);
+									maybe_capture = Some((sub_rule.clone(), Vec::new()));
+								}
+							},
+							PathEdge::QueryWildcard => {
+								if let Some((_sub_rule, capture_path)) = maybe_capture.as_mut() {
+									capture_path.push(PathComponent::QueryWildcard);
+								} else {
+									path.push(PathComponent::QueryWildcard);
+								}
+							},
+							PathEdge::PatternWildcard => {
+								if let Some((_sub_rule, capture_path)) = maybe_capture.as_mut() {
+									capture_path.push(PathComponent::PatternWildcard);
+								} else {
+									path.push(PathComponent::PatternWildcard);
+								}
+							},
 						}
-						// path.extend(scc_path.into_iter());
-						capture_path.push(PathComponent::PatternWildcard);
-						stack.push((&self[exit], Some((capture, capture_path)), path));
-					} else {
-						if !all_wildcards {
-							path.extend(scc_path.into_iter());
-						}
-						path.push(PathComponent::PatternWildcard);
-						stack.push((&self[exit], None, path));
 					}
+					stack.push((exit, maybe_capture, path));
+					// if let Some((capture, mut capture_path)) = maybe_capture {
+					// 	if all_wildcards {
+					// 		if capture_path.iter().all(PathComponent::is_wildcard) {
+					// 			capture_path.clear();
+					// 		}
+					// 	} else {
+					// 		for edge in scc_path.iter() {
+					// 			path.push(match edge {
+					// 				PathEdge::Literal(ch) => {
+					// 					// TODO
+					// 					PathComponent::Literal(ch.to_string())
+					// 				},
+					// 				PathEdge::Capture {
+					// 					rule_idx,
+					// 					sub_rule,
+					// 					start,
+					// 				} => {
+					// 					todo!();
+					// 				},
+					// 				PathEdge::QueryWildcard => PathComponent::QueryWildcard,
+					// 				PathEdge::PatternWildcard => PathComponent::PatternWildcard,
+					// 			});
+					// 		}
+					// 	}
+					// 	capture_path.push(PathComponent::PatternWildcard);
+					// 	stack.push((exit, Some((capture, capture_path)), path));
+					// } else {
+					// 	if !all_wildcards {
+					// 		path.extend(scc_path.into_iter());
+					// 	}
+					// 	path.push(PathComponent::PatternWildcard);
+					// 	stack.push((&self[exit], None, path));
+					// }
 				}
 			}
 		}
 
 		finished.into_iter().map(Path::new).collect::<Vec<_>>()
+			*/
+	}
+
+	fn compute_paths_internal<'a>(
+		&self,
+		entry: &NfaState,
+		prefix: &PartialPath,
+		seen_prefix: &mut BTreeMap<NfaIdx, BTreeSet<PartialPath>>,
+		sccs: &[Vec<NfaIdx>],
+		data: &[TarjanSccData],
+		cache: &'a mut [Option<Vec<(NfaIdx, PartialPath, RuleIdx)>>],
+		finished: &mut Vec<(PartialPath, RuleIdx)>,
+	) -> Vec<(NfaIdx, PartialPath, RuleIdx)> {
+		// ) {
+		if seen_prefix
+			.entry(entry.idx)
+			.or_insert_with(BTreeSet::new)
+			.contains(prefix)
+		{
+			return Vec::new();
+		}
+		seen_prefix.get_mut(&entry.idx).unwrap().insert(prefix.clone());
+		if let Some(cached) = cache[entry.idx.0].as_ref() {
+			return cached.clone();
+			// return;
+		}
+
+		let mut paths: Vec<(NfaIdx, PartialPath, RuleIdx)> = Vec::new();
+		let scc: &Vec<NfaIdx> = &sccs[data[entry.idx.0].scc];
+		assert!(!scc.is_empty());
+		if let Some(rule) = entry.maybe_accepts_for_rule {
+			finished.push((prefix.clone(), rule));
+			return cache[entry.idx.0].insert(vec![(entry.idx, Vec::new(), rule)]).clone();
+			// cache[entry.idx.0].insert(vec![(entry.idx, Vec::new(), rule)]);
+			// return;
+		}
+		if scc.len() == 1 {
+			assert!(entry.transitions.len() > 0);
+			match &entry.transitions {
+				Transitions::Interval(transitions) => {
+					assert_eq!(transitions.len(), 1);
+					// println!("- state {} has {} interval transitions", entry.idx, transitions.len());
+					for ((interval, &target), mut prefix) in transitions
+						.iter()
+						.zip(std::iter::repeat_n(prefix.clone(), transitions.len()))
+					{
+						assert!(data[target.0].index > data[entry.idx.0].index);
+						assert!(data[target.0].scc > data[entry.idx.0].scc);
+						let ch: PathEdge = if interval.start() == interval.end() {
+							let ch: char = char::try_from(interval.start()).unwrap();
+							PathEdge::Literal(ch)
+						} else if (interval.start() == 0) && (interval.end() == u32::MAX) {
+							PathEdge::QueryWildcard
+						} else {
+							PathEdge::PatternWildcard
+						};
+						prefix.push(ch.clone());
+						PathEdge::condense(&mut prefix);
+						// self.compute_paths_internal(&self[target], &prefix, seen_prefix, sccs, data, cache, finished);
+
+						let mut partials: Vec<(NfaIdx, PartialPath, RuleIdx)> = self
+							.compute_paths_internal(&self[target], &prefix, seen_prefix, sccs, data, cache, finished);
+						for (_state, path, _rule) in partials.iter_mut() {
+							path.push(ch.clone());
+							PathEdge::condense(path);
+						}
+						partials.sort();
+						partials.dedup();
+						// println!("- did interval for {}: {}", entry.idx, partials.len());
+						// cache[entry.idx.0] = Some(partials);
+						// paths.push((&self[target], vec![ch]));
+						assert!(cache[entry.idx.0].is_none());
+						return cache[entry.idx.0].insert(partials).clone();
+						// cache[entry.idx.0].insert(vec![(target, vec![ch], RuleIdx::NIL)]);
+						// return;
+					}
+					unreachable!();
+				},
+				Transitions::Spontaneous(transitions) => {
+					// println!(
+					// 	"- state {} has {} spontaneous transitions",
+					// 	entry.idx,
+					// 	transitions.len()
+					// );
+					for transition in transitions.iter() {
+						assert!(data[transition.target.0].scc > data[entry.idx.0].scc);
+						match &transition.kind {
+							SpontaneousTransitionKind::Positive(
+								tag @ (Tag::StartCapture(sub_rule) | Tag::StopCapture(sub_rule)),
+							) => {
+								if sub_rule.is_leaf() {
+									// assert_eq!(maybe_capture, None);
+									let start: bool = matches!(tag, Tag::StartCapture(_));
+									// paths.push((
+									// 	&self[transition.target],
+									// 	vec![PathEdge::Capture {
+									// 		sub_rule: sub_rule.clone(),
+									// 		start,
+									// 	}],
+									// ));
+									let mut prefix: PartialPath = prefix.clone();
+									let edge: PathEdge = PathEdge::Capture {
+										sub_rule: sub_rule.clone(),
+										start,
+									};
+									prefix.push(edge.clone());
+									let mut partials: Vec<(NfaIdx, PartialPath, RuleIdx)> = self
+										.compute_paths_internal(
+											&self[transition.target],
+											&prefix,
+											seen_prefix,
+											sccs,
+											data,
+											cache,
+											finished,
+										);
+									for (_state, path, _rule) in partials.iter_mut() {
+										path.push(edge.clone());
+									}
+									paths.extend(partials.into_iter());
+									continue;
+								}
+							},
+							SpontaneousTransitionKind::Negative(_) => (),
+							SpontaneousTransitionKind::Epsilon => (),
+						}
+						let partials: Vec<(NfaIdx, PartialPath, RuleIdx)> = self.compute_paths_internal(
+							&self[transition.target],
+							prefix,
+							seen_prefix,
+							sccs,
+							data,
+							cache,
+							finished,
+						);
+						paths.extend(partials.into_iter());
+						// paths.push((&self[transition.target], Vec::new()));
+					}
+					paths.sort();
+					paths.dedup();
+					// println!("- did spontaneous for {}: {}", entry.idx, paths.len());
+					assert!(cache[entry.idx.0].is_none());
+					return cache[entry.idx.0].insert(paths).clone();
+				},
+			}
+		} else {
+			return self.compute_scc_path(entry, prefix, seen_prefix, &sccs, &data, cache, finished);
+		}
+	}
+
+	fn compute_scc_path<'a>(
+		&self,
+		entry: &NfaState,
+		prefix: &PartialPath,
+		seen_prefix: &mut BTreeMap<NfaIdx, BTreeSet<PartialPath>>,
+		sccs: &[Vec<NfaIdx>],
+		data: &[TarjanSccData],
+		cache: &'a mut [Option<Vec<(NfaIdx, PartialPath, RuleIdx)>>],
+		finished2: &mut Vec<(PartialPath, RuleIdx)>,
+	) -> Vec<(NfaIdx, PartialPath, RuleIdx)> {
+		let mut finished: Vec<(NfaIdx, PartialPath, RuleIdx)> = Vec::new();
+
+		// println!("computing scc path for entry {}", entry.idx);
+
+		let mut stack: Vec<(&NfaState, PartialPath, BTreeSet<NfaIdx>)> =
+			vec![(entry, vec![PathEdge::PatternWildcard], BTreeSet::from([entry.idx]))];
+
+		while let Some((state, path, seen)) = stack.pop() {
+			assert!(state.transitions.len() > 0);
+			match &state.transitions {
+				Transitions::Interval(transitions) => {
+					assert_eq!(transitions.len(), 1);
+					for ((interval, &target), (mut path, mut seen)) in transitions
+						.iter()
+						.zip(std::iter::repeat_n((path, seen), transitions.len()))
+					{
+						assert_eq!(data[target.0].scc, data[entry.idx.0].scc);
+						let inserted: bool = seen.insert(target);
+						assert!(inserted);
+						let ch: PathEdge = if interval.start() == interval.end() {
+							let ch: char = char::try_from(interval.start()).unwrap();
+							PathEdge::Literal(ch)
+						} else if (interval.start() == 0) && (interval.end() == u32::MAX) {
+							PathEdge::QueryWildcard
+						} else {
+							PathEdge::PatternWildcard
+						};
+						path.push(ch);
+						stack.push((&self[target], path, seen));
+					}
+				},
+				Transitions::Spontaneous(transitions) => {
+					for (transition, (mut path, mut seen)) in transitions
+						.iter()
+						.zip(std::iter::repeat_n((path, seen), transitions.len()))
+					{
+						assert!(data[transition.target.0].scc >= data[entry.idx.0].scc);
+						if data[transition.target.0].scc != data[entry.idx.0].scc {
+							let mut partials: Vec<(NfaIdx, PartialPath, RuleIdx)> = self.compute_paths_internal(
+								&self[transition.target],
+								prefix,
+								seen_prefix,
+								sccs,
+								data,
+								cache,
+								finished2,
+							);
+							for (end, mut remaining, rule) in partials.into_iter() {
+								remaining.extend(path.iter().rev().cloned());
+								PathEdge::condense(&mut remaining);
+								finished.push((end, remaining, rule));
+							}
+							continue;
+						}
+						if seen.contains(&transition.target) {
+							continue;
+						}
+						let inserted: bool = seen.insert(transition.target);
+						assert!(inserted);
+						match &transition.kind {
+							SpontaneousTransitionKind::Positive(
+								tag @ (Tag::StartCapture(sub_rule) | Tag::StopCapture(sub_rule)),
+							) => {
+								if sub_rule.is_leaf() {
+									// assert_eq!(maybe_capture, None);
+									let start: bool = matches!(tag, Tag::StartCapture(_));
+									path.push(PathEdge::Capture {
+										sub_rule: sub_rule.clone(),
+										start,
+									});
+									stack.push((&self[transition.target], path, seen));
+									continue;
+								}
+							},
+							SpontaneousTransitionKind::Negative(_) => (),
+							SpontaneousTransitionKind::Epsilon => (),
+						}
+						stack.push((&self[transition.target], path, seen));
+					}
+				},
+			}
+		}
+		finished.sort();
+		finished.dedup();
+		// finished.sort_by(|lhs, rhs| (&lhs.1, &lhs.2).cmp(&(&rhs.1, &rhs.2)));
+		// finished.dedup_by(|lhs, rhs| (&lhs.1, &lhs.2).cmp(&(&rhs.1, &rhs.2)).is_eq());
+		assert!(cache[entry.idx.0].is_none());
+		cache[entry.idx.0].insert(finished).clone()
 	}
 }
 
@@ -672,6 +1162,7 @@ impl PathComponent {
 #[cfg(test)]
 mod test {
 	use super::*;
+	use std::num::NonZero;
 
 	#[test]
 	fn nfa_decomp() {
