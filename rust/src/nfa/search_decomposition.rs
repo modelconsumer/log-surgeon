@@ -820,7 +820,7 @@ mod test {
 	}
 
 	fn nfa_for(pattern: &str) -> Tnfa {
-		let regex: Regex = Regex::from_pattern(pattern).unwrap().regex;
+		let regex: Regex = Regex::from_pattern(pattern).unwrap();
 		Tnfa::from_regex(&regex)
 	}
 }
