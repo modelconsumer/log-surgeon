@@ -130,6 +130,19 @@ impl AnchoredRegex {
 	}
 }
 
+/// See the [Parsing Specification File document][parsing-spec-file]
+/// for more details on regex syntax and semantics.
+///
+/// In summary, a regular expression is composed of terms ([`parse_term`] and [`parse_parenthesized`])
+/// and operators to recursively combine subexpressions;
+/// from highest to lowest precedence:
+///
+/// - suffixed repetition operators ([`parse_suffixed`]),
+/// - concatenation ([`parse_sequence`]), and
+/// - alternation ([`parse_alternation`]).
+///
+/// TODO after merge: update link
+/// [parsing-spec-file]: https://github.com/y-scope/log-surgeon/tree/log-mechanic/rust/docs/parsing-specification.md
 impl Regex {
 	pub fn from_pattern(pattern: &str) -> Result<Self, RegexError> {
 		Self::from_pattern_with_placeholders::<false, _>(pattern, &mut ())
@@ -153,7 +166,7 @@ impl Regex {
 
 				regex.replace_with_placeholders(lookup).map_err(|kind| RegexError {
 					consumed: pattern.to_owned(),
-					remaining: remaining.to_owned(),
+					remaining: String::new(),
 					kind,
 				})?;
 
@@ -170,7 +183,7 @@ impl Regex {
 				Ok(regex)
 			},
 			Err(NomErr::Incomplete(_)) => {
-				panic!("we shouldn't be using anything that can return this");
+				unreachable!("we shouldn't be using anything that can return this");
 			},
 			Err(NomErr::Error(err) | NomErr::Failure(err)) => {
 				let consumed: &str = pattern.strip_suffix(err.input).unwrap();
@@ -183,7 +196,7 @@ impl Regex {
 		}
 	}
 
-	fn replace_with_placeholders<F>(&mut self, get_placeholder: &mut F) -> Result<(), RegexErrorKind>
+	fn replace_with_placeholders<F>(&mut self, placeholder_lookup: &mut F) -> Result<(), RegexErrorKind>
 	where
 		F: RegexPlaceholderLookup,
 	{
@@ -192,20 +205,20 @@ impl Regex {
 			Self::Capture(sub_rule) => Arc::get_mut(sub_rule)
 				.unwrap()
 				.regex
-				.replace_with_placeholders(get_placeholder),
+				.replace_with_placeholders(placeholder_lookup),
 			Self::Placeholder { name, item } => {
-				let Some(placeholder): Option<Regex> = get_placeholder.lookup(name) else {
+				let Some(placeholder): Option<Regex> = placeholder_lookup.lookup(name) else {
 					return Err(RegexErrorKind::UndefinedPlaceholder(name.clone()));
 				};
-				**item = placeholder;
+				**item = placeholder.deep_clone();
 				Ok(())
 			},
 			Self::KleeneClosure(item) | Self::KleenePlus(item) | Self::BoundedRepetition { item, .. } => {
-				item.replace_with_placeholders(get_placeholder)
+				item.replace_with_placeholders(placeholder_lookup)
 			},
 			Self::Sequence(items) | Self::Alternation(items) => {
 				for sub_item in items.iter_mut() {
-					sub_item.replace_with_placeholders(get_placeholder)?;
+					sub_item.replace_with_placeholders(placeholder_lookup)?;
 				}
 				Ok(())
 			},
@@ -284,15 +297,9 @@ impl RegexErrorKind {
 	}
 }
 
+/// See comment on [`parse_alternation`] and [`parse_sequence`] on swallowed errors;
+/// reproduce [`RegexErrorKind::InvalidTerm`] errors if not at end of input.
 fn parse_to_end(input: &str) -> ParsingResult<'_, Regex> {
-	// `parse_sequence` (and consequently `parse_alternation`) may swallow errors from
-	// `parse_suffixed`, since the former two are "lists" that simply terminate when
-	// no more elements (suffixed terms) can be parsed.
-	// `parse_alternation` is called at the top level (here), or inside parentheses (possibly a capture).
-	// Inside parentheses, after failing to parse a term (i.e. reaching the end of the list),
-	// we look for the closing parenthesis.
-	// Here, after reaching the end of the list, we ensure we're at the end of input,
-	// otherwise "reproduce" the invalid term error.
 	let (input, regex): (&str, Regex) = parse_alternation(input)?;
 
 	if !input.is_empty() {
@@ -302,35 +309,35 @@ fn parse_to_end(input: &str) -> ParsingResult<'_, Regex> {
 	Ok((input, regex))
 }
 
-fn parse_alternation(input: &str) -> ParsingResult<'_, Regex> {
+/// A non-empty "list" of [`parse_sequence`]s, separated by bar `|`s.
+/// Note that the first sequence is required (by non-emptiness),
+/// and if a bar `|` is encountered, another sequence is necessarily expected.
+///
+/// `parse_alternation` is called at the top level by [`parse_to_end`],
+/// and inside parentheses by [`parse_parenthesized`].
+/// The former (re)produces [RegexErrorKind::InvalidTerm`] swallowed inside [`parse_sequence`] if not at end of input,
+/// and the latter will produce a [`RegexErrorKind::ExpectedClose`] if not terminated properly.
+fn parse_alternation(mut input: &str) -> ParsingResult<'_, Regex> {
 	use nom::combinator::cut;
 	use nom::combinator::opt;
 
-	// Cut: Any time we're "trying" to parse an alternation,
-	// we necessarily are expecting at least one item.
-	let (mut input, first): (&str, Regex) = cut(parse_sequence).parse(input)?;
-
-	let mut items: Vec<Regex> = vec![first];
+	let mut items: Vec<Regex> = Vec::new();
 
 	loop {
+		// Cut: Any time we're "trying" to parse an alternation,
+		// we necessarily are expecting at least one item;
+		// and, the loop only continues if we parsed a bar '|',
+		// so we're looking for another item.
+		let sequence: Regex;
+		(input, sequence) = cut(parse_sequence).parse(input)?;
+
+		items.push(sequence);
+
 		let maybe_bar: Option<char>;
 		(input, maybe_bar) = opt(parse_char::<'|'>).parse(input)?;
+
 		if maybe_bar.is_none() {
 			break;
-		}
-
-		// Cut: After seeing a '|', we necessarily are expecting a sequence.
-		match cut(parse_sequence).parse(input) {
-			Ok((remaining, item)) => {
-				input = remaining;
-				items.push(item);
-			},
-			Err(NomErr::Error(_)) => {
-				break;
-			},
-			Err(err @ (NomErr::Incomplete(_) | NomErr::Failure(_))) => {
-				return Err(err);
-			},
 		}
 	}
 
@@ -341,6 +348,15 @@ fn parse_alternation(input: &str) -> ParsingResult<'_, Regex> {
 	}
 }
 
+/// A non-empty "list" of [`parse_suffixed`]s;
+/// unlike [`parse_alternation`], there's no explicit separator/joining character,
+/// so beyond the first `parse_suffixed`,
+/// the list is terminated once `parse_suffixed` fails,
+/// and the error is swallowed.
+///
+/// Note that we can't "peek" to check if we're at the end of input,
+/// since we don't know if we're inside a parenthesized expression (followed by a closing parentheses)
+/// or at the top level (followed by end of input).
 fn parse_sequence(input: &str) -> ParsingResult<'_, Regex> {
 	use nom::combinator::cut;
 
@@ -359,7 +375,10 @@ fn parse_sequence(input: &str) -> ParsingResult<'_, Regex> {
 			Err(NomErr::Error(_)) => {
 				break;
 			},
-			Err(err @ (NomErr::Incomplete(_) | NomErr::Failure(_))) => {
+			Err(NomErr::Incomplete(_)) => {
+				unreachable!("we shouldn't be using anything that can return this");
+			},
+			Err(err @ NomErr::Failure(_)) => {
 				return Err(err);
 			},
 		}
@@ -439,21 +458,17 @@ fn parse_repetition_bounds(original_input: &str) -> ParsingResult<'_, (u32, u32)
 	if have_comma {
 		// Cut: After seeing a ',', we necessarily are expecting an upper bound.
 		let (input, y): (&str, u32) = cut(parse_digits).parse(input_after_comma)?;
-		if y > 0 {
-			if x <= y {
-				Ok((input, (x, y)))
-			} else {
-				Err(RegexErrorKind::InvalidRepetitionBound(x, y).error(input_after_comma))
-			}
-		} else {
-			Err(RegexErrorKind::InvalidRepetitionBound(x, y).error(input_after_comma))
+		if (x > y) || (y == 0) {
+			// For a suffix `{min,max}`, `min == max` is allowed, except if `max == 0`.
+			return Err(RegexErrorKind::InvalidRepetitionBound(x, y).error(input_after_comma));
 		}
+		Ok((input, (x, y)))
 	} else {
-		if x > 0 {
-			Ok((input, (x, x)))
-		} else {
-			Err(RegexErrorKind::InvalidRepetitionBound(x, x).error(original_input))
+		if x == 0 {
+			// Suffix `{0}` is equivalent to `{0,0}`, which is not allowed as above.
+			return Err(RegexErrorKind::InvalidRepetitionBound(x, x).error(original_input));
 		}
+		Ok((input, (x, x)))
 	}
 }
 
@@ -473,6 +488,7 @@ fn parse_term(input: &str) -> ParsingResult<'_, Regex> {
 	.parse(input)
 }
 
+/// See also: [`parse_alternation`] for details on error propagation.
 fn parse_parenthesized(input: &str) -> ParsingResult<'_, Regex> {
 	use nom::branch::alt;
 
@@ -488,8 +504,9 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 	let (input, name): (&str, &str) = cut(surrounded_cut::<'<', '>', _, _>(parse_capture_name)).parse(input)?;
 
 	if input.starts_with(')') {
-		// This function is called from [`parse_parenthesized`] inside [`surrounded_cut`];
-		// we do not consume the opening or closing parentheses.
+		// This function is called from [`parse_parenthesized`] inside a [`surrounded_cut`];
+		// we do not consume the opening or closing parentheses here,
+		// as those are consumed by [`surrounded_cut`].
 		// Instead, "peek" for the closing parenthesis to determine if we are an empty capture,
 		// indicating a regex placeholder.
 		//
@@ -742,8 +759,7 @@ fn parse_standard_escape(input: &str) -> ParsingResult<'_, Term> {
 					's' => vec![(' ', ' '), ('\t', '\t'), ('\r', '\r'), ('\n', '\n')],
 					'w' => vec![('0', '9'), ('a', 'z'), ('A', 'Z')],
 					_ => {
-						// TODO better message
-						unreachable!();
+						unreachable!("unexpected escape character '\\{ch}'");
 					},
 				},
 			},

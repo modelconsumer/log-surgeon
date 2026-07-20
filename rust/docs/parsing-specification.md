@@ -1,12 +1,23 @@
 ## Parsing Specification
-A parsing specification is a list of rules used to determine non-static text in logs.
-A rule is a `name: "pattern"` pair;
-Log Surgeon supports most common regex syntax/semantics (the outside double-quotes are not part of the pattern).
-For example, a pattern `[0-9]+` may be used to identify numbers.
+A parsing specification is a list of regex rules used to determine semantically meaningful text in logs.
+It can be defined programmatically using the C++ or Python API,
+or using a Parsing Specification File.
 
-In a Parsing Specification File,
-rules are listed in priority-order.
-These rules are also called root rules;
+In a parsing specification file,
+a rule is written as `name: "regex-pattern"`.
+Log Surgeon supports most common regex syntax/semantics, detailed [below][regex-pattern-syntax]
+(the outside double-quotes are not part of the pattern).
+For example, a rule `int: "[0-9]+"` may be used to identify numbers.
+
+Parsing first considers longest match,
+and priority is used as a tie-breaker when multiple rules match with the same length (from the same starting position).
+There are two levels to priority.
+The first is an optional integer value (defaulting to `0`) written after the rule name, e.g. `int (-10): "[0-9]+"`.
+Higher integer values correspond to higher priority.
+If multiple rules match with the same length, starting position, and integer priority,
+the first such rule in the file is matched/returned.
+
+The rules defined at the "top-level" are also called root rules;
 "regex captures" in a pattern define subrules as `(?<sub_rule_name>sub_rule_pattern)`, arbitrarily nested.
 Log Surgeon extracts both root rules and subrules when parsing;
 the extracted values are called matches.
@@ -17,21 +28,32 @@ which require different implementations internally.
 From the outside, Log Surgeon matches and stores both root rule matches and subrule regex captures alike,
 so we simply refer to them as "rules", "patterns", and "matches".
 
-A (sub)rule with no child subrules is called a leaf rule;
-a root rule whose pattern has no regex captures is also a leaf rule.
-For example, the root rule `email: "(?<user>\w+)@(?<hostname>((?<subdomain>\w+)\.)*(?<domain>\w+)\.(?<tld>\w+))"`
-has leaf rules `user`, `subdomain`, `domain`, and `tld`.
-
+A notable distinction is that subrules have a fully qualified name containing its parent/ancestor rules' names;
+since a root rule has no parents, its fully qualified name is just its own name.
 The fully qualified name of a rule starts with its root rule name and is followed by any/all subrule names,
 separated by periods, e.g. `foo.bar.baz`.
 
+A (sub)rule with no child subrules is called a leaf rule;
+a root rule whose pattern has no regex captures is also a leaf rule.
+For example, the root rule `email: "(?<user>\w+)@(?<hostname>((?<subdomain>\w+)\.)*(?<domain>\w+)\.(?<tld>\w+))"`
+has leaf rules `email.user`, `email.subdomain`, `email.domain`, and `email.tld`.
+
 A name denotes the "type" of the matched text,
 and the same name/type may have multiple rules/patterns.
+For example:
 
-A parsing specification also contains a set of delimiter characters,
-which are additionally used to differentiate between static and non-static text.
+```
+timestamp: "\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2}(\.\d{3})?"
+timestamp: "\d{2}\\[A-Z][a-z]{2}\\\d{4}:\d{2}\d{2}:\d{2}"
+```
 
-### File Format
+A parsing specification must also contain a `delimiter: "..."` definition,
+which is a set of characters additionally used to identify matches;
+see [Parsing][parsing] for more details.
+Newlines (`\n`) must be part of the delimiter set,
+since they already delimit the start and end of log events.
+
+### Example Parsing Specification File
 Again, a parsing specification file primarily consists of a priority-ordered list `name: "pattern"` rules,
 plus a delimiter set of characters.
 For example:
@@ -79,8 +101,17 @@ Regexes are ("regular") expressions composed of terms and operators.
 
 Terms are:
 
-- individual characters/character sets, e.g. `.` (any single character), `a`, `[a-z]`, or `[a-z0-9ABC]`
-- parenthesized expressions/subrules, e.g. `(hello)` or `(?<greeting>hello world)`
+- individual characters/character sets:
+	- `.`, which matches any single character, including newlines
+	- a literal character, e.g. `a`, `\.` (to match a literal `.`), or `\\`
+	- bracketed ranges, e.g. `[a-z]` or `[a-z0-9ABC]`
+	- dedicated character sets, e.g. `\d` equivalent to `[0-9]`
+- parenthesized expressions, e.g. `(abc)`
+- subrules, e.g. `(?<greeting>hello world)`
+- references to placeholders, e.g. `(?<greeting>)`
+
+See [Escape Characters][escape-characters] and [Bracketed Ranges][bracketed-ranges] below
+for exact details on individual characters and character sets.
 
 Operators are, from highest to lowest precedence (and always left-associative):
 
@@ -90,8 +121,8 @@ Operators are, from highest to lowest precedence (and always left-associative):
 - binary alternation ("or"), e.g. `a*b|c`, equivalent to `((a*)b)|c`
 
 Furthermore, a root rule's pattern may be anchored with a leading `^` or ending `$`,
-meaning the match must be preceded/followed by one of the delimiter characters
-(or the very start or end of input).
+meaning the match must be preceded/followed by one of the delimiter characters or the very start/end of input.
+Note that this differs from common regex usage, where `^` and `$` anchor only to the very start/end of input.
 
 More explicitly, pattern syntax follows this [EBNF][ebnf] grammar.
 
@@ -111,6 +142,7 @@ term:
 	symbol
 	"(" alternation ")"
 	"(?<" name ">" alternation ")" // A subrule.
+	"(?<" name ">)" // A reference to a placeholder.
 
 repetition_suffix:
 	"*" // 0 or more.
@@ -132,6 +164,7 @@ bracketed_item:
 	symbol
 ```
 
+#### Escape Characters
 The following meta-characters must generally be escaped with a backslash: `\()[]{}*+?.|^$`.
 Furthermore, the following common escapes are supported:
 
@@ -144,6 +177,7 @@ Furthermore, the following common escapes are supported:
 - Additionally, `\ ` (space), `\'` (single quote), and `\"` (double quote) correspond to their literal values,
 	and may be used to avoid ambiguity.
 
+#### Bracketed Ranges
 The interpretation of `bracketed_item`s in a `bracketed_range` is not strictly context-free
 (don't worry about this unless you care about formal languages),
 but follows common regex syntax conventions:
@@ -163,3 +197,9 @@ but follows common regex syntax conventions:
 - As shorthand, `\d`, `\w`, and `\s` may appear inside bracketed ranges with limitations;
 	they may not be used with negation or as a range endpoint, to avoid potential ambiguity.
 	For example, `[\w_-]` is equivalent to `[a-zA-Z0-9_-]`.
+
+[parsing]: parsing.md
+[regex-pattern-syntax]: #regex-pattern-syntax
+[escape-characters]: #escape-characters
+[bracketed-ranges]: #bracketed-ranges
+[ebnf]: https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form
