@@ -339,6 +339,7 @@ impl Regex {
 		}
 	}
 
+	/// When substituting placeholders, we must deep clone the `SubRule`s.
 	fn deep_clone(&self) -> Self {
 		match self {
 			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => self.clone(),
