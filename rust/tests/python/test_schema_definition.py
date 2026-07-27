@@ -11,12 +11,12 @@ class TestParsingSpecDefinition(unittest.TestCase):
 
 	def test_basic_roundtrip(self):
 		definition = dedent("""\
-		int: \\d+
+		int: "\\d+"
 
-		word: [a-zA-Z]\\w+
-		email: (?<user>[a-z0-9.]+)@(?<domain>(?<parts>\\w+\\.)+(?<tld>\\w+))
+		word: "[a-zA-Z]\\w+"
+		email: "(?<user>[a-z0-9.]+)@(?<domain>(?<parts>\\w+\\.)+(?<tld>\\w+))"
 
-		delimiters: \\ \\r\\t\\n
+		delimiters: "\\ \\r\\t\\n"
 		""")
 
 		p1 = Parser.from_parsing_spec_definition(definition)

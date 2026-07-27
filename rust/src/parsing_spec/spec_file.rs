@@ -10,6 +10,7 @@ use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 use crate::regex::RegexError;
 use crate::utils::Escaped;
+use crate::utils::InvalidEscape;
 use crate::utils::NomUtils;
 
 #[derive(Debug)]
@@ -21,11 +22,13 @@ pub struct ParsingSpecFileError {
 
 #[derive(Debug)]
 pub enum ParsingSpecFileErrorKind {
-	InvalidName,
 	InvalidPriority,
 	MissingColon,
 	EmptyDelimiters,
 	InvalidDelimiters,
+	BadLine,
+	InvalidName(String),
+	InvalidEscape(InvalidEscape),
 	InvalidPattern(RegexError),
 	DuplicatePlaceholder(String),
 	UndefinedPlaceholder(String),
@@ -35,27 +38,27 @@ pub enum ParsingSpecFileErrorKind {
 /// but this enum makes the intent more clear and allows for future additions.
 #[derive(Debug)]
 enum SpecFileLine<'a> {
-	Delimiters(String),
+	Delimiters(&'a str),
 	Rule(i32, &'a str, &'a str),
 	Placeholder(&'a str, &'a str),
 }
 
 impl ParsingSpec {
 	pub fn to_parsing_spec_definition(&self) -> String {
-		std::iter::once(format!("delimiters:{}", escape_delimiters(&self.delimiters)))
+		std::iter::once(format!("delimiters: \"{}\"", escape_delimiters(&self.delimiters)))
 			// Empty line, pretty.
 			.chain(std::iter::once(String::new()))
 			// Placeholders.
 			.chain(self.placeholders.iter().map(|(name, regex)| {
 				let pattern: String = regex.to_pattern();
-				format!("!{name}: {pattern}")
+				format!("!{name}: \"{pattern}\"")
 			}))
 			// Empty line, pretty.
 			.chain(std::iter::once(String::new()))
 			// Rules.
 			.chain(self.rules.iter().map(|rule| {
 				let pattern: String = rule.regex.to_pattern();
-				format!("{} ({}): {pattern}", rule.name, rule.priority)
+				format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
 			}))
 			.chain(std::iter::once(String::new()))
 			.chain(std::iter::once(format!("===")))
@@ -79,7 +82,7 @@ impl ParsingSpecBuilder {
 				cached.push_str(line);
 				continue;
 			}
-			// TODO: line offset 0/1 based (currently 0).
+
 			let line: &str = line.trim();
 
 			if line.is_empty() {
@@ -95,7 +98,12 @@ impl ParsingSpecBuilder {
 				continue;
 			}
 
-			let line: SpecFileLine = parse_line(line).map_err(|kind| ParsingSpecFileError { line_offset, kind })?;
+			let (_remaining, line): (&str, SpecFileLine<'_>) = parse_line(line).map_err(|_| ParsingSpecFileError {
+				line_offset,
+				kind: ParsingSpecFileErrorKind::BadLine,
+			})?;
+
+			// TODO: validate remaining empty/whitespace
 
 			match line {
 				SpecFileLine::Delimiters(delimiters) => {
@@ -105,15 +113,27 @@ impl ParsingSpecBuilder {
 							kind: ParsingSpecFileErrorKind::EmptyDelimiters,
 						});
 					}
+
+					let delimiters: String = unescape(delimiters).map_err(|err| ParsingSpecFileError {
+						line_offset,
+						kind: ParsingSpecFileErrorKind::InvalidEscape(err),
+					})?;
+
 					builder.set_delimiters(delimiters);
 				},
 				SpecFileLine::Placeholder(name, pattern) => {
+					if name.is_empty() || (name == "delimiters") {
+						return Err(ParsingSpecFileError {
+							line_offset,
+							kind: ParsingSpecFileErrorKind::InvalidName(name.to_owned()),
+						});
+					}
+
 					let regex: Regex = Regex::from_pattern_with_placeholders::<true, _>(pattern, &mut builder)
 						.map_err(|e| ParsingSpecFileError {
 							line_offset,
 							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
-						})?
-						.regex;
+						})?;
 
 					builder
 						.add_placeholder(name.to_owned(), regex)
@@ -123,7 +143,14 @@ impl ParsingSpecBuilder {
 						})?;
 				},
 				SpecFileLine::Rule(priority, name, pattern) => {
-					let regex: AnchoredRegex = Regex::from_pattern_with_placeholders::<false, _>(pattern, &mut builder)
+					if name.is_empty() || (name == "delimiters") {
+						return Err(ParsingSpecFileError {
+							line_offset,
+							kind: ParsingSpecFileErrorKind::InvalidName(name.to_owned()),
+						});
+					}
+
+					let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(pattern, &mut builder)
 						.map_err(|e| ParsingSpecFileError {
 							line_offset,
 							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
@@ -142,51 +169,69 @@ impl ParsingSpecBuilder {
 	}
 }
 
-fn parse_line(input: &str) -> Result<SpecFileLine<'_>, ParsingSpecFileErrorKind> {
-	use nom::character::complete::char as char_parser;
+fn parse_line(input: &str) -> IResult<&str, SpecFileLine<'_>> {
+	use nom::branch::alt;
+
+	alt((parse_placeholder, parse_delimiters, parse_rule)).parse(input)
+}
+
+fn parse_placeholder(input: &str) -> IResult<&str, SpecFileLine<'_>> {
+	use nom::combinator::cut;
+	use nom::sequence::preceded;
+
+	preceded(parse_char::<'!'>, cut(parse_name_pattern))
+		.map(|(name, pattern)| SpecFileLine::Placeholder(name, pattern))
+		.parse(input)
+}
+
+fn parse_delimiters(original_input: &str) -> IResult<&str, SpecFileLine<'_>> {
+	use nom::combinator::fail;
+
+	let (input, (name, delimiters)): (&str, (&str, &str)) = parse_name_pattern(original_input)?;
+
+	if name != "delimiters" {
+		return fail().parse(input);
+	}
+
+	Ok((input, SpecFileLine::Delimiters(delimiters)))
+}
+
+fn parse_rule(input: &str) -> IResult<&str, SpecFileLine<'_>> {
 	use nom::combinator::opt;
 
-	let (input, is_placeholder): (&str, bool) = if let Some(suffix) = input.strip_prefix('!') {
-		(suffix, true)
-	} else {
-		(input, false)
-	};
-
-	let (input, name): (&str, &str) = parse_name(input).map_err(|_| ParsingSpecFileErrorKind::InvalidName)?;
-
+	let (input, name): (&str, &str) = parse_name(input)?;
 	let input: &str = input.trim_start();
 
-	let (input, priority): (&str, i32) = if name != "delimiters" {
-		let (input, maybe_priority): (&str, Option<i32>) = opt(parse_priority)
-			.parse(input)
-			.map_err(|_| ParsingSpecFileErrorKind::InvalidPriority)?;
-		(input.trim_start(), maybe_priority.unwrap_or(0))
-	} else {
-		(input, 0)
-	};
-
-	let (input, _): (&str, char) = char_parser::<&str, NomError<&str>>(':')
-		.parse(input)
-		.map_err(|_| ParsingSpecFileErrorKind::MissingColon)?;
-
+	let (input, maybe_priority): (&str, Option<i32>) = opt(parse_priority).parse(input)?;
 	let input: &str = input.trim_start();
 
-	if name == "delimiters" {
-		// TODO error if `name == "delimiters" && is_placeholder`
-		let delimiters: String = parse_delimiters(input).map_err(|_| ParsingSpecFileErrorKind::InvalidDelimiters)?;
-		Ok(SpecFileLine::Delimiters(delimiters))
-	} else if is_placeholder {
-		Ok(SpecFileLine::Placeholder(name, input))
-	} else {
-		Ok(SpecFileLine::Rule(priority, name, input))
-	}
+	let priority: i32 = maybe_priority.unwrap_or(0);
+
+	let (input, _): (&str, char) = parse_char::<':'>(input)?;
+	let input: &str = input.trim_start();
+
+	let (input, pattern): (&str, &str) = parse_pattern(input)?;
+
+	Ok((input, SpecFileLine::Rule(priority, name, pattern)))
+}
+
+fn parse_name_pattern(input: &str) -> IResult<&str, (&str, &str)> {
+	let (input, name): (&str, &str) = parse_name(input)?;
+	let input: &str = input.trim_start();
+
+	let (input, _): (&str, char) = parse_char::<':'>(input)?;
+	let input: &str = input.trim_start();
+
+	let (input, pattern): (&str, &str) = parse_pattern(input)?;
+
+	Ok((input, (name, pattern)))
 }
 
 fn parse_name(input: &str) -> IResult<&str, &str> {
 	use nom::AsChar;
-	use nom::bytes::take_while1;
+	use nom::bytes::take_while;
 
-	take_while1(|ch| AsChar::is_alphanum(ch) || ch == '_').parse(input)
+	take_while(|ch| AsChar::is_alphanum(ch) || ch == '_').parse(input)
 }
 
 fn parse_priority(input: &str) -> IResult<&str, i32> {
@@ -198,45 +243,73 @@ fn parse_priority(input: &str) -> IResult<&str, i32> {
 	.parse(input)
 }
 
-fn parse_delimiters(mut input: &str) -> Result<String, NomErr<NomError<&str>>> {
-	let mut delimiters: String = String::new();
+fn parse_pattern(input: &str) -> IResult<&str, &str> {
+	use nom::combinator::recognize;
 
-	loop {
-		let (rest, chars): (&str, &str) = take_non_escaped(input)?;
-		delimiters.push_str(chars);
+	NomUtils::surrounded_cut::<'"', '"', _, _, _, _>(recognize(parse_char_sequence), |input| {
+		Err(NomErr::Error(NomError::from_char(input, '"')))
+	})
+	.parse(input)
+}
 
-		let Some((rest, _)): Option<(&str, ())> = take_backslash(rest).ok() else {
-			break;
-		};
+fn parse_char<const CHAR: char>(input: &str) -> IResult<&str, char> {
+	NomUtils::parse_char::<CHAR, NomError<&str>>(input)
+}
 
-		let (rest, ch): (&str, char) = parse_escape(rest)?;
-		delimiters.push(ch);
+fn parse_char_sequence(input: &str) -> IResult<&str, Vec<char>> {
+	use nom::branch::alt;
+	use nom::multi::many0;
 
-		input = rest;
+	many0(alt((parse_escaped_char, parse_regular_char))).parse(input)
+}
+
+fn parse_escaped_char(input: &str) -> IResult<&str, char> {
+	use nom::character::complete::none_of;
+	use nom::combinator::cut;
+	use nom::sequence::preceded;
+
+	preceded(parse_char::<'\\'>, cut(none_of(""))).parse(input)
+
+	// let (input, _): (&str, char) = parse_char::<'\\'>(input)?;
+
+	// match Escaped::unescape(input) {
+	// 	Ok((input, ch)) => Ok((input, ch)),
+	// 	Err(_) => cut(fail()).parse(input),
+	// }
+}
+
+fn parse_regular_char(input: &str) -> IResult<&str, char> {
+	use nom::character::complete::none_of;
+
+	none_of("\"\\").parse(input)
+}
+
+fn unescape(mut input: &str) -> Result<String, InvalidEscape> {
+	use std::str::Chars;
+
+	let mut unescaped: String = String::new();
+
+	let mut last_was_escape: bool = false;
+
+	while !input.is_empty() {
+		if last_was_escape {
+			let ch: char;
+			(input, ch) = Escaped::unescape(input)?;
+			unescaped.push(ch);
+			last_was_escape = false;
+		} else {
+			if let Some(suffix) = input.strip_prefix('\\') {
+				last_was_escape = true;
+				input = suffix;
+			} else {
+				let mut iter: Chars<'_> = input.chars();
+				unescaped.push(iter.next().unwrap());
+				input = iter.as_str();
+			}
+		}
 	}
 
-	Ok(delimiters)
-}
-
-fn take_non_escaped(input: &str) -> IResult<&str, &str> {
-	use nom::bytes::complete::take_while;
-
-	take_while(|ch| ch != '\\').parse(input)
-}
-
-fn take_backslash(input: &str) -> IResult<&str, ()> {
-	use nom::character::complete::char as char_parser;
-
-	char_parser('\\').map(|_| ()).parse(input)
-}
-
-fn parse_escape(input: &str) -> IResult<&str, char> {
-	use nom::combinator::fail;
-
-	match Escaped::unescape(input) {
-		Ok((input, ch)) => Ok((input, ch)),
-		Err(_) => fail().parse(input),
-	}
+	Ok(unescaped)
 }
 
 fn escape_delimiters(input: &str) -> String {
@@ -298,10 +371,14 @@ mod test {
 	#[test]
 	fn normalizing_parentheses() {
 		let spec1: ParsingSpec = spec! {
-			"foo: abcd"
+			r#"
+			foo: "abcd"
+			"#
 		};
 		let spec2: ParsingSpec = spec! {
-			"foo: (ab)(cd)"
+			r#"
+			foo: "(ab)(cd)"
+			"#
 		};
 
 		assert_eq!(spec1, spec2);

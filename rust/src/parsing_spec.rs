@@ -436,7 +436,7 @@ mod test {
 			.unwrap()
 			.add_rule("ip_address", r"\d(\.\d){3}")
 			.unwrap()
-			.add_encoding("int", Regex::from_pattern(r"\d+").unwrap().regex)
+			.add_encoding("int", Regex::from_pattern(r"\d+").unwrap())
 			.unwrap();
 
 		let spec: ParsingSpec = builder.build();

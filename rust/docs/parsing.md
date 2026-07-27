@@ -1,16 +1,34 @@
 ## Parsing in Log Surgeon
-An overview of the title.
-See also: [Parsing Specification File][parsing-spec].
+Log Surgeon parses log data using a [Parsing Specification][parsing-spec].
+The parsing specification includes:
+
+- How root rules are matched.
+- How subrules are extracted.
+- How log events are separated.
+
+Parsing consists of two main stages:
+
+1. A parser that advances through the input and builds structured log events.
+2. A lexer that identifies matches in the input according to the parsing specification.
+
+### Index
+- Matching Root Rules
+- Implementation Details
+- Submatch Extraction
+- Separating Log Events
 
 ### Matching Root Rules
-A lexer processes input left to right and reports root rule matches.
+The lexer identifies occurrences of root rules defined in the parsing specification.
+A root rule match represents a piece of semantically meaningful text identified by the user.
 
-At each step, if possible, the lexer takes the longest possible match of any root rule.
-If multiple root rules match with the same length, the highest-priority (earliest) rule is returned.
+The lexer processes input left to right. At each step, it attempts to match root rules according to the following:
+
+- The longest possible match.
+- If multiple root rules match with the same length, the highest-priority (earliest) rule in the spec is selected.
 
 If no root rules match at the current position,
 the parser seeks to the first delimiter character after the current position,
-and repeats attempting to match a root rule _after_ the delimiter.
+and the lexer repeats attempting to match a root rule _after_ the delimiter.
 
 WIP: We hope to generalize root rule matching to find the earliest possible occurrence of a root rule at each step.
 
@@ -20,8 +38,8 @@ Log Surgeon builds an [automaton][dfa] for the combination of all root rule patt
 an automaton is just a state machine with transitions based on an input character.
 Specifically, Log Surgeon implements the classical regex -> NFA -> DFA construction.
 
-DFAs simulate matching multiple patterns/rules at once with just a single pass through the input.
-"Executing" the DFA is just a loop that traverses the states:
+DFAs simulate matching multiple patterns/rules at once performing only a single pass through the input.
+"Executing" the DFA is a loop that traverses the states:
 
 ```rust
 let mut current_state: usize = 0;
@@ -49,10 +67,9 @@ and confirming the longest possible match for rules in a parsing specification
 rarely require consuming much extra input.
 
 Notice that each iteration of the loop requires looking up the transition for the current state and input character.
-In fact, transitions for a state are stored as a list of (non-overlapping) Unicode code point intervals,
-so this lookup means comparing the input character against these intervals.
-Further, at each step, we need to check if the current state is an accepting state.
-In a sense, this DFA loop is an "interpreter" for instructions "goto next state" and "record match".
+Specifically, characters are Unicode code points (with fast lookup for those in the ASCII range).
+Additionally, at each step, we check if the current state is an accepting state.
+In a sense, this DFA loop is an "interpreter" for instructions "record match" and "goto next state".
 
 To speed up matching, we compile DFAs into native functions.
 Currently, Log Surgeon just in time (JIT) compiles them for ease of deployment,
@@ -115,36 +132,6 @@ i.e. recording many potential sub-rule matches that are discarded.
 Therefore, we have found it better to execute a classical DFA to determine which rule,
 and a tagged DFA specifically for the matched rule.
 
-#### Future Work
-Many search tools and algorithms have optimizations for fixed strings, i.e. static text.
-However, Log Surgeon inherently works with patterns for non-static text;
-in fact, it needs to identify matches among many different patterns of non-static text,
-so we have not found meaningful opportunity for these optimizations.
-
-Currently, Log Surgeon does not report the earliest possible match for each rule;
-heuristically, it makes use of delimiter characters to achieve similar results.
-
-There are a few known ways to implement earliest match semantics
-(sometimes referred to as "leftmost-longest",
-though "leftmost" also means something different in an overlapping context,
-so we avoid that terminology).
-
-Theoretically, the best option is a reverse scan for potential starting positions:
-
-1. Construct a DFA for the reversed patterns, prefixed with `.*`.
-2. In a single pass from the end to start of the file, mark the position at each accepting state.
-
-Each of the marked positions necessarily corresponds to a valid start position for the "forwards" DFA.
-So, starting from the first possible position, we simply run the forwards DFA to determine the rule match,
-and the tagged DFA to determine the sub-rule matches as before.
-For the next root match, we continue at the first starting position after our previous match ends.
-
-The downsides of this approach are:
-- This approach necessarily requires reading from the end of the file.
-- Reading in reverse is suboptimal compared to only reading forwards.
-- Fully determinizing a DFA for a `.*`-prefixed regex is costly, though this can be worked around by lazy construction.
-- Storing all starting positions is not necessarily prohibitive (e.g. using a bitmap), but not trivial either.
-
 ### Separating Log Events
 While lexing input, to determine log event boundaries, newline characters (not part of a rule match)
 and root rules named `header` are treated specially under the following conditions.
@@ -163,8 +150,7 @@ Explain:
 - anchors
 - leaf ambiguity
 
-[parsing-spec]: parsing-spec-file.md
-[ebnf]: https://en.wikipedia.org/wiki/Extended_Backus%E2%80%93Naur_form
+[parsing-spec]: parsing-specification.md
 [python-regex]: https://docs.python.org/3/howto/regex.html
 [dfa]: https://en.wikipedia.org/wiki/Deterministic_finite_automaton
 [tagged-dfa]: https://arxiv.org/abs/2206.01398

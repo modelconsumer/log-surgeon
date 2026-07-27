@@ -669,9 +669,9 @@ mod test {
 
 		let spec: ParsingSpec = spec! {
 			r#"
-			delimiters: \ .
-			int: [0-9]+$
-			word: [a-z]+
+			delimiters: "\ ."
+			int: "[0-9]+$"
+			word: "[a-z]+"
 			"#
 		};
 

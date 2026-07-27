@@ -940,9 +940,9 @@ mod test {
 	#[test]
 	fn search_nested_name_without_leaf_capture() {
 		let spec: ParsingSpec = spec! {
-			r"
-			foo: _(?<bar>[a-z]+|(?<baz>[0-9]+))_
-			"
+			r#"
+			foo: "_(?<bar>[a-z]+|(?<baz>[0-9]+))_"
+			"#
 		};
 
 		{
