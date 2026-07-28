@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::num::NonZero;
 
 use crate::dfa::BackupState;
@@ -8,45 +10,6 @@ use crate::interval_tree::IntervalTree;
 use crate::parsing_spec::RuleIdx;
 use crate::utils::SerdeArray;
 use crate::utils::TarjanSccs;
-
-/*
-mod serde_ {
-	use crate::utils::SerdeArray;
-	use serde::Deserialize;
-	use serde::Deserializer;
-	use serde::Serialize;
-	use serde::Serializer;
-	use serde::de::Error;
-	use serde::de::SeqAccess;
-	use serde::de::Visitor;
-	use serde::ser::SerializeSeq;
-	use serde::ser::SerializeTuple;
-	use std::marker::PhantomData;
-
-	fn serialize<T, const N: usize, S>(vec: &Vec<[T; N]>, serializer: S) -> Result<S::Ok, S::Error>
-	where
-		S: Serializer,
-	{
-		let mut seq: S::SerializeSeq = serializer.serialize_seq(Some(vec.len()))?;
-		for array in self.0.iter() {
-			let mut tup: S::SerializeTuple = serializer.serialize_tuple(N)?;
-			for element in array.iter() {
-				tup.serialize_element(element)?;
-			}
-			seq.serialize_element(&tup.end())?
-		}
-		seq.end()
-	}
-
-	fn deserialize<'de, D>(deserializer: D) -> Result<[T; N], D::Error>
-	where
-		D: Deserializer<'de>,
-	{
-		let array: [T; N] = deserializer.deserialize_tuple(N, ArrayVisitor::<T, N>(PhantomData))?;
-		Ok(SerdeArray(array))
-	}
-}
-*/
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressedDfa {

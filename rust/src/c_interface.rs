@@ -28,6 +28,7 @@ pub struct SearchResult {
 	leaf_captures: Vec<Match>,
 }
 
+/// Enable tracing debugging logs; see [`README.md#Debugging`].
 #[unsafe(no_mangle)]
 unsafe extern "C" fn log_surgeon_enable_tracing() {
 	crate::enable_tracing();
@@ -36,11 +37,13 @@ unsafe extern "C" fn log_surgeon_enable_tracing() {
 mod parsing_spec {
 	use super::*;
 
+	/// Create a new [`ParsingSpecBuilder`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_builder_new() -> Box<ParsingSpecBuilder> {
 		Box::new(ParsingSpecBuilder::new())
 	}
 
+	/// See [`ParsingSpecBuilder::set_delimiters`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_builder_set_delimiters(
 		builder: &mut ParsingSpecBuilder,
@@ -50,6 +53,7 @@ mod parsing_spec {
 		builder.set_delimiters(delimiters);
 	}
 
+	/// See [`ParsingSpecBuilder::add_rule_with_priority`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_builder_add_rule_with_priority(
 		builder: &mut ParsingSpecBuilder,
@@ -66,6 +70,7 @@ mod parsing_spec {
 		true
 	}
 
+	/// See [`ParsingSpecBuilder::add_encoding`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_add_encoding(
 		builder: &mut ParsingSpecBuilder,
@@ -86,21 +91,13 @@ mod parsing_spec {
 		true
 	}
 
+	/// Consume the (boxed) [`ParsingSpecBuilder`] to construct a [`ParsingSpec`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_builder_build(builder: Box<ParsingSpecBuilder>) -> Box<ParsingSpec> {
 		Box::new(builder.build())
 	}
 
-	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_from_definition(definition: CCharArray<'_>) -> Option<Box<ParsingSpec>> {
-		let definition: &str = definition.as_utf8().unwrap();
-		if let Ok(builder) = ParsingSpecBuilder::from_parsing_spec_definition(definition) {
-			Some(Box::new(builder.build()))
-		} else {
-			None
-		}
-	}
-
+	/// See [`ParsingSpecBuilder::from_parsing_spec_definition`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_builder_from_definition(
 		definition: CCharArray<'_>,
@@ -113,6 +110,7 @@ mod parsing_spec {
 		}
 	}
 
+	/// See [`ParsingSpecBuilder::get_encoding`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_get_encoding(
 		parser: &Parser,
@@ -132,12 +130,14 @@ mod parsing_spec {
 mod parser {
 	use super::*;
 
+	/// Consume the (boxed) [`ParsingSpec`] to construct a [`Parser`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parser_new(parsing_spec: Box<ParsingSpec>) -> Box<Parser> {
 		let parser: Parser = Parser::new(Arc::new(*parsing_spec));
 		Box::new(parser)
 	}
 
+	/// See [`Parser::next_event`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parser_next<'parser, 'input>(
 		parser: &'parser mut Parser,
@@ -154,6 +154,7 @@ mod parser {
 		}
 	}
 
+	/// See [`Parser::reset`].
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parser_reset(parser: &mut Parser) {
 		parser.reset();
@@ -163,17 +164,20 @@ mod parser {
 mod log_event {
 	use super::*;
 
+	/// Create a (boxed) [`LogEvent`], for cached/reused return value for `log_surgeon_parser_next`.
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_log_event_new<'a>() -> Box<LogEvent<'a>> {
 		Box::new(LogEvent::BLANK)
 	}
 
+	/// Get the matches of a log event.
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_log_event_all_matches<'a>(log_event: &LogEvent<'a>, len: &mut usize) -> *const Match {
 		*len = log_event.all_matches.len();
 		log_event.all_matches.as_ptr()
 	}
 
+	/// Get the match indices of a log event.
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_log_event_leaf_match_indices<'a>(
 		log_event: &LogEvent<'a>,

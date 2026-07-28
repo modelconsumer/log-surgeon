@@ -15,7 +15,7 @@ pub struct CArray<'lifetime, T> {
 	_lifetime: PhantomData<&'lifetime [T]>,
 }
 
-/// Rust is annoying about Send/Sync for pointers, even when it technically **is** safe.
+/// Rust is annoying about Send/Sync for pointers, even when it already **is** technically safe.
 unsafe impl<T> Send for CArray<'_, T> {}
 unsafe impl<T> Sync for CArray<'_, T> {}
 

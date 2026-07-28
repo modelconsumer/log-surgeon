@@ -13,6 +13,16 @@ use crate::log_event::MatchFfiPointers;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleInfo;
 
+/// A parser is almost stateless aside from 2/3 fields:
+///
+/// - An owned copy of the substring of the input text for the "current" (most recently returned) log event.
+///   - This greatly simplifies lifetime management, especially in the presence of FFI,
+///     since the parser doesn't own a whole copy of the input text.
+///   - Most calls to [`Parser::next_event`] won't require allocation;
+///     the memory is bounded by the max log event size.
+/// - An owned copy of the text and matches for the header of the next log event.
+/// - (Optional/implementation detail) [`TdfaExecution`] cache.
+///
 #[derive(Debug, Clone)]
 pub struct Parser {
 	/// We hold an `Arc<ParsingSpec>` since it may be convenient for others to
@@ -24,6 +34,10 @@ pub struct Parser {
 	dfa_execution: TdfaExecution,
 }
 
+/// Owned data for a [`LogEvent`].
+/// A parser has one for the current (most recently returned) log event,
+/// and one for the header of the next log event,
+/// so that the memory can be re-used.
 #[derive(Debug, Clone)]
 struct WorkingLogEvent {
 	message: String,

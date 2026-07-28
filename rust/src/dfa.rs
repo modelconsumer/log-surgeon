@@ -1,9 +1,8 @@
-#![allow(unused)]
-
 //! Based on Angelo Borsotti and Ulya Trafimovich. 2022. A closer look at TDFA.
 //! - <https://re2c.org/2022_borsotti_trofimovich_a_closer_look_at_tdfa.pdf>
 //! - <https://arxiv.org/abs/2206.01398>
 //!
+//! [tdfa]: https://arxiv.org/abs/2206.01398
 
 mod compressed;
 mod jit;
@@ -92,6 +91,8 @@ struct DfaState {
 	/// Registers that may be clobbered after leaving this state.
 	/// See [`Tdfa::compute_registers_clobbered`].
 	#[serde(skip)]
+	/// Not used in current implementation.
+	#[allow(unused)]
 	registers_clobbered: BTreeSet<usize>,
 	/// We cache the outgoing transitions for the first so many "common" characters;
 	/// ASCII is most common and happens to be the first 0x80 unicode code points.
@@ -332,7 +333,7 @@ impl Tdfa {
 
 	fn lookup_transition(&self, current_state: usize, ch: u32) -> Option<&Transition> {
 		let cache_index: usize = {
-			// See [`crate::_USIZE_AT_LEAST_32_BITS`].
+			// Cast safety - see [`crate::_USIZE_AT_LEAST_32_BITS`].
 			ch as usize
 		};
 		let current_state: &DfaState = &self.states[current_state];
@@ -382,19 +383,24 @@ impl Tdfa {
 }
 
 impl Tdfa {
+	/// Construct the TDFA for the combination (alternation) of multiple rules,
+	/// i.e. from a parsing specification.
+	/// Capturing is not enabled.
 	pub fn for_rules<'a, Rules>(rules: Rules, delimiters: String) -> Self
 	where
 		Rules: IntoIterator<Item = &'a RootRule>,
 	{
-		let nfa: Tnfa = Tnfa::from_rules::<false, _>(rules, &delimiters);
+		let nfa: Tnfa = Tnfa::for_rules::<false, _>(rules, &delimiters);
 		Self::determinization(&nfa)
 	}
 
+	/// Construct the TDFA for a single rule, with captures.
 	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex) -> Self {
-		let nfa: Tnfa = Tnfa::from_single_rule(rule_idx, regex);
+		let nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex);
 		Self::determinization(&nfa)
 	}
 
+	/// Initialize the cache for ASCII transitions, must be called after deserializing.
 	pub fn initialize_ascii_cache(&mut self) {
 		for state in self.states.iter_mut() {
 			for (i, cached_transition) in state.ascii_cache.iter_mut().enumerate() {
@@ -410,7 +416,7 @@ impl Tdfa {
 		}
 	}
 
-	/// Algorithm 3 in the paper.
+	/// Algorithm 3 in the [paper][tdfa].
 	#[tracing::instrument(skip_all, level = "trace")]
 	fn determinization(nfa: &Tnfa) -> Self {
 		let tags: Vec<CaptureTag> = nfa.tags().iter().cloned().collect::<Vec<_>>();
@@ -489,6 +495,7 @@ impl Tdfa {
 		dfa
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn add_state(
 		&mut self,
 		nfa: &Tnfa,
@@ -544,6 +551,7 @@ impl Tdfa {
 		idx
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn try_find_bijection(
 		&self,
 		lhs: &[Configuration],
@@ -610,6 +618,7 @@ impl Tdfa {
 		Self::topological_sort(ops)
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn topological_sort(mut ops: Vec<RegisterOperation>) -> Option<Vec<RegisterOperation>> {
 		let mut in_degree_register: BTreeMap<usize, usize> = BTreeMap::new();
 		for o in ops.iter() {
@@ -665,6 +674,7 @@ impl Tdfa {
 		(!nontrivial_cycle).then_some(new_ops)
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn epsilon_closure(
 		nfa: &Tnfa,
 		configurations: &Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
@@ -693,7 +703,7 @@ impl Tdfa {
 							continue;
 						}
 
-						let mut new_config: Configuration = Configuration {
+						let new_config: Configuration = Configuration {
 							nfa_state: target,
 							..config.clone()
 						};
@@ -731,6 +741,7 @@ impl Tdfa {
 		closure
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn transition_operations(
 		&mut self,
 		configurations: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
@@ -768,6 +779,7 @@ impl Tdfa {
 		(new_configurations, ops.into_iter().collect::<Vec<_>>())
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn final_operations(
 		&self,
 		registers: &[usize],
@@ -793,6 +805,7 @@ impl Tdfa {
 		ops
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn operation_rhs(registers: &[usize], history: Vec<SymbolicPosition>, tag_idx: usize) -> RegisterAction {
 		RegisterAction::Append {
 			source: registers[tag_idx],
@@ -800,6 +813,7 @@ impl Tdfa {
 		}
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn filter_history_for_tag(history: &[(CaptureTag, SymbolicPosition)], tag1: &CaptureTag) -> Vec<SymbolicPosition> {
 		history
 			.iter()
@@ -808,8 +822,10 @@ impl Tdfa {
 	}
 }
 
+/// Not used in current implementation.
+#[allow(unused)]
 impl Tdfa {
-	/// Algorithm 4 in the paper.
+	/// Algorithm 4 in the [paper][tdfa].
 	fn fallback_regops(&mut self) {
 		for i in 0..self.states.len() {
 			self.states[i].registers_clobbered = self.compute_registers_clobbered(i);
@@ -1031,6 +1047,7 @@ impl TdfaExecution {
 		}
 	}
 
+	/// Reset the state between TDFA executions.
 	pub fn clear(&mut self) {
 		self.captures.clear();
 		self.prefix_tree.clear();
@@ -1053,6 +1070,7 @@ impl Kernel {
 		assert_eq!(states, unique_states);
 	}
 
+	/// Algorithm 3 in the [paper][tdfa].
 	fn step_on_intervals(
 		&self,
 		nfa: &Tnfa,
@@ -1101,6 +1119,7 @@ impl Transition {
 }
 
 impl RegisterAction {
+	/// Get the source register for this action.
 	fn source(&self) -> usize {
 		match self {
 			&Self::CopyFrom { source } => source,

@@ -16,7 +16,7 @@ use crate::regex::Regex;
 use crate::regex::RegexError;
 use crate::regex::RegexErrorKind;
 use crate::regex::SPECIAL_CHARACTERS;
-use crate::regex::SPECIAL_CHARACTERS_IN_BRACKETED_EXPRESSIONS;
+use crate::regex::SPECIAL_CHARACTERS_IN_BRACKETED_RANGES;
 use crate::utils::NomUtils;
 
 /// A helper trait for filling in placeholders when parsing regex patterns.
@@ -92,6 +92,7 @@ impl<'a> RegexParsingError<'a> {
 }
 
 impl AnchoredRegex {
+	/// Like [`Regex::from_pattern_with_placeholders`], but for a (potentially) anchored regex/pattern.
 	pub fn from_pattern_with_placeholders<T>(mut pattern: &str, lookup: &mut T) -> Result<Self, RegexError>
 	where
 		T: RegexPlaceholderLookup,
@@ -144,10 +145,6 @@ impl AnchoredRegex {
 /// TODO after merge: update link
 /// [parsing-spec-file]: https://github.com/y-scope/log-surgeon/tree/log-mechanic/rust/docs/parsing-specification.md
 impl Regex {
-	pub fn from_pattern(pattern: &str) -> Result<Self, RegexError> {
-		Self::from_pattern_with_placeholders::<false, _>(pattern, &mut ())
-	}
-
 	/// Parse an unanchored regex pattern.
 	/// Replaces placeholders with their subexpressions,
 	/// but does not call [`Regex::initialize_captures`],
@@ -225,6 +222,12 @@ impl Regex {
 		}
 	}
 
+	/// Short form of [`Regex::from_pattern_with_placeholders`] for writing tests;
+	/// parses non-nullable patterns without placeholders.
+	pub fn from_pattern(pattern: &str) -> Result<Self, RegexError> {
+		Self::from_pattern_with_placeholders::<false, _>(pattern, &mut ())
+	}
+
 	/// Initializes sub-rule data for capture expressions.
 	/// Should be called with `next_id == NonZero::<u16>::MAX`.
 	/// Returns 1 plus the number of sub-rules; i.e. the root rule plus sub-rules.
@@ -284,14 +287,18 @@ impl From<std::convert::Infallible> for RegexError {
 }
 
 impl RegexErrorKind {
+	/// Helper to create a [`NomErr<_>::Error`] out of this error kind.
 	fn error(self, input: &str) -> NomErr<RegexParsingError<'_>> {
 		NomErr::Error(RegexParsingError::new(input, self))
 	}
 
+	/// Helper to create a [`NomErr<_>::Failure`] out of this error kind.
 	fn fail(self, input: &str) -> NomErr<RegexParsingError<'_>> {
 		NomErr::Failure(RegexParsingError::new(input, self))
 	}
 
+	/// Helper to create a "parser" that simply errors with this error kind.
+	/// Used in [`nom::branch::alt`] fallbacks to generate more intuitive error messages.
 	fn diagnostic<'a, T>(self) -> impl Fn(&'a str) -> ParsingResult<'a, T> {
 		move |input| Err(self.clone().error(input))
 	}
@@ -699,7 +706,7 @@ fn parse_literal_char_in_bracketed_expression(input: &str) -> ParsingResult<'_, 
 	use nom::combinator::value;
 
 	alt((
-		parse_one_char_of::<true>(SPECIAL_CHARACTERS_IN_BRACKETED_EXPRESSIONS)
+		parse_one_char_of::<true>(SPECIAL_CHARACTERS_IN_BRACKETED_RANGES)
 			.map(Term::Char)
 			.map(Some),
 		parse_escaped_character.map(Some),
@@ -814,10 +821,12 @@ fn parse_digits(input: &str) -> ParsingResult<'_, u32> {
 
 // ==================================
 
+/// Helper version of [`NomUtils::parse_char`] with monomorphized error type.
 fn parse_char<const CHAR: char>(input: &str) -> ParsingResult<'_, char> {
 	NomUtils::parse_char::<CHAR, RegexParsingError<'_>>(input)
 }
 
+/// Helper version of [`NomUtils::surrounded_cut`] with monomorphized error type.
 fn surrounded_cut<'a, const OPEN: char, const CLOSE: char, O, F>(
 	inside: F,
 ) -> impl Parser<&'a str, Output = O, Error = RegexParsingError<'a>>

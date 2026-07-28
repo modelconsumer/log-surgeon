@@ -6,6 +6,8 @@ use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 
 /// Index in the parsing spec, offset by/starting at 1.
+/// In FFI, `Option<RuleIdx>` is ABI equivalent to `u16`,
+/// where we use `0` to represent static text fragments.
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct RuleIdx(NonZero<u16>);
@@ -56,6 +58,7 @@ pub struct SubRule {
 	pub qualified_name: Arc<str>,
 }
 
+/// Common info for both root rules and sub-rules.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RuleInfo {
 	pub root_idx: RuleIdx,
@@ -119,6 +122,7 @@ impl RootRule {
 }
 
 impl SubRule {
+	/// Convenience conversion to `usize`.
 	pub fn id_as_usize(&self) -> usize {
 		usize::from(self.id.get())
 	}

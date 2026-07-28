@@ -193,11 +193,11 @@ impl ParsingSpecBuilder {
 				let rule_idx: RuleIdx = RuleIdx::new(index);
 
 				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, |regex| {
-					let rule_nfa: Tnfa = Tnfa::from_single_rule(rule_idx, regex);
+					let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex);
 
 					let mut possible_encodings: Vec<String> = Vec::new();
 					for (encoding_name, encoding_regex) in self.encodings.iter() {
-						let encoding_nfa: Tnfa = Tnfa::from_regex(encoding_regex);
+						let encoding_nfa: Tnfa = Tnfa::for_regex(encoding_regex);
 						let intersection: Tnfa = rule_nfa.intersect::<false>(&encoding_nfa);
 						if intersection.can_accept() {
 							possible_encodings.push(encoding_name.clone());
@@ -223,7 +223,7 @@ impl ParsingSpecBuilder {
 			}
 		}
 
-		let main_nfa: Tnfa = Tnfa::from_rules::<true, _>(rules.iter(), &self.delimiters);
+		let main_nfa: Tnfa = Tnfa::for_rules::<true, _>(rules.iter(), &self.delimiters);
 
 		let main_dfa: Tdfa = self.maybe_cached_dfa.unwrap_or_else(|| {
 			now!(t0);

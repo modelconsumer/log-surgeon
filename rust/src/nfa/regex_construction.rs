@@ -13,7 +13,9 @@ use crate::parsing_spec::SubRule;
 use crate::regex::Regex;
 
 impl Tnfa {
-	pub fn from_single_rule(rule_idx: RuleIdx, regex: &Regex) -> Self {
+	/// Create a capturing TNFA for an unanchored regex with accepting state for the given [`RuleIdx`].
+	/// Used for per-rule TDFAs and for search.
+	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex) -> Self {
 		let mut nfa: Self = Self::new();
 
 		let rule_start: NfaIdx = NfaIdx::BEGIN;
@@ -27,8 +29,10 @@ impl Tnfa {
 		nfa
 	}
 
-	pub fn from_regex(regex: &Regex) -> Tnfa {
-		Self::from_single_rule(RuleIdx::NIL, regex)
+	/// Create a capturing TNFA for an unanchored regex and [`RuleIdx::NIL`],
+	/// for search/TNFA intersections.
+	pub fn for_regex(regex: &Regex) -> Tnfa {
+		Self::for_single_rule(RuleIdx::NIL, regex)
 	}
 
 	/// `WITH_CAPTURES` also controls "with(out) anchors"; with captures <=> without anchors.
@@ -36,7 +40,7 @@ impl Tnfa {
 	/// used to match anchors/delimiters/any character (if the rule is unanchored).
 	///
 	/// See [`crate::dfa::Tdfa::execute_without_captures`] for more details.
-	pub fn from_rules<'a, const WITH_CAPTURES: bool, Rules>(rules: Rules, delimiters: &str) -> Self
+	pub fn for_rules<'a, const WITH_CAPTURES: bool, Rules>(rules: Rules, delimiters: &str) -> Self
 	where
 		Rules: IntoIterator<Item = &'a RootRule>,
 	{
@@ -103,6 +107,18 @@ impl Tnfa {
 		nfa
 	}
 
+	/// Build the sub-TNFA for `regex` from `current` to `target` state.
+	/// `rule_idx` is used to track the containing root rule,
+	/// since regex capture [`SubRule`]s are agnostic to the external parsing specification.
+	///
+	/// This follows standard regex to NFA construction,
+	/// augmented with tags as per the TDFA paper.
+	///
+	/// `target` should be a "new" state.
+	///
+	/// Invariants:
+	/// - The transitions to a TNFA state from its successors are all of the same [`Transitions`] kind.
+	///
 	fn build_regex_nfa<const WITH_CAPTURES: bool>(
 		&mut self,
 		rule_idx: RuleIdx,
@@ -238,6 +254,7 @@ impl Tnfa {
 		}
 	}
 
+	/// Build the sub-TNFA for a regex capture expression.
 	fn capture(&mut self, rule: RuleIdx, sub_rule: &SubRule, current: NfaIdx, target: NfaIdx) -> BTreeSet<CaptureTag> {
 		let start_tag: CaptureTag = CaptureTag::Start(sub_rule.clone());
 		let end_tag: CaptureTag = CaptureTag::Stop(sub_rule.clone());
@@ -265,6 +282,7 @@ impl Tnfa {
 		tags
 	}
 
+	/// Build the sub-TNFA for a regex alternation.
 	fn alternate<const WITH_CAPTURE: bool>(
 		&mut self,
 		rule_idx: RuleIdx,
@@ -309,6 +327,7 @@ impl Tnfa {
 		tags
 	}
 
+	/// Build the negative tag sequence, as per the TDFA paper.
 	fn negative_tags(&mut self, tags: impl IntoIterator<Item = CaptureTag>, mut current: NfaIdx) -> NfaIdx {
 		for t in tags {
 			let next: NfaIdx = self.new_state("negative tag ({t:?})");

@@ -120,14 +120,18 @@ impl<T: Number, V: Clone> IntervalTree<T, V>
 where
 	T: Copy,
 {
+	/// Lookup the value associated with the interval containing `pos` (if any).
 	pub fn lookup(&self, pos: T) -> Option<&V> {
 		self.lookup_entry(pos).map(|(_, value)| value)
 	}
 
+	/// Lookup the exact interval containing `pos` (if any).
 	pub fn lookup_interval(&self, pos: T) -> Option<Interval<T>> {
 		self.lookup_entry(pos).map(|(interval, _)| interval)
 	}
 
+	/// Insert a new value for the given interval.
+	/// The `policy` determines how to merge values where the new interval overlaps with existing intervals.
 	pub fn insert<P>(&mut self, mut new: Interval<T>, new_value: V, mut policy: P)
 	where
 		P: Policy<V>,
@@ -200,6 +204,7 @@ where
 		self.check_invariants();
 	}
 
+	/// Retain entries satisfying `predicate`.
 	pub fn retain<P>(&mut self, predicate: P)
 	where
 		P: FnMut(&(Interval<T>, V)) -> bool,
@@ -212,6 +217,7 @@ impl<T: Number, V: Clone> IntervalTree<T, V>
 where
 	T: Copy,
 {
+	/// Lookup the entry for the interval containing `pos`.
 	fn lookup_entry(&self, pos: T) -> Option<(Interval<T>, &V)> {
 		self.check_invariants();
 		let index: usize = self.partition_point(pos);

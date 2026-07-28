@@ -40,6 +40,7 @@ pub struct NfaState {
 #[serde(transparent)]
 pub struct NfaIdx(usize);
 
+/// A TNFA state has homogeneous transitions (not mixed kinds of transitions).
 #[derive(Debug, Clone)]
 pub enum Transitions {
 	Interval(IntervalTree<u32, NfaIdx>),
@@ -135,6 +136,9 @@ impl Transitions {
 		}
 	}
 
+	/// Returns an iterator of successor [`NfaIdx`]s.
+	/// The elided `'_` lifetime in the return type refers to the lifetime of `&self`,
+	/// and means that the returned `dyn Iterator` will/must be valid for at least the lifetime of `&self`.
 	fn successors(&self) -> Box<dyn Iterator<Item = NfaIdx> + '_> {
 		match self {
 			Self::Interval(transitions) => Box::new(transitions.iter().map(|(_interval, target)| *target)),

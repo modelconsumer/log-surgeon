@@ -9,6 +9,7 @@ use serde::de::SeqAccess;
 use serde::de::Visitor;
 use serde::ser::SerializeTuple;
 
+/// Wrapper struct to implement `Serialize` and `Deserialize` for an array.
 #[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct SerdeArray<T>(pub T);

@@ -49,6 +49,12 @@ impl Lexer {
 		}
 	}
 
+	/// Return the next [`Token`] from `input` starting from `*pos`,
+	/// and update `*pos` to index the next character after the returned token.
+	///
+	/// `dfa_execution` is cached memory/working space for the underlying DFA execution,
+	/// and also contains the captured text for sub-rules.
+	/// It should be created via [`TdfaExecution::new`].
 	pub fn next_token<'spec, 'input>(
 		&'spec self,
 		input: &'input str,
@@ -122,6 +128,7 @@ impl Lexer {
 		}
 	}
 
+	/// Uniform "interface" to executing a TDFA via the JIT-ed or Rust implementation.
 	fn execute_dfa<'input, const JIT: bool>(
 		&self,
 		input: &'input str,
@@ -147,6 +154,7 @@ impl Lexer {
 		}
 	}
 
+	/// See the [document on parsing](docs/parsing.md).
 	fn glob_static_text(&self, input: &str, pos: &mut usize) {
 		for ch in input[*pos..].chars() {
 			if ch == '\n' {

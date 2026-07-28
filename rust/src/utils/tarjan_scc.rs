@@ -1,19 +1,30 @@
+/// Results of Tarjan's SCC algorithm.
+/// See [`TarjanSccs::tarjan_scc`].
 #[derive(Debug, Clone)]
 pub struct TarjanSccs {
+	/// List of SCCs (by vertice index).
 	pub sccs: Vec<Vec<usize>>,
+	/// Additional info associated with each vertice.
 	pub vertices: Vec<TarjanVertex>,
+	/// Mapping [`TarjanVertex::encountered_at`] to original vertex indices.
 	pub original_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TarjanVertex {
+	/// Order in which vertices are visited by the algorithm.
 	pub encountered_at: usize,
+	/// Minimal `encountered_at` among vertices of the corresponding SCC.
 	pub low_link: usize,
+	/// SCC index (in [`TarjanSccs::sccs`]).
 	pub scc: usize,
+	/// Working data for the algorithm.
 	on_stack: bool,
 }
 
 impl TarjanSccs {
+	/// Compute [`TarjanSccs`] data from a list of vertices;
+	/// the data refers to the vertices by their original index in the input slice.
 	pub fn tarjan_scc<'a, T, F, I>(vertices: &'a [T], successors: F) -> Self
 	where
 		T: 'a,

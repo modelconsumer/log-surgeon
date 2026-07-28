@@ -1,30 +1,35 @@
 mod pattern_parsing;
 
+pub use pattern_parsing::RegexPlaceholderLookup;
+
 use std::num::NonZero;
 use std::sync::Arc;
 
 use nom::error::ErrorKind as NomErrorKind;
-pub use pattern_parsing::RegexPlaceholderLookup;
 
 use crate::parsing_spec::SubRule;
 use crate::utils::Escaped;
 use crate::utils::LocalTryInto;
 
+/// Meta-characters that must be escaped, aside from inside bracketed ranges.
 const SPECIAL_CHARACTERS: &str = r"\()[]{}*+?.|^$";
 
-const SPECIAL_CHARACTERS_IN_BRACKETED_EXPRESSIONS: &str = r"\[]";
+/// Meta-characters that must be escaped inside bracketed ranges.
+const SPECIAL_CHARACTERS_IN_BRACKETED_RANGES: &str = r"\[]";
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct AnchoredRegex {
 	pub anchor_before: bool,
 	pub anchor_after: bool,
 	pub regex: Regex,
-	/// Total "captures" in the regex - total [`Regex::Capture`] **plus 1** for the implicit full capture behaviour.
+	/// Total "captures" in the regex - total [`Regex::Capture`]s **plus 1**
+	/// for the implicit capture of the entire regex.
 	pub total_captures: NonZero<u16>,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Regex {
+	/// Any character, including newline.
 	AnyChar,
 	Literal(char),
 	Capture(Arc<SubRule>),
@@ -194,7 +199,7 @@ impl Regex {
 			},
 			Self::BracketedRanges { negated, items } => {
 				fn escape(ch: char, buffer: &mut String) {
-					if SPECIAL_CHARACTERS_IN_BRACKETED_EXPRESSIONS.contains(ch) {
+					if SPECIAL_CHARACTERS_IN_BRACKETED_RANGES.contains(ch) {
 						buffer.push('\\');
 						buffer.push(ch);
 					} else if ch == '-' {
@@ -273,11 +278,14 @@ impl Regex {
 	/// except for a capture, which is "already" parenthesized.
 	fn precedence(&self) -> isize {
 		match self {
-			Self::AnyChar | Self::Literal(_) | Self::BracketedRanges { .. } => 0,
-			Self::Capture { .. } | Self::Placeholder { .. } => 0,
-			Self::KleeneClosure(_) | Self::KleenePlus(_) | Self::BoundedRepetition { .. } => -1,
-			Self::Sequence(_) => -2,
-			Self::Alternation(_) => -3,
+			Self::Alternation(_) => 0,
+			Self::Sequence(_) => 1,
+			Self::KleeneClosure(_) | Self::KleenePlus(_) | Self::BoundedRepetition { .. } => 2,
+			Self::Capture { .. }
+			| Self::Placeholder { .. }
+			| Self::AnyChar
+			| Self::Literal(_)
+			| Self::BracketedRanges { .. } => 3,
 		}
 	}
 }
@@ -339,7 +347,9 @@ impl Regex {
 		}
 	}
 
-	/// When substituting placeholders, we must deep clone the `SubRule`s.
+	/// If a placeholder contains a regex capture/[`SubRule`],
+	/// each substitution of the placeholder should be a unique sub-rule.
+	/// In other words, we must deep clone the regex of the placeholder when substituting.
 	fn deep_clone(&self) -> Self {
 		match self {
 			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => self.clone(),

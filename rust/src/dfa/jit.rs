@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use cranelift::codegen::Context;
 use cranelift::codegen::ir::AbiParam;
 use cranelift::codegen::ir::Block;

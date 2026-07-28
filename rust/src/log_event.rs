@@ -49,8 +49,9 @@ pub struct Match {
 
 	pub encoding_idx: Option<NonZero<u16>>,
 
-	/// DANGEROUS fields for FFI.
-	/// But it's not dangerous if you don't look at it.
+	/// DANGEROUS fields exposed for FFI.
+	/// But it's not dangerous if you don't look at it (in Rust).
+	/// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`] as necessary.
 	///
 	/// Note: [`LogEvent`] can borrow from [`crate::parser::Parser`] since it's an "external" value,
 	/// but the [`Match`]es of a `LogEvent` live in a `Vec` inside `Parser`,
@@ -110,6 +111,9 @@ impl std::fmt::Display for Match {
 }
 
 impl Match {
+	/// Debugging function to stringify a `Match`;
+	/// unsafe because the `Match` object may outlive the parser whose input
+	/// this object implicitly refers to.
 	pub unsafe fn show(&self) -> String {
 		format!(
 			"Match(rule: {}, id: {}, parent: {}, {:?})",
