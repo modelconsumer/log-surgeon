@@ -235,18 +235,22 @@ impl Interpretation {
 						}
 						continue 'inner;
 					}
-					if query1.symbolic_value.starts_with(&query2.symbolic_value) {
+					if query1.symbolic_value.starts_with(&query2.symbolic_value)
+						&& query2.symbolic_value != [SymbolicChar::GlobStar]
+					{
 						assert!(query1.symbolic_value.len() > query2.symbolic_value.len());
 						debug!("\t- removing j < i:");
 						debug!("\t\t- {interpretation1:?}");
-						debug!("\t\t- GONE {interpretation2:?}");
+						debug!("\t\t- {interpretation2:?} GONE");
 						interpretations.remove(j);
 						continue 'outer;
 					}
-					if query2.symbolic_value.starts_with(&query1.symbolic_value) {
+					if query2.symbolic_value.starts_with(&query1.symbolic_value)
+						&& query1.symbolic_value != [SymbolicChar::GlobStar]
+					{
 						assert!(query2.symbolic_value.len() > query1.symbolic_value.len());
 						debug!("\t- removing i < j:");
-						debug!("\t\t- GONE {interpretation1:?}");
+						debug!("\t\t- {interpretation1:?} GONE");
 						debug!("\t\t- {interpretation2:?}");
 						interpretations.swap(i, j);
 						interpretations.remove(j);
@@ -457,11 +461,10 @@ impl<'a> SearchStringView<'a> {
 		for interpretation in potential_interpretations.into_iter() {
 			// TODO more careful?
 			// Ignore interpretations that have "useless" captures.
-			if interpretation
-				.sub_queries
-				.iter()
-				.any(|sub_query| sub_query.rule_idx.is_some() && (sub_query.symbolic_value != [SymbolicChar::GlobStar]))
-			{
+			if true
+				|| interpretation.sub_queries.iter().any(|sub_query| {
+					sub_query.rule_idx.is_some() && (sub_query.symbolic_value != [SymbolicChar::GlobStar])
+				}) {
 				interpretations.push(interpretation);
 			}
 		}
@@ -1093,6 +1096,24 @@ mod test {
 			}
 			println!("=== Done");
 		}
+	}
+
+	#[test]
+	fn kv_ip_pattern() {
+		let spec: ParsingSpec = spec! {
+			r#"
+			kv: "(?<key>[\w_./\\-]+)([:=]|: )(?<ip_value>/?\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d{1,5})?)"
+			"#
+		};
+
+		let interpretations: Vec<Interpretation> = do_search(&spec, "*172.31.17.135*", "");
+
+		println!("=== Interpretations");
+		for interpretation in interpretations.iter() {
+			println!("- {interpretation:?}");
+		}
+
+		assert_eq!(interpretations.len(), 3);
 	}
 
 	fn do_search(spec: &ParsingSpec, query: &str, name: &str) -> Vec<Interpretation> {
