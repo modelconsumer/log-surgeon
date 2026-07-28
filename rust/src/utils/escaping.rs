@@ -1,37 +1,43 @@
 use std::str::Chars;
 
+/// A wrapper around a `char` that implements [`Display`] (and consequently [`ToString`])
+/// by escaping special characters with backslash and a control character:
+///
+/// - backslash (`\\`),
+/// - ASCII whitespace (`\t`, `\r`, `\n`),
+/// - non-printable ASCII characters (outside the range `0x20..0x7E`)
+///   and non-ASCII Unicode characters (e.g. `\u{80}`),
+/// - single and double quotes (`\'`, `\"`).
+///
+/// Currently, the implementation simply calls [`char::escape_default`],
+/// but this struct still exists as a layer of abstraction.
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Escaped {
 	ch: char,
-	escape_space: bool,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub enum InvalidEscape {
-	/// Reached EOF after initial backslash (empty input).
+	/// Reached EOF after the escaping backslash (empty input).
 	Eof,
 	/// Malformed Unicode code point (as hexadecimal digit pairs).
-	Malformed,
-	/// Unknown escape character.
+	MalformedCodePoint,
+	/// Unknown escape control character.
 	Unknown(char),
 	/// Invalid Unicode code point.
 	BadCodePoint(u32),
 }
 
 impl Escaped {
+	/// Construct a new `Escaped` value.
 	pub fn escape(ch: char) -> Self {
-		Self { ch, escape_space: true }
+		Self { ch }
 	}
 
-	pub fn escape_space(mut self, b: bool) -> Self {
-		self.escape_space = b;
-		self
-	}
-
-	/// Parses the following "common" escape sequences, after the backslash
-	/// (switches on the first character of `input`):
+	/// Almost the inverse of `Escaped::escape(ch).to_string()`;
+	/// assumes the escaping backslash has already been encountered,
+	/// and switches on the first character of `input`.
 	///
-	/// - ` ` for a literal space (for usages that need to avoid ambiguity).
 	/// - a (second) backslash for a literal backslash.
 	/// - `'` for a literal single quote.
 	/// - `"` for a literal double quote.
@@ -57,14 +63,14 @@ impl Escaped {
 				assert_eq!(MAX_BYTES_PER_CODE_POINT, 3);
 
 				let Some(ch): Option<char> = chars.next() else {
-					return Err(InvalidEscape::Malformed);
+					return Err(InvalidEscape::MalformedCodePoint);
 				};
 				if ch != '{' {
-					return Err(InvalidEscape::Malformed);
+					return Err(InvalidEscape::MalformedCodePoint);
 				}
 
 				let Some(mut code_point): Option<u32> = parse_hex_digit_pair(&mut chars) else {
-					return Err(InvalidEscape::Malformed);
+					return Err(InvalidEscape::MalformedCodePoint);
 				};
 
 				for _ in 1..MAX_BYTES_PER_CODE_POINT {
@@ -78,10 +84,10 @@ impl Escaped {
 				}
 
 				let Some(ch): Option<char> = chars.next() else {
-					return Err(InvalidEscape::Malformed);
+					return Err(InvalidEscape::MalformedCodePoint);
 				};
 				if ch != '}' {
-					return Err(InvalidEscape::Malformed);
+					return Err(InvalidEscape::MalformedCodePoint);
 				}
 
 				let ch: char = char::from_u32(code_point).ok_or(InvalidEscape::BadCodePoint(code_point))?;
@@ -99,17 +105,7 @@ impl Escaped {
 
 impl std::fmt::Display for Escaped {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let ch: char = self.ch;
-		if self.escape_space && (ch == ' ') {
-			// We escape space because it can easily be "lost" at the start or end of a pattern,
-			// e.g. a text editor may trim trailing whitespace when saving a parsing spec file.
-			// Tabs, carriage returns, newlines, and other (unicode) whitespace will be escaped below.
-			fmt.write_str("\\ ")
-		} else {
-			// `\t`, `\r`, `\n`, `\\`, non-printable ASCII, non-ASCII unicode characters.
-			// [`char::escape_default`] also escapes quotes, which aren't relevant to us, but it doesn't hurt.
-			ch.escape_default().fmt(fmt)
-		}
+		self.ch.escape_default().fmt(fmt)
 	}
 }
 

@@ -775,7 +775,7 @@ fn parse_standard_escape(input: &str) -> ParsingResult<'_, Term> {
 	match Escaped::unescape(input) {
 		Ok((input, ch)) => Ok((input, Term::Char(ch))),
 		Err(InvalidEscape::Eof) => Err(RegexErrorKind::InvalidEscape.error(input)),
-		Err(InvalidEscape::Malformed) => Err(RegexErrorKind::ExpectedHexDigits.fail(input)),
+		Err(InvalidEscape::MalformedCodePoint) => Err(RegexErrorKind::ExpectedHexDigits.fail(input)),
 		Err(InvalidEscape::BadCodePoint(x)) => Err(RegexErrorKind::InvalidCodePoint(x).fail(input)),
 		Err(InvalidEscape::Unknown(_)) => Err(RegexErrorKind::InvalidEscape.error(input)),
 	}

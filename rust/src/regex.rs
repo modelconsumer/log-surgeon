@@ -194,7 +194,7 @@ impl Regex {
 				if SPECIAL_CHARACTERS.contains(ch) {
 					format!("\\{ch}")
 				} else {
-					Escaped::escape(ch).escape_space(false).to_string()
+					Escaped::escape(ch).to_string()
 				}
 			},
 			Self::BracketedRanges { negated, items } => {
@@ -207,7 +207,7 @@ impl Regex {
 						// However, we always escape it for simplicity and clarity.
 						buffer.push_str("\\-");
 					} else {
-						buffer.push_str(&Escaped::escape(ch).escape_space(false).to_string());
+						buffer.push_str(&Escaped::escape(ch).to_string());
 					}
 				}
 

@@ -265,7 +265,8 @@ tasks:
     cmds:
       - task: "utils:cpp-lint:clang-format"
         vars:
-          EXCLUDE_PATTERNS:
+          INCLUDE_PATTERNS:
+            - "log_surgeon/generated_bindings.hpp"
           FLAGS:
             ref: ".FLAGS"
           INCLUDE_FILENAME_PATTERNS:
