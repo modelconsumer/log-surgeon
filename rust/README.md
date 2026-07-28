@@ -23,6 +23,8 @@ The rest of this document is a quickstart development guide.
 	- If using [rustup][rustup], the `stable` toolchain can be updated as `rustup update stable`.
 - CPython 3.12+.
 - C++ compiler - GCC 10+ or Clang 7+.
+- [Task][task] runner.
+- [uv][uv] Python manager.
 
 ## Building
 ```bash
@@ -78,4 +80,6 @@ i.e. running with `LOG_SURGEON_LOG=log_surgeon=info` or higher should not includ
 [pyo3]: https://pyo3.rs/
 [maturin]: https://www.maturin.rs/
 [rustup]: https://rustup.rs/
+[task]: https://taskfile.dev/
+[uv]: https://docs.astral.sh/uv/
 [rust-tracing-env-filter]: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html

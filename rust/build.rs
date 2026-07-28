@@ -3,12 +3,20 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn Error>> {
+	// By default, Cargo re-runs the build script (and consequently the build)
+	// if any file within the package is changed.
+	//
+	// <https://doc.rust-lang.org/cargo/reference/build-scripts.html#change-detection>
 	println!("cargo:rerun-if-changed=build.rs");
+	println!("cargo:rerun-if-changed=src");
+	println!("cargo:rerun-if-changed=cbindgen.toml");
 
 	let root_dir: PathBuf = std::env::current_dir().unwrap();
 
 	// Ignore error; don't choke rustfmt/rust-analyzer/rustc just because there's a syntax error.
-	let _ = generate_c_bindings(&root_dir);
+	if let Err(err) = generate_c_bindings(&root_dir) {
+		eprintln!("[build.rs] error generating C bindings: {err}");
+	}
 
 	Ok(())
 }

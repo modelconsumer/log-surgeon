@@ -97,12 +97,35 @@ renaming_overrides_prefixing = false
 
 [export.body]
 "UncheckedCArray" = """
-    // Custom
-    [[nodiscard]] auto as_cpp_view() const noexcept -> std::string_view
-    requires std::is_same_v<T, char>
-    {
-        return {this->pointer, this->length};
-    }
+	// Custom
+	[[nodiscard]] auto as_cpp_view() const noexcept -> std::string_view
+	requires std::is_same_v<T, char>
+	{
+		return {this->pointer, this->length};
+	}
+"""
+
+"Match" = """
+	// Custom
+	[[nodiscard]] auto get_parent() const noexcept -> Match const* {
+		return this->ffi_pointers.parent;
+	}
+
+	[[nodiscard]] auto get_lexeme() const noexcept -> std::string_view {
+		return this->ffi_pointers.lexeme.as_cpp_view();
+	}
+
+	[[nodiscard]] auto get_root_rule_name() const noexcept -> std::string_view {
+		return this->ffi_pointers.root_rule_name.as_cpp_view();
+	}
+
+	[[nodiscard]] auto get_rule_name() const noexcept -> std::string_view {
+		return this->ffi_pointers.rule_name.as_cpp_view();
+	}
+
+	[[nodiscard]] auto get_fully_qualified_name() const noexcept -> std::string_view {
+		return this->ffi_pointers.fully_qualified_name.as_cpp_view();
+	}
 """
 
 [export.mangle]

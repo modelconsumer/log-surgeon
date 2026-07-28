@@ -2,26 +2,36 @@
 
 // NOLINTBEGIN
 
-
 #ifndef LOG_SURGEON_GENERATED_BINDINGS_HPP
-#define LOG_SURGEON_GENERATED_BINDINGS_HPP
+    #define LOG_SURGEON_GENERATED_BINDINGS_HPP
 
-#include <cstddef>
-#include <cstdint>
-#include "rust_compat.hpp"
+    #include "rust_compat.hpp"
+
+    #include <cstddef>
+    #include <cstdint>
+
 namespace log_surgeon {
 // https://github.com/mozilla/cbindgen/issues/43
 struct Match;
-}
-
+}  // namespace log_surgeon
 
 namespace log_surgeon {
-
 struct Interpretation;
 
 /// Newtype wrapper around a `usize` index.
 struct NfaIdx;
 
+/// A parser is almost stateless aside from 2/3 fields:
+///
+/// - An owned copy of the substring of the input text for the "current" (most recently returned)
+/// log event.
+///   - This greatly simplifies lifetime management, especially in the presence of FFI,
+///     since the parser doesn't own a whole copy of the input text.
+///   - Most calls to [`Parser::next_event`] won't require allocation;
+///     the memory is bounded by the max log event size.
+/// - An owned copy of the text and matches for the header of the next log event.
+/// - (Optional/implementation detail) [`TdfaExecution`] cache.
+///
 struct Parser;
 
 /// A `ParsingSpec` is conceptually a list of rules and a set of delimiter characters.
@@ -38,24 +48,27 @@ struct SearchResult;
 
 struct InternalSubQuery;
 
-template<typename T = void>
+template <typename T = void>
 struct Vec;
 
 /// Index in the parsing spec, offset by/starting at 1.
+/// In FFI, `Option<RuleIdx>` is ABI equivalent to `u16`,
+/// where we use `0` to represent static text fragments.
 using RuleIdx = uint16_t;
 
 /// Can't use `std::range::Range` because it's not `#[repr(C)]`.
-template<typename Idx>
+template <typename Idx>
 struct CRange {
     Idx start;
     Idx end;
 };
 
 /// A pointer-length pair with unchecked/untied lifetime.
-template<typename T>
+template <typename T>
 struct UncheckedCArray {
-    const T *pointer;
+    T const* pointer;
     size_t length;
+
     // Custom
     [[nodiscard]] auto as_cpp_view() const noexcept -> std::string_view
     requires std::is_same_v<T, char>
@@ -65,7 +78,7 @@ struct UncheckedCArray {
 };
 
 struct MatchFfiPointers {
-    const Match *parent;
+    Match const* parent;
     UncheckedCArray<char> lexeme;
     UncheckedCArray<char> root_rule_name;
     /// Name of _this_ (root or sub-) rule.
@@ -91,13 +104,36 @@ struct Match {
     CRange<size_t> range;
     bool is_leaf;
     uint16_t encoding_idx;
-    /// DANGEROUS fields for FFI.
-    /// But it's not dangerous if you don't look at it.
+    /// DANGEROUS fields exposed for FFI.
+    /// But it's not dangerous if you don't look at it (in Rust).
+    /// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`] as
+    /// necessary.
     ///
     /// Note: [`LogEvent`] can borrow from [`crate::parser::Parser`] since it's an "external" value,
     /// but the [`Match`]es of a `LogEvent` live in a `Vec` inside `Parser`,
     /// so they can't safely reference the `Parser` (be self-referential).
     MatchFfiPointers ffi_pointers;
+
+    // Custom
+    [[nodiscard]] auto get_parent() const noexcept -> Match const* {
+        return this->ffi_pointers.parent;
+    }
+
+    [[nodiscard]] auto get_lexeme() const noexcept -> std::string_view {
+        return this->ffi_pointers.lexeme.as_cpp_view();
+    }
+
+    [[nodiscard]] auto get_root_rule_name() const noexcept -> std::string_view {
+        return this->ffi_pointers.root_rule_name.as_cpp_view();
+    }
+
+    [[nodiscard]] auto get_rule_name() const noexcept -> std::string_view {
+        return this->ffi_pointers.rule_name.as_cpp_view();
+    }
+
+    [[nodiscard]] auto get_fully_qualified_name() const noexcept -> std::string_view {
+        return this->ffi_pointers.fully_qualified_name.as_cpp_view();
+    }
 };
 
 struct LogEvent {
@@ -108,87 +144,104 @@ struct LogEvent {
     /// returns a `LogEvent` that `mut` (exclusively) borrows from the parser,
     /// the caller can't access the parser's spec and the event at the same time.
     /// So, `Parser::next_event` passes a reference to the spec through the returned `LogEvent`.
-    const ParsingSpec *spec;
+    ParsingSpec const* spec;
     CCharArray message;
     CArray<Match> all_matches;
     CArray<size_t> leaf_indices;
     CArray<size_t> variable_indices;
 };
 
-
-
-
 extern "C" {
 
-void log_surgeon_enable_tracing();
+    /// Enable tracing debugging logs; see [`README.md#Debugging`].
+    void log_surgeon_enable_tracing();
 
-const Match *log_surgeon_log_event_all_matches(const LogEvent *log_event, size_t *len);
+    /// Get the matches of a log event.
+    Match const* log_surgeon_log_event_all_matches(LogEvent const* log_event, size_t* len);
 
-Box<LogEvent> log_surgeon_log_event_clone(const LogEvent *value);
+    Box<LogEvent> log_surgeon_log_event_clone(LogEvent const* value);
 
-void log_surgeon_log_event_drop(Box<LogEvent> value);
+    void log_surgeon_log_event_drop(Box<LogEvent> value);
 
-const size_t *log_surgeon_log_event_leaf_match_indices(const LogEvent *log_event, size_t *len);
+    /// Get the match indices of a log event.
+    size_t const* log_surgeon_log_event_leaf_match_indices(LogEvent const* log_event, size_t* len);
 
-Box<LogEvent> log_surgeon_log_event_new();
+    /// Create a (boxed) [`LogEvent`], for cached/reused return value for `log_surgeon_parser_next`.
+    Box<LogEvent> log_surgeon_log_event_new();
 
-Box<Parser> log_surgeon_parser_clone(const Parser *value);
+    Box<Parser> log_surgeon_parser_clone(Parser const* value);
 
-void log_surgeon_parser_drop(Box<Parser> value);
+    void log_surgeon_parser_drop(Box<Parser> value);
 
-Box<Parser> log_surgeon_parser_new(Box<ParsingSpec> parsing_spec);
+    /// Consume the (boxed) [`ParsingSpec`] to construct a [`Parser`].
+    Box<Parser> log_surgeon_parser_new(Box<ParsingSpec> parsing_spec);
 
-bool log_surgeon_parser_next(Parser *parser, CCharArray input, size_t *pos, LogEvent *out);
+    /// See [`Parser::next_event`].
+    bool log_surgeon_parser_next(Parser* parser, CCharArray input, size_t* pos, LogEvent* out);
 
-void log_surgeon_parser_reset(Parser *parser);
+    /// See [`Parser::reset`].
+    void log_surgeon_parser_reset(Parser* parser);
 
-bool log_surgeon_parsing_spec_add_encoding(ParsingSpecBuilder *builder,
-                                           CCharArray name,
-                                           CCharArray pattern);
+    /// See [`ParsingSpecBuilder::add_encoding`].
+    bool log_surgeon_parsing_spec_add_encoding(
+            ParsingSpecBuilder* builder,
+            CCharArray name,
+            CCharArray pattern
+    );
 
-bool log_surgeon_parsing_spec_builder_add_rule_with_priority(ParsingSpecBuilder *builder,
-                                                             int32_t priority,
-                                                             CCharArray name,
-                                                             CCharArray pattern);
+    /// See [`ParsingSpecBuilder::add_rule_with_priority`].
+    bool log_surgeon_parsing_spec_builder_add_rule_with_priority(
+            ParsingSpecBuilder* builder,
+            int32_t priority,
+            CCharArray name,
+            CCharArray pattern
+    );
 
-Box<ParsingSpec> log_surgeon_parsing_spec_builder_build(Box<ParsingSpecBuilder> builder);
+    /// Consume the (boxed) [`ParsingSpecBuilder`] to construct a [`ParsingSpec`].
+    Box<ParsingSpec> log_surgeon_parsing_spec_builder_build(Box<ParsingSpecBuilder> builder);
 
-Option<Box<ParsingSpecBuilder>> log_surgeon_parsing_spec_builder_from_definition(CCharArray definition);
+    /// See [`ParsingSpecBuilder::from_parsing_spec_definition`].
+    Option<Box<ParsingSpecBuilder>> log_surgeon_parsing_spec_builder_from_definition(
+            CCharArray definition
+    );
 
-Box<ParsingSpecBuilder> log_surgeon_parsing_spec_builder_new();
+    /// Create a new [`ParsingSpecBuilder`].
+    Box<ParsingSpecBuilder> log_surgeon_parsing_spec_builder_new();
 
-void log_surgeon_parsing_spec_builder_set_delimiters(ParsingSpecBuilder *builder,
-                                                     CCharArray delimiters);
+    /// See [`ParsingSpecBuilder::set_delimiters`].
+    void log_surgeon_parsing_spec_builder_set_delimiters(
+            ParsingSpecBuilder* builder,
+            CCharArray delimiters
+    );
 
-Option<Box<ParsingSpec>> log_surgeon_parsing_spec_from_definition(CCharArray definition);
+    /// See [`ParsingSpecBuilder::get_encoding`].
+    CCharArray
+    log_surgeon_parsing_spec_get_encoding(Parser const* parser, size_t encoding_idx, size_t i);
 
-CCharArray log_surgeon_parsing_spec_get_encoding(const Parser *parser,
-                                                 size_t encoding_idx,
-                                                 size_t i);
+    Interpretation const*
+    log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);
 
-const Interpretation *log_surgeon_search_get_interpretation(const Vec<Interpretation> *interpretations,
-                                                            size_t i);
+    InternalSubQuery const*
+    log_surgeon_search_get_sub_query(Interpretation const* interpretation, size_t i);
 
-const InternalSubQuery *log_surgeon_search_get_sub_query(const Interpretation *interpretation,
-                                                         size_t i);
+    void log_surgeon_search_interpretations_drop(Box<Vec<Interpretation>> value);
 
-void log_surgeon_search_interpretations_drop(Box<Vec<Interpretation>> value);
+    Box<Vec<Interpretation>> log_surgeon_search_query_interpretations(
+            Parser const* parser,
+            CCharArray input,
+            CCharArray name
+    );
 
-Box<Vec<Interpretation>> log_surgeon_search_query_interpretations(const Parser *parser,
-                                                                  CCharArray input,
-                                                                  CCharArray name);
+    void log_surgeon_search_result_drop(Box<SearchResult> value);
 
-void log_surgeon_search_result_drop(Box<SearchResult> value);
+    Match const*
+    log_surgeon_search_result_get_leaf_matches(SearchResult const* search_result, size_t* len);
 
-const Match *log_surgeon_search_result_get_leaf_matches(const SearchResult *search_result,
-                                                        size_t *len);
+    CCharArray log_surgeon_search_sub_query_get_qualified_name(InternalSubQuery const* sub_query);
 
-CCharArray log_surgeon_search_sub_query_get_qualified_name(const InternalSubQuery *sub_query);
-
-CCharArray log_surgeon_search_sub_query_get_value(const InternalSubQuery *sub_query);
+    CCharArray log_surgeon_search_sub_query_get_value(InternalSubQuery const* sub_query);
 
 }  // extern "C"
-
 }  // namespace log_surgeon
 
 #endif  // LOG_SURGEON_GENERATED_BINDINGS_HPP
