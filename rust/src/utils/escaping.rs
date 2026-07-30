@@ -10,7 +10,8 @@ use std::str::Chars;
 /// - single and double quotes (`\'`, `\"`).
 ///
 /// Currently, the implementation simply calls [`char::escape_default`],
-/// but this struct still exists as a layer of abstraction.
+/// but this struct still exists as a layer of abstraction;
+/// it also provides [`Escaped::unescape`] for parsing such escape sequences.
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Escaped {
 	ch: char,
@@ -34,6 +35,24 @@ impl Escaped {
 		Self { ch }
 	}
 
+	/// Parse a regular or escaped character;
+	/// returns the remaining input and processed character.
+	///
+	/// See also: [`Escaped::unescape_on_control_character`].
+	pub fn unescape(input: &str) -> Result<(&str, char), InvalidEscape> {
+		let mut chars: Chars<'_> = input.chars();
+
+		let Some(ch): Option<char> = chars.next() else {
+			return Err(InvalidEscape::Eof);
+		};
+
+		if ch == '\\' {
+			Self::unescape_on_control_character(chars.as_str())
+		} else {
+			Ok((chars.as_str(), ch))
+		}
+	}
+
 	/// Almost the inverse of `Escaped::escape(ch).to_string()`;
 	/// assumes the escaping backslash has already been encountered,
 	/// and switches on the first character of `input`.
@@ -44,7 +63,7 @@ impl Escaped {
 	/// - `t`, `r`, `n`: tab, carriage return, and newline respectively.
 	/// - `u{xx}`, `u{xxyy}`, `u{xxyyzz}` for a Unicode code point in hexadecimal representation.
 	///   - Hex digits may be upper or lower case, and must come in pairs.
-	pub fn unescape(input: &str) -> Result<(&str, char), InvalidEscape> {
+	pub fn unescape_on_control_character(input: &str) -> Result<(&str, char), InvalidEscape> {
 		let mut chars: Chars<'_> = input.chars();
 
 		let Some(ch): Option<char> = chars.next() else {

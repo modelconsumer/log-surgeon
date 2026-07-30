@@ -203,16 +203,12 @@ impl Interpretation {
 			'outer: while j < interpretations.len() {
 				let interpretation1: &Interpretation = &interpretations[i];
 				let interpretation2: &Interpretation = &interpretations[j];
-				'inner: for (k, (query1, query2)) in
-					std::iter::zip(interpretation1.sub_queries.iter(), interpretation2.sub_queries.iter()).enumerate()
+				'inner: for (query1, query2) in
+					std::iter::zip(interpretation1.sub_queries.iter(), interpretation2.sub_queries.iter())
 				{
 					if query1.is_static_text() && query2.is_static_text() {
 						if query1.symbolic_value == query2.symbolic_value {
-							if k == interpretation1.sub_queries.len() {
-								assert_eq!(interpretation1, interpretation2);
-
-								panic!();
-							}
+							// Prefix same so far.
 							continue 'inner;
 						} else {
 							// Different interpretations.
@@ -228,11 +224,7 @@ impl Interpretation {
 						break 'inner;
 					}
 					if query1.symbolic_value == query2.symbolic_value {
-						if k == interpretation1.sub_queries.len() {
-							assert_eq!(interpretation1, interpretation2);
-
-							panic!();
-						}
+						// Prefix same so far.
 						continue 'inner;
 					}
 					if query1.symbolic_value.starts_with(&query2.symbolic_value)

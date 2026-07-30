@@ -263,21 +263,21 @@ fn parse_char_sequence(input: &str) -> IResult<&str, Vec<char>> {
 	many0(alt((parse_escaped_char, parse_regular_char))).parse(input)
 }
 
+/// Parse a backslash and any character;
+/// the actual escape processing must happen later,
+/// depending on whether the outer value is for the delimiter set or a rule regex pattern.
 fn parse_escaped_char(input: &str) -> IResult<&str, char> {
 	use nom::character::complete::none_of;
 	use nom::combinator::cut;
 	use nom::sequence::preceded;
 
 	preceded(parse_char::<'\\'>, cut(none_of(""))).parse(input)
-
-	// let (input, _): (&str, char) = parse_char::<'\\'>(input)?;
-
-	// match Escaped::unescape(input) {
-	// 	Ok((input, ch)) => Ok((input, ch)),
-	// 	Err(_) => cut(fail()).parse(input),
-	// }
 }
 
+/// Parse anything but:
+///
+/// - a backslash (handled by [`parse_escaped_char`]), or
+/// - a double quote (handled as the opening/closing characters in [`parse_pattern`]).
 fn parse_regular_char(input: &str) -> IResult<&str, char> {
 	use nom::character::complete::none_of;
 
@@ -285,28 +285,12 @@ fn parse_regular_char(input: &str) -> IResult<&str, char> {
 }
 
 fn unescape(mut input: &str) -> Result<String, InvalidEscape> {
-	use std::str::Chars;
-
 	let mut unescaped: String = String::new();
 
-	let mut last_was_escape: bool = false;
-
 	while !input.is_empty() {
-		if last_was_escape {
-			let ch: char;
-			(input, ch) = Escaped::unescape(input)?;
-			unescaped.push(ch);
-			last_was_escape = false;
-		} else {
-			if let Some(suffix) = input.strip_prefix('\\') {
-				last_was_escape = true;
-				input = suffix;
-			} else {
-				let mut iter: Chars<'_> = input.chars();
-				unescaped.push(iter.next().unwrap());
-				input = iter.as_str();
-			}
-		}
+		let ch: char;
+		(input, ch) = Escaped::unescape(input)?;
+		unescaped.push(ch);
 	}
 
 	Ok(unescaped)

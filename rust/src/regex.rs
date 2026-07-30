@@ -1,11 +1,10 @@
 mod pattern_parsing;
 
-pub use pattern_parsing::RegexPlaceholderLookup;
-
 use std::num::NonZero;
 use std::sync::Arc;
 
 use nom::error::ErrorKind as NomErrorKind;
+pub use pattern_parsing::RegexPlaceholderLookup;
 
 use crate::parsing_spec::SubRule;
 use crate::utils::Escaped;
