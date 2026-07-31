@@ -35,30 +35,6 @@ public:
         }
         m_parser = log_surgeon_parser_new(spec);
         m_event = log_surgeon_log_event_new();
-
-        m_encodings.emplace_back();
-        while (true) {
-            std::vector<std::string_view> encodings;
-            while (true) {
-                std::string_view const name{log_surgeon_parsing_spec_get_encoding(
-                        m_parser,
-                        m_encodings.size(),
-                        encodings.size()
-                )};
-
-                if (name.empty()) {
-                    break;
-                }
-
-                encodings.push_back(name);
-            }
-
-            if (encodings.empty()) {
-                break;
-            }
-
-            m_encodings.push_back(std::move(encodings));
-        }
     }
 
     ~ParserHandle() {
@@ -143,12 +119,6 @@ public:
     [[nodiscard]] auto query_interpretations(std::string_view name, std::string_view query)
             -> std::vector<std::vector<SubQuery>>;
 
-    /**
-     * `encoding_idx == 0` corresponds to the empty set (no possible encodings).
-     */
-    [[nodiscard]] auto get_encoding(size_t encoding_idx) const
-            -> std::vector<std::string_view> const&;
-
 private:
     /**
      * Last piece of copy-and-swap;
@@ -158,8 +128,6 @@ private:
 
     Parser* m_parser{};
     LogEvent* m_event{};
-
-    std::vector<std::vector<std::string_view>> m_encodings;
 };
 
 class EventHandle {
@@ -253,11 +221,6 @@ inline auto ParserHandle::query_interpretations(std::string_view name, std::stri
     log_surgeon_search_interpretations_drop(rust_interpretations);
 
     return interpretations;
-}
-
-inline auto ParserHandle::get_encoding(size_t encoding_idx) const
-        -> std::vector<std::string_view> const& {
-    return m_encodings.at(encoding_idx);
 }
 
 inline EventHandle::EventHandle(LogEvent const* event) : m_event(event) {

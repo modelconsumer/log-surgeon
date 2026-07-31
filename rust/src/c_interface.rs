@@ -10,6 +10,7 @@
 //! to a function below, those functions would not be (are not) marked `unsafe`.
 //!
 
+use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::ffi::CCharArray;
@@ -17,6 +18,7 @@ use crate::log_event::LogEvent;
 use crate::log_event::Match;
 use crate::parser::Parser;
 use crate::parsing_spec::Encoding;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::ParsingSpecBuilder;
 use crate::regex::Regex;
@@ -111,19 +113,13 @@ mod parsing_spec {
 		}
 	}
 
-	/// See [`ParsingSpecBuilder::get_encoding`].
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_get_encoding(
-		parser: &Parser,
-		encoding_idx: usize,
-		i: usize,
-	) -> CCharArray<'_> {
-		let Some(possible_encodings): Option<&Vec<Arc<Encoding>>> = parser.spec.encodings.get(encoding_idx) else {
+	extern "C" fn log_surgeon_parsing_spec_get_encoding(parser: &Parser, idx: u16) -> CCharArray<'_> {
+		let Some(idx): Option<NonZero<u16>> = NonZero::new(idx) else {
 			return CCharArray::null();
 		};
-		let Some(encoding): Option<&Arc<Encoding>> = possible_encodings.get(i) else {
-			return CCharArray::null();
-		};
+		let idx: EncodingIdx = EncodingIdx::from(idx);
+		let encoding: &Encoding = &parser.spec[idx];
 		CCharArray::from_utf8(&encoding.name)
 	}
 }

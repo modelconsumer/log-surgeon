@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
@@ -7,6 +8,7 @@ use crate::nfa::CaptureTag;
 use crate::nfa::NfaIdx;
 use crate::nfa::Tnfa;
 use crate::nfa::Transitions;
+use crate::parsing_spec::Encoding;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
@@ -15,13 +17,13 @@ use crate::regex::Regex;
 impl Tnfa {
 	/// Create a capturing TNFA for an unanchored regex with accepting state for the given [`RuleIdx`].
 	/// Used for per-rule TDFAs and for search.
-	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex) -> Self {
+	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex, encodings: &[Arc<Encoding>]) -> Self {
 		let mut nfa: Self = Self::new();
 
 		let rule_start: NfaIdx = NfaIdx::BEGIN;
 		let rule_end: NfaIdx = nfa.new_state("end");
 
-		let tags: BTreeSet<CaptureTag> = nfa.build_regex_nfa::<true>(rule_idx, regex, rule_start, rule_end);
+		let tags: BTreeSet<CaptureTag> = nfa.build_regex_nfa::<true>(rule_idx, regex, encodings, rule_start, rule_end);
 		nfa[rule_end].maybe_accepts_for_rule = Some(rule_idx);
 
 		nfa.tags = tags;
@@ -29,10 +31,23 @@ impl Tnfa {
 		nfa
 	}
 
-	/// Create a capturing TNFA for an unanchored regex and [`RuleIdx::NIL`],
-	/// for search/TNFA intersections.
+	/// Create a non-capturing TNFA for an unanchored regex and [`RuleIdx::NIL`],
+	/// for search, encodings, and TNFA intersections.
+	///
+	/// The code is basically duplicated from [`Tnfa::for_single_rule`],
+	/// but we want to enforce that [`Tnfa::build_regex_nfa`] is called without captures.
 	pub fn for_regex(regex: &Regex) -> Tnfa {
-		Self::for_single_rule(RuleIdx::NIL, regex)
+		let mut nfa: Self = Self::new();
+
+		let rule_start: NfaIdx = NfaIdx::BEGIN;
+		let rule_end: NfaIdx = nfa.new_state("end");
+
+		let tags: BTreeSet<CaptureTag> = nfa.build_regex_nfa::<false>(RuleIdx::NIL, regex, &[], rule_start, rule_end);
+		nfa[rule_end].maybe_accepts_for_rule = Some(RuleIdx::NIL);
+
+		nfa.tags = tags;
+
+		nfa
 	}
 
 	/// `WITH_CAPTURES` also controls "with(out) anchors"; with captures <=> without anchors.
@@ -78,7 +93,19 @@ impl Tnfa {
 				)));
 			}
 
-			tags = &tags | &nfa.build_regex_nfa::<WITH_CAPTURES>(rule.idx, &rule.regex.regex, rule_start, rule_end);
+			if let Some(encoding) = &rule.maybe_encoding {
+				let leaf_nfa: Tnfa = Tnfa::for_regex(&rule.regex.regex);
+				let intersection: Tnfa = leaf_nfa.intersect::<false>(&encoding.nfa);
+
+				if !intersection.can_accept() {
+					continue;
+				}
+
+				nfa.splice(&intersection, rule_start, rule_end);
+			} else {
+				tags = &tags
+					| &nfa.build_regex_nfa::<WITH_CAPTURES>(rule.idx, &rule.regex.regex, &[], rule_start, rule_end);
+			}
 
 			if rule.regex.anchor_after {
 				nfa[rule_end].transitions =
@@ -123,6 +150,7 @@ impl Tnfa {
 		&mut self,
 		rule_idx: RuleIdx,
 		regex: &Regex,
+		encodings: &[Arc<Encoding>],
 		mut current: NfaIdx,
 		target: NfaIdx,
 	) -> BTreeSet<CaptureTag> {
@@ -146,9 +174,9 @@ impl Tnfa {
 			},
 			Regex::Capture(sub_rule) => {
 				if WITH_CAPTURES {
-					self.capture(rule_idx, sub_rule, current, target)
+					self.capture(rule_idx, sub_rule, encodings, current, target)
 				} else {
-					self.build_regex_nfa::<false>(rule_idx, &sub_rule.regex, current, target)
+					self.build_regex_nfa::<false>(rule_idx, &sub_rule.regex, encodings, current, target)
 				}
 			},
 			Regex::BracketedRanges { negated, items } => {
@@ -180,7 +208,7 @@ impl Tnfa {
 				self[current].transitions = Transitions::Spontaneous(vec![item_start, item_skip]);
 
 				let tags: BTreeSet<CaptureTag> =
-					self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, item_start, item_end);
+					self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, encodings, item_start, item_end);
 
 				self[item_end].transitions = Transitions::Spontaneous(vec![item_start, target]);
 
@@ -189,9 +217,13 @@ impl Tnfa {
 
 				tags
 			},
-			Regex::KleenePlus(item) => {
-				self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, &item.wrap_as_desugared_kleene_plus(), current, target)
-			},
+			Regex::KleenePlus(item) => self.build_regex_nfa::<WITH_CAPTURES>(
+				rule_idx,
+				&item.wrap_as_desugared_kleene_plus(),
+				encodings,
+				current,
+				target,
+			),
 			Regex::BoundedRepetition { min, max, item } => {
 				// Should have been verified during regex pattern parsing.
 				assert!(*max > 0);
@@ -207,7 +239,9 @@ impl Tnfa {
 				for i in 0..*min {
 					let sub_target: NfaIdx = self.new_state(format!("bounded {i} of {min}..={max} ({item})"));
 
-					tags.append(&mut self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, current, sub_target));
+					tags.append(
+						&mut self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, encodings, current, sub_target),
+					);
 
 					current = sub_target;
 				}
@@ -219,7 +253,9 @@ impl Tnfa {
 
 					self[current].transitions = Transitions::Spontaneous(vec![sub_have, sub_skip]);
 
-					tags.append(&mut self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, sub_have, sub_target));
+					tags.append(
+						&mut self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, encodings, sub_have, sub_target),
+					);
 
 					if i == 0 {
 						sub_skip = self.negative_tags(tags.iter().cloned(), sub_skip)
@@ -244,40 +280,142 @@ impl Tnfa {
 					} else {
 						target
 					};
-					tags.append(&mut self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, sub_item, current, sub_target));
+					tags.append(
+						&mut self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, sub_item, encodings, current, sub_target),
+					);
 					current = sub_target;
 				}
 				tags
 			},
-			Regex::Alternation(items) => self.alternate::<WITH_CAPTURES>(rule_idx, items, current, target),
-			Regex::Placeholder { item, .. } => self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, current, target),
+			Regex::Alternation(items) => self.alternate::<WITH_CAPTURES>(rule_idx, items, encodings, current, target),
+			Regex::Placeholder { item, .. } => {
+				self.build_regex_nfa::<WITH_CAPTURES>(rule_idx, item, encodings, current, target)
+			},
 		}
 	}
 
 	/// Build the sub-TNFA for a regex capture expression.
-	fn capture(&mut self, rule: RuleIdx, sub_rule: &SubRule, current: NfaIdx, target: NfaIdx) -> BTreeSet<CaptureTag> {
-		let start_tag: CaptureTag = CaptureTag::Start(sub_rule.clone());
-		let end_tag: CaptureTag = CaptureTag::Stop(sub_rule.clone());
+	fn capture(
+		&mut self,
+		rule: RuleIdx,
+		sub_rule: &SubRule,
+		encodings: &[Arc<Encoding>],
+		current: NfaIdx,
+		target: NfaIdx,
+	) -> BTreeSet<CaptureTag> {
+		let mut tags: BTreeSet<CaptureTag> = BTreeSet::new();
 
-		let sub_start: NfaIdx = self.new_state(format!("capture {} started", sub_rule.name.escape_default()));
-		let sub_end: NfaIdx = self.new_state(format!("capture {} ended", sub_rule.name.escape_default()));
+		let mut encoding_variants: Vec<NfaIdx> = Vec::new();
+		let mut intermediate_states: Vec<(NfaIdx, Vec<CaptureTag>)> = Vec::new();
 
-		self[current].transitions = Transitions::Tagged {
+		if sub_rule.is_leaf() {
+			let leaf_nfa: Self = Self::for_regex(&sub_rule.regex);
+
+			for enc in encodings.iter() {
+				let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
+
+				println!("intersecting {} with {}", sub_rule.name, enc.name);
+
+				if !intersection.can_accept() {
+					continue;
+				}
+				println!("- can accept");
+
+				let sub_start: NfaIdx = self.new_state(format!(
+					"capture {} (encoding {}) started",
+					sub_rule.name.escape_default(),
+					enc.name.escape_default()
+				));
+				let sub_start2: NfaIdx = self.new_state(format!(
+					"capture {} (encoding {}) started2",
+					sub_rule.name.escape_default(),
+					enc.name.escape_default()
+				));
+				let sub_end: NfaIdx = self.new_state(format!(
+					"capture {} (encoding {}) ended",
+					sub_rule.name.escape_default(),
+					enc.name.escape_default()
+				));
+				let sub_end2: NfaIdx = self.new_state(format!(
+					"capture {} (encoding {}) ended2",
+					sub_rule.name.escape_default(),
+					enc.name.escape_default()
+				));
+
+				let start_tag: CaptureTag = CaptureTag::Start(sub_rule.clone(), Some(enc.clone()));
+				let end_tag: CaptureTag = CaptureTag::Stop(sub_rule.clone(), Some(enc.clone()));
+
+				self[sub_start].transitions = Transitions::Tagged {
+					tag: start_tag.clone(),
+					positive: true,
+					target: sub_start2,
+				};
+
+				self.splice(&intersection, sub_start2, sub_end2);
+
+				self[sub_end2].transitions = Transitions::Tagged {
+					tag: end_tag.clone(),
+					positive: true,
+					target: sub_end,
+				};
+
+				encoding_variants.push(sub_start);
+				intermediate_states.push((sub_end, vec![start_tag.clone(), end_tag.clone()]));
+
+				tags.insert(start_tag);
+				tags.insert(end_tag);
+			}
+		}
+
+		let sub_start: NfaIdx =
+			self.new_state(format!("capture {} (fallback) started", sub_rule.name.escape_default()));
+		let sub_start2: NfaIdx = self.new_state(format!(
+			"capture {} (fallback) started2",
+			sub_rule.name.escape_default()
+		));
+		let sub_end: NfaIdx = self.new_state(format!("capture {} (fallback) ended", sub_rule.name.escape_default()));
+		let sub_end2: NfaIdx = self.new_state(format!("capture {} (fallback) ended2", sub_rule.name.escape_default()));
+
+		let start_tag: CaptureTag = CaptureTag::Start(sub_rule.clone(), None);
+		let end_tag: CaptureTag = CaptureTag::Stop(sub_rule.clone(), None);
+
+		self[sub_start].transitions = Transitions::Tagged {
 			tag: start_tag.clone(),
 			positive: true,
-			target: sub_start,
+			target: sub_start2,
 		};
 
-		let mut tags: BTreeSet<CaptureTag> = self.build_regex_nfa::<true>(rule, &sub_rule.regex, sub_start, sub_end);
+		let inner_tags: BTreeSet<CaptureTag> =
+			self.build_regex_nfa::<true>(rule, &sub_rule.regex, encodings, sub_start2, sub_end2);
 
-		self[sub_end].transitions = Transitions::Tagged {
+		tags = &tags | &inner_tags;
+
+		self[sub_end2].transitions = Transitions::Tagged {
 			tag: end_tag.clone(),
 			positive: true,
-			target,
+			target: sub_end,
 		};
+
+		encoding_variants.push(sub_start);
+		intermediate_states.push((sub_end, vec![start_tag.clone(), end_tag.clone()]));
 
 		tags.insert(start_tag);
 		tags.insert(end_tag);
+
+		self[current].transitions = Transitions::Spontaneous(encoding_variants);
+
+		for (i, (sub_state, _)) in intermediate_states.iter().enumerate() {
+			let mut sub_current: NfaIdx = *sub_state;
+			for (other, (_, other_tags)) in intermediate_states.iter().enumerate() {
+				if other == i {
+					continue;
+				}
+
+				sub_current = self.negative_tags(other_tags.iter().cloned(), sub_current);
+			}
+
+			self[sub_current].transitions = Transitions::Spontaneous(vec![target]);
+		}
 
 		tags
 	}
@@ -287,6 +425,7 @@ impl Tnfa {
 		&mut self,
 		rule_idx: RuleIdx,
 		items: &[Regex],
+		encodings: &[Arc<Encoding>],
 		current: NfaIdx,
 		target: NfaIdx,
 	) -> BTreeSet<CaptureTag> {
@@ -302,7 +441,7 @@ impl Tnfa {
 
 			intermediate_states.push((
 				sub_target,
-				self.build_regex_nfa::<WITH_CAPTURE>(rule_idx, sub_item, sub_start, sub_target),
+				self.build_regex_nfa::<WITH_CAPTURE>(rule_idx, sub_item, encodings, sub_start, sub_target),
 			));
 		}
 		self[current].transitions = Transitions::Spontaneous(starts);
@@ -339,5 +478,42 @@ impl Tnfa {
 			current = next;
 		}
 		current
+	}
+}
+
+impl Tnfa {
+	fn splice(&mut self, other: &Tnfa, current: NfaIdx, target: NfaIdx) {
+		let my_states: Vec<NfaIdx> = other
+			.states
+			.iter()
+			.map(|state| self.new_state(state.name.clone()))
+			.collect::<Vec<_>>();
+
+		self[current].transitions = Transitions::Spontaneous(vec![my_states[0]]);
+		for (i, other_state) in other.states.iter().enumerate() {
+			let idx: NfaIdx = my_states[i];
+			if other_state.is_accepting() {
+				assert_eq!(self[idx].transitions.len(), 0);
+				self[idx].transitions = Transitions::Spontaneous(vec![target]);
+			} else {
+				match &other_state.transitions {
+					Transitions::Interval(transitions) => {
+						let mut transitions: IntervalTree<u32, NfaIdx> = transitions.clone();
+						transitions.iter_mut().for_each(|(_, target)| {
+							*target = my_states[target.0];
+						});
+						self[idx].transitions = Transitions::Interval(transitions);
+					},
+					Transitions::Spontaneous(transitions) => {
+						self[idx].transitions = Transitions::Spontaneous(
+							transitions.iter().map(|target| my_states[target.0]).collect::<Vec<_>>(),
+						);
+					},
+					Transitions::Tagged { .. } => {
+						unreachable!("encoding pattern should not have captures");
+					},
+				}
+			}
+		}
 	}
 }

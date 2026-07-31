@@ -153,6 +153,12 @@ struct LogEvent {
     /// So, `Parser::next_event` passes a reference to the spec through the returned `LogEvent`.
     ParsingSpec const* spec;
     CCharArray message;
+    /// Matches are sorted:
+    ///
+    /// 1. left-to-right (lexicographically with respect to the input),
+    /// 2. top-down; parent rules first (lexicographically with respect to the regex pattern).
+    ///
+    /// In particular, root rule matches always come before their sub-rule matches.
     CArray<Match> all_matches;
     CArray<size_t> leaf_indices;
     CArray<size_t> variable_indices;
@@ -221,9 +227,7 @@ extern "C" {
             CCharArray delimiters
     );
 
-    /// See [`ParsingSpecBuilder::get_encoding`].
-    CCharArray
-    log_surgeon_parsing_spec_get_encoding(Parser const* parser, size_t encoding_idx, size_t i);
+    CCharArray log_surgeon_parsing_spec_get_encoding(Parser const* parser, uint16_t idx);
 
     Interpretation const*
     log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);

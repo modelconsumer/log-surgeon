@@ -10,6 +10,7 @@ mod search_decomposition;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 pub use search_decomposition::Path;
 pub use search_decomposition::PathComponent;
@@ -17,6 +18,7 @@ pub use search_decomposition::PathComponent;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::interval_tree::PolicyUnique;
+use crate::parsing_spec::Encoding;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
 
@@ -70,8 +72,8 @@ pub enum Transitions {
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CaptureTag {
-	Start(SubRule),
-	Stop(SubRule),
+	Start(SubRule, Option<Arc<Encoding>>),
+	Stop(SubRule, Option<Arc<Encoding>>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -410,7 +412,35 @@ impl Transitions {
 
 impl CaptureTag {
 	pub fn sub_rule(&self) -> &SubRule {
-		let (Self::Start(sub_rule) | Self::Stop(sub_rule)) = self;
+		let (Self::Start(sub_rule, _) | Self::Stop(sub_rule, _)): &Self = self;
 		sub_rule
+	}
+
+	pub fn maybe_encoding(&self) -> Option<&Arc<Encoding>> {
+		let (Self::Start(_, encoding) | Self::Stop(_, encoding)): &Self = self;
+		encoding.as_ref()
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use crate::dfa::Tdfa;
+	use crate::regex::Regex;
+
+	#[test]
+	fn intersect_match() {
+		let nfa1: Tnfa =
+			Tnfa::for_regex(&Regex::from_pattern_with_placeholders::<false, _>(r"\w*\d\w*", &mut ()).unwrap());
+		let nfa2: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders::<false, _>(r"\d+", &mut ()).unwrap());
+		let nfa3: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders::<false, _>(r"\w+", &mut ()).unwrap());
+
+		let intersection12: Tnfa = nfa1.intersect::<false>(&nfa2);
+		let dfa: Tdfa = Tdfa::determinization(&intersection12);
+		assert!(!dfa.execute("a1b"));
+
+		let intersection13: Tnfa = nfa1.intersect::<false>(&nfa3);
+		let dfa: Tdfa = Tdfa::determinization(&intersection13);
+		assert!(dfa.execute("a1b"));
 	}
 }

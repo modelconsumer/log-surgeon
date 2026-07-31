@@ -2,7 +2,7 @@ use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::dfa::Tdfa;
-use crate::parsing_spec::EncodingIdx;
+use crate::parsing_spec::Encoding;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 
@@ -21,6 +21,7 @@ pub struct RootRule {
 	pub priority: i32,
 
 	pub regex: AnchoredRegex,
+	pub maybe_encoding: Option<Arc<Encoding>>,
 	pub rule_info: Vec<RuleInfo>,
 
 	pub dfa: Tdfa,
@@ -69,8 +70,6 @@ pub struct RuleInfo {
 	pub maybe_sub_rule: Option<Arc<SubRule>>,
 
 	pub fully_qualified_name: Arc<str>,
-
-	pub maybe_encoding_idx: Option<EncodingIdx>,
 }
 
 impl std::ops::Index<Option<NonZero<u16>>> for RootRule {

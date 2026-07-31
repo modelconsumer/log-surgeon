@@ -20,6 +20,12 @@ pub struct LogEvent<'parser> {
 	/// So, `Parser::next_event` passes a reference to the spec through the returned `LogEvent`.
 	pub spec: &'parser ParsingSpec,
 	pub message: CUtf8<'parser>,
+	/// Matches are sorted:
+	///
+	/// 1. left-to-right (lexicographically with respect to the input),
+	/// 2. top-down; parent rules first (lexicographically with respect to the regex pattern).
+	///
+	/// In particular, root rule matches always come before their sub-rule matches.
 	pub all_matches: CArray<'parser, Match>,
 	pub leaf_indices: CArray<'parser, usize>,
 	pub variable_indices: CArray<'parser, usize>,

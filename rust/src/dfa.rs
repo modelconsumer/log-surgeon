@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 use std::collections::btree_map::Entry;
 use std::num::NonZero;
 use std::range::Range;
+use std::sync::Arc;
 
 pub use compressed::CompressedDfa;
 pub use jit::Jit;
@@ -25,6 +26,8 @@ use crate::nfa::NfaIdx;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
 use crate::nfa::Transitions;
+use crate::parsing_spec::Encoding;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
@@ -67,6 +70,7 @@ pub struct MatchedRule<'input> {
 pub struct MatchedCapture {
 	pub rule_idx: RuleIdx,
 	pub capture_id: NonZero<u16>,
+	pub maybe_encoding_idx: Option<EncodingIdx>,
 	pub parent_id: Option<NonZero<u16>>,
 	pub parent_index: usize,
 	pub is_leaf: bool,
@@ -253,6 +257,10 @@ impl Tdfa {
 	}
 
 	/// Assumes the DFA was constructed **without** anchor transitions.
+	/// Captures are stored in `execution_data`, sorted:
+	///
+	/// 1. left-to-right (lexicographically with respect to the input),
+	/// 2. top-down; parent captures first (lexicographically with respect to the regex pattern).
 	pub fn execute_with_captures(&self, input: &str, execution_data: &mut TdfaExecution, rule_idx: RuleIdx) -> bool {
 		let mut current_state: usize = 0;
 
@@ -290,6 +298,7 @@ impl Tdfa {
 
 		for (start, stop) in self.tag_pairs.iter().enumerate().rev() {
 			let sub_rule: &SubRule = self.tags[start].sub_rule();
+			let maybe_encoding: Option<&Arc<Encoding>> = self.tags[start].maybe_encoding();
 
 			let mut maybe_start: Option<NonZero<usize>> = registers[self.tags.len() + start];
 			let mut maybe_stop: Option<NonZero<usize>> = registers[self.tags.len() + stop];
@@ -302,6 +311,7 @@ impl Tdfa {
 				captures.push(MatchedCapture {
 					rule_idx,
 					capture_id: sub_rule.id,
+					maybe_encoding_idx: maybe_encoding.map(|enc| enc.idx),
 					parent_id: sub_rule.parent_id,
 					parent_index: usize::MAX,
 					is_leaf: sub_rule.is_leaf(),
@@ -395,8 +405,8 @@ impl Tdfa {
 	}
 
 	/// Construct the TDFA for a single rule, with captures.
-	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex) -> Self {
-		let nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex);
+	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex, encodings: &[Arc<Encoding>]) -> Self {
+		let nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex, encodings);
 		Self::determinization(&nfa)
 	}
 
@@ -418,7 +428,7 @@ impl Tdfa {
 
 	/// Algorithm 3 in the [paper][tdfa].
 	#[tracing::instrument(skip_all, level = "trace")]
-	fn determinization(nfa: &Tnfa) -> Self {
+	pub fn determinization(nfa: &Tnfa) -> Self {
 		let tags: Vec<CaptureTag> = nfa.tags().iter().cloned().collect::<Vec<_>>();
 		assert_eq!(tags.len() % 2, 0);
 		let mut tag_pairs: Vec<usize> = Vec::with_capacity(tags.len() / 2);
@@ -1189,6 +1199,6 @@ mod test {
 
 	fn for_pattern(pattern: &str) -> Tdfa {
 		let regex: Regex = Regex::from_pattern(pattern).unwrap();
-		Tdfa::for_single_rule(RuleIdx::NIL, &regex)
+		Tdfa::for_single_rule(RuleIdx::NIL, &regex, &[])
 	}
 }

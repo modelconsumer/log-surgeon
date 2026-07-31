@@ -49,7 +49,7 @@ struct WorkingLogEvent {
 
 impl Parser {
 	pub fn new(spec: Arc<ParsingSpec>) -> Self {
-		let lexer: Lexer = Lexer::new(Arc::clone(&spec));
+		let lexer: Lexer = Lexer::new(spec.clone());
 		let mut registers: usize = 0;
 		let mut tags: usize = 0;
 		for rule in spec.rules.iter() {
@@ -109,7 +109,7 @@ impl Parser {
 							end: token_start + lexeme.len(),
 						},
 						is_leaf: variable_is_implicit_capture,
-						encoding_idx: rule[None].maybe_encoding_idx.map(NonZero::from),
+						encoding_idx: rule.maybe_encoding.as_ref().map(|enc| NonZero::from(enc.idx)),
 						ffi_pointers: MatchFfiPointers::NULL,
 					};
 
@@ -132,9 +132,7 @@ impl Parser {
 								end: token_start + regex_capture.range.end,
 							},
 							is_leaf: regex_capture.is_leaf,
-							encoding_idx: rule[Some(regex_capture.capture_id)]
-								.maybe_encoding_idx
-								.map(NonZero::from),
+							encoding_idx: regex_capture.maybe_encoding_idx.map(NonZero::from),
 							ffi_pointers: MatchFfiPointers::NULL,
 						});
 						if regex_capture.is_leaf {

@@ -56,10 +56,16 @@ impl ParsingSpec {
 			// Empty line, pretty.
 			.chain(std::iter::once(String::new()))
 			// Rules.
-			.chain(self.rules.iter().map(|rule| {
-				let pattern: String = rule.regex.to_pattern();
-				format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
-			}))
+			.chain(
+				self.rules
+					.iter()
+					// Skip the encoding variants.
+					.filter(|rule| rule.maybe_encoding.is_none())
+					.map(|rule| {
+						let pattern: String = rule.regex.to_pattern();
+						format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
+					}),
+			)
 			.chain(std::iter::once(String::new()))
 			.chain(std::iter::once(format!("===")))
 			.chain(std::iter::once(serde_json::to_string_pretty(&self.main_dfa).unwrap()))

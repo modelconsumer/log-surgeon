@@ -44,10 +44,7 @@ pub struct ParsingSpec {
 
 	pub delimiters: String,
 
-	/// Encodings indexed by [`EncodingIdx`];
-	/// the `0`th encoding is always the empty set.
-	/// Encoding sets are stored as `Vec<_>`s for easier FFI/memory access.
-	pub encodings: Vec<Vec<Arc<Encoding>>>,
+	pub encodings: Vec<Arc<Encoding>>,
 
 	/// TDFA used for lexing/parsing.
 	pub main_dfa: Tdfa,
@@ -180,7 +177,13 @@ impl ParsingSpecBuilder {
 			return Err(other.clone());
 		}
 
-		self.encodings.push(Arc::new(Encoding { name, regex }));
+		let idx: NonZero<u16> = u16::try_from(self.encodings.len())
+			.ok()
+			.and_then(|n| NonZero::<u16>::MIN.checked_add(n))
+			.expect("too many encodings");
+		let idx: EncodingIdx = EncodingIdx::from(idx);
+		let nfa: Tnfa = Tnfa::for_regex(&regex);
+		self.encodings.push(Arc::new(Encoding { idx, name, regex, nfa }));
 
 		Ok(self)
 	}
@@ -194,38 +197,43 @@ impl ParsingSpecBuilder {
 	pub fn build(self) -> ParsingSpec {
 		let mut rules: Vec<RootRule> = Vec::new();
 
-		let mut encoding_combinations: Vec<Vec<Arc<Encoding>>> = vec![Vec::new()];
-		let mut encoding_combination_index_map: BTreeMap<Vec<Arc<Encoding>>, usize> = BTreeMap::from([(Vec::new(), 0)]);
-
 		let mut index: NonZero<u16> = NonZero::<u16>::MIN;
 		for (priority, rules_at_priority) in self.rules_by_priority.into_iter().rev() {
 			for (rule_name, rule_regex) in rules_at_priority.into_iter() {
+				if rule_regex.total_captures == NonZero::<u16>::MIN {
+					let leaf_nfa: Tnfa = Tnfa::for_regex(&rule_regex.regex);
+
+					for enc in self.encodings.iter() {
+						let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
+
+						if !intersection.can_accept() {
+							continue;
+						}
+
+						let rule_idx: RuleIdx = RuleIdx::new(index);
+
+						let dfa: Tdfa = Tdfa::determinization(&intersection);
+
+						rules.push(RootRule::new(
+							rule_idx,
+							rule_name.clone(),
+							priority,
+							rule_regex.clone(),
+							Some(enc.clone()),
+							dfa,
+						));
+
+						index = index
+							.checked_add(1)
+							.expect("more than `u16::MAX` rules (not supported)");
+					}
+				}
+
 				let rule_idx: RuleIdx = RuleIdx::new(index);
 
-				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, |regex| {
-					let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex);
+				let dfa: Tdfa = Tdfa::for_single_rule(rule_idx, &rule_regex.regex, &self.encodings);
 
-					let mut possible_encodings: Vec<Arc<Encoding>> = Vec::new();
-					for encoding in self.encodings.iter() {
-						let encoding_nfa: Tnfa = Tnfa::for_regex(&encoding.regex);
-						let intersection: Tnfa = rule_nfa.intersect::<false>(&encoding_nfa);
-						if intersection.can_accept() {
-							possible_encodings.push(Arc::clone(encoding));
-						}
-					}
-					let encoding_idx: usize = *encoding_combination_index_map
-						.entry(possible_encodings)
-						.or_insert_with_key(|possible_encodings| {
-							let n: usize = encoding_combinations.len();
-							encoding_combinations.push(possible_encodings.clone());
-							n
-						});
-
-					let encoding_idx: u16 =
-						u16::try_from(encoding_idx).expect("more than `u16::MAX` encodings (not supported)");
-
-					NonZero::new(encoding_idx).map(EncodingIdx::from)
-				}));
+				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, None, dfa));
 
 				index = index
 					.checked_add(1)
@@ -267,10 +275,10 @@ impl ParsingSpecBuilder {
 			rules,
 			placeholders: self.placeholders,
 			delimiters: self.delimiters,
+			encodings: self.encodings,
 			main_nfa,
 			main_dfa,
 			optimized_dfa,
-			encodings: encoding_combinations,
 			ascii_delimiters,
 			non_ascii_delimiters,
 		}
@@ -290,10 +298,10 @@ impl ParsingSpec {
 		rules: Vec::new(),
 		placeholders: BTreeMap::new(),
 		delimiters: String::new(),
+		encodings: Vec::new(),
 		main_dfa: Tdfa::BLANK,
 		main_nfa: Tnfa::BLANK,
 		optimized_dfa: CompressedDfa::BLANK,
-		encodings: Vec::new(),
 		ascii_delimiters: [false; 0x80],
 		non_ascii_delimiters: String::new(),
 	};
@@ -335,30 +343,29 @@ impl std::ops::Index<RuleIdx> for ParsingSpec {
 	}
 }
 
-impl std::ops::Index<Option<EncodingIdx>> for ParsingSpec {
-	type Output = [Arc<Encoding>];
+impl std::ops::Index<EncodingIdx> for ParsingSpec {
+	type Output = Arc<Encoding>;
 
-	fn index(&self, maybe_idx: Option<EncodingIdx>) -> &Self::Output {
-		&self.encodings[usize::from(maybe_idx.map_or(0, u16::from))]
+	fn index(&self, idx: EncodingIdx) -> &Self::Output {
+		&self.encodings[usize::from(u16::from(idx) - 1)]
 	}
 }
 
 impl RootRule {
-	pub fn new<F>(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, mut lookup_encoding: F) -> Self
-	where
-		F: FnMut(&Regex) -> Option<EncodingIdx>,
-	{
+	pub fn new(
+		idx: RuleIdx,
+		name: Arc<str>,
+		priority: i32,
+		regex: AnchoredRegex,
+		maybe_encoding: Option<Arc<Encoding>>,
+		dfa: Tdfa,
+	) -> Self {
 		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
 		rule_info.push(RuleInfo {
 			root_idx: idx,
 			root_name: name.clone(),
 			maybe_sub_rule: None,
 			fully_qualified_name: name.clone(),
-			maybe_encoding_idx: if regex.total_captures > NonZero::<u16>::MIN {
-				None
-			} else {
-				lookup_encoding(&regex.regex)
-			},
 		});
 
 		let mut stack: Vec<&Regex> = vec![&regex.regex];
@@ -373,11 +380,6 @@ impl RootRule {
 						root_name: name.clone(),
 						maybe_sub_rule: Some(sub_rule.clone()),
 						fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
-						maybe_encoding_idx: if sub_rule.is_leaf() {
-							lookup_encoding(&sub_rule.regex)
-						} else {
-							None
-						},
 					});
 					stack.push(&sub_rule.regex);
 				},
@@ -396,13 +398,12 @@ impl RootRule {
 			}
 		}
 
-		let dfa: Tdfa = Tdfa::for_single_rule(idx, &regex.regex);
-
 		Self {
 			idx,
 			name,
 			priority,
 			regex,
+			maybe_encoding,
 			rule_info,
 			dfa,
 		}
@@ -445,6 +446,8 @@ impl RootRule {
 #[cfg(test)]
 mod test {
 	use super::*;
+	use crate::log_event::LogEvent;
+	use crate::parser::Parser;
 
 	#[test]
 	fn number_encoding() {
@@ -452,17 +455,30 @@ mod test {
 		builder
 			.add_rule("has_number", r"\w*\d\w*")
 			.unwrap()
-			.add_rule("ip_address", r"\d(\.\d){3}")
+			.add_rule("ip_address", r"(?<first>\d+)(\.\d+){3}")
 			.unwrap()
 			.add_encoding("int", Regex::from_pattern(r"\d+").unwrap())
 			.unwrap();
 
 		let spec: ParsingSpec = builder.build();
+		assert_eq!(spec.rules.len(), 3);
 
-		assert_eq!(
-			spec.rules[0][None].maybe_encoding_idx,
-			Some(EncodingIdx::from(NonZero::<u16>::MIN))
-		);
-		assert_eq!(spec.rules[1][None].maybe_encoding_idx, None);
+		let mut parser: Parser = Parser::new(Arc::new(spec));
+
+		let event: LogEvent<'_> = parser.next_event("a1b", &mut 0).unwrap();
+		assert_eq!(event.all_matches.len(), 1);
+		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(2).unwrap()));
+		assert_eq!(event.all_matches[0].encoding_idx, None);
+
+		let event: LogEvent<'_> = parser.next_event("123", &mut 0).unwrap();
+		assert_eq!(event.all_matches.len(), 1);
+		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(1).unwrap()));
+		assert_eq!(event.all_matches[0].encoding_idx.unwrap(), NonZero::new(1).unwrap());
+
+		let event: LogEvent<'_> = parser.next_event("12.34.56.78", &mut 0).unwrap();
+		assert_eq!(event.all_matches.len(), 2);
+		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(3).unwrap()));
+		assert_eq!(event.all_matches[0].encoding_idx, None);
+		assert_eq!(event.all_matches[1].encoding_idx.unwrap(), NonZero::new(1).unwrap());
 	}
 }
