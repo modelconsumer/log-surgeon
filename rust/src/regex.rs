@@ -8,7 +8,6 @@ pub use pattern_parsing::RegexPlaceholderLookup;
 
 use crate::parsing_spec::SubRule;
 use crate::utils::Escaped;
-use crate::utils::LocalTryInto;
 
 /// Meta-characters that must be escaped, aside from inside bracketed ranges.
 const SPECIAL_CHARACTERS: &str = r"\()[]{}*+?.|^$";
@@ -26,7 +25,8 @@ pub struct AnchoredRegex {
 	pub total_captures: NonZero<u16>,
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "&str", into = "String")]
 pub enum Regex {
 	/// Any character, including newline.
 	AnyChar,
@@ -140,11 +140,17 @@ impl std::fmt::Display for Regex {
 	}
 }
 
-impl LocalTryInto<AnchoredRegex> for &str {
+impl TryFrom<&str> for AnchoredRegex {
 	type Error = RegexError;
 
-	fn try_into(self) -> Result<AnchoredRegex, Self::Error> {
-		AnchoredRegex::from_pattern_with_placeholders(self, &mut ())
+	fn try_from(pattern: &str) -> Result<Self, Self::Error> {
+		AnchoredRegex::from_pattern_with_placeholders(pattern, &mut ())
+	}
+}
+
+impl From<AnchoredRegex> for String {
+	fn from(regex: AnchoredRegex) -> Self {
+		regex.to_pattern()
 	}
 }
 
@@ -155,6 +161,20 @@ impl AnchoredRegex {
 		let anchor_after: &str = if self.anchor_after { "$" } else { "" };
 
 		format!("{anchor_before}{pattern}{anchor_after}")
+	}
+}
+
+impl TryFrom<&str> for Regex {
+	type Error = RegexError;
+
+	fn try_from(pattern: &str) -> Result<Self, Self::Error> {
+		Regex::from_pattern_with_placeholders::<true, _>(pattern, &mut ())
+	}
+}
+
+impl From<Regex> for String {
+	fn from(regex: Regex) -> Self {
+		regex.to_pattern()
 	}
 }
 
@@ -371,3 +391,11 @@ impl Regex {
 		}
 	}
 }
+
+impl std::fmt::Display for RegexError {
+	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		std::fmt::Debug::fmt(self, fmt)
+	}
+}
+
+impl std::error::Error for RegexError {}

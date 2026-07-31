@@ -44,7 +44,7 @@ nom = "8"
 tracing = "0.1"
 # Note: `tracing-log` feature is default, but be explicit.
 tracing-subscriber = { version = "0.3", features = ["tracing-log", "env-filter"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 
 # TODO fix conditional compilation of dfa::jit module...

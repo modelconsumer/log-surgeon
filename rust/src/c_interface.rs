@@ -16,6 +16,7 @@ use crate::ffi::CCharArray;
 use crate::log_event::LogEvent;
 use crate::log_event::Match;
 use crate::parser::Parser;
+use crate::parsing_spec::Encoding;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::ParsingSpecBuilder;
 use crate::regex::Regex;
@@ -117,13 +118,13 @@ mod parsing_spec {
 		encoding_idx: usize,
 		i: usize,
 	) -> CCharArray<'_> {
-		let Some(possible_encodings): Option<&Vec<String>> = parser.spec.encodings.get(encoding_idx) else {
+		let Some(possible_encodings): Option<&Vec<Arc<Encoding>>> = parser.spec.encodings.get(encoding_idx) else {
 			return CCharArray::null();
 		};
-		let Some(encoding_name): Option<&String> = possible_encodings.get(i) else {
+		let Some(encoding): Option<&Arc<Encoding>> = possible_encodings.get(i) else {
 			return CCharArray::null();
 		};
-		CCharArray::from_utf8(encoding_name)
+		CCharArray::from_utf8(&encoding.name)
 	}
 }
 

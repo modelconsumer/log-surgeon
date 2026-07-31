@@ -1,3 +1,4 @@
+use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::dfa::TdfaExecution;
@@ -108,7 +109,7 @@ impl Parser {
 							end: token_start + lexeme.len(),
 						},
 						is_leaf: variable_is_implicit_capture,
-						encoding_idx: rule[None].maybe_encoding_idx,
+						encoding_idx: rule[None].maybe_encoding_idx.map(NonZero::from),
 						ffi_pointers: MatchFfiPointers::NULL,
 					};
 
@@ -131,7 +132,9 @@ impl Parser {
 								end: token_start + regex_capture.range.end,
 							},
 							is_leaf: regex_capture.is_leaf,
-							encoding_idx: rule[Some(regex_capture.capture_id)].maybe_encoding_idx,
+							encoding_idx: rule[Some(regex_capture.capture_id)]
+								.maybe_encoding_idx
+								.map(NonZero::from),
 							ffi_pointers: MatchFfiPointers::NULL,
 						});
 						if regex_capture.is_leaf {

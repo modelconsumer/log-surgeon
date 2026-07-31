@@ -1,3 +1,4 @@
+mod encoding;
 mod rule;
 mod spec_file;
 
@@ -5,7 +6,8 @@ use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::Arc;
 
-pub use rule::EncodingIdx;
+pub use encoding::Encoding;
+pub use encoding::EncodingIdx;
 pub use rule::RootRule;
 pub use rule::RuleIdx;
 pub use rule::RuleInfo;
@@ -17,13 +19,12 @@ use crate::nfa::Tnfa;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 use crate::regex::RegexPlaceholderLookup;
-use crate::utils::LocalTryInto;
 
 #[derive(Debug, Clone)]
 pub struct ParsingSpecBuilder {
 	rules_by_priority: BTreeMap<i32, Vec<(Arc<str>, AnchoredRegex)>>,
 	placeholders: BTreeMap<String, Regex>,
-	encodings: Vec<(String, Regex)>,
+	encodings: Vec<Arc<Encoding>>,
 
 	maybe_cached_dfa: Option<Tdfa>,
 
@@ -46,7 +47,7 @@ pub struct ParsingSpec {
 	/// Encodings indexed by [`EncodingIdx`];
 	/// the `0`th encoding is always the empty set.
 	/// Encoding sets are stored as `Vec<_>`s for easier FFI/memory access.
-	pub encodings: Vec<Vec<String>>,
+	pub encodings: Vec<Vec<Arc<Encoding>>>,
 
 	/// TDFA used for lexing/parsing.
 	pub main_dfa: Tdfa,
@@ -111,7 +112,7 @@ impl ParsingSpecBuilder {
 	) -> Result<&mut Self, RegexOrPattern::Error>
 	where
 		LikeString: Into<Arc<str>>,
-		RegexOrPattern: LocalTryInto<AnchoredRegex>,
+		RegexOrPattern: TryInto<AnchoredRegex>,
 	{
 		self.add_rule_with_priority(0, name, regex)
 	}
@@ -131,7 +132,7 @@ impl ParsingSpecBuilder {
 	) -> Result<&mut Self, RegexOrPattern::Error>
 	where
 		LikeString: Into<Arc<str>>,
-		RegexOrPattern: LocalTryInto<AnchoredRegex>,
+		RegexOrPattern: TryInto<AnchoredRegex>,
 	{
 		let name: Arc<str> = name.into();
 		assert!(!name.is_empty());
@@ -168,18 +169,18 @@ impl ParsingSpecBuilder {
 	}
 
 	/// Panics if `name` is empty.
-	pub fn add_encoding<LikeString>(&mut self, name: LikeString, regex: Regex) -> Result<&mut Self, Regex>
+	pub fn add_encoding<LikeString>(&mut self, name: LikeString, regex: Regex) -> Result<&mut Self, Arc<Encoding>>
 	where
 		LikeString: Into<String>,
 	{
 		let name: String = name.into();
 		assert!(!name.is_empty());
 
-		if let Some((_, other_regex)) = self.encodings.iter().find(|(other_name, _)| *other_name == name) {
-			return Err(other_regex.clone());
+		if let Some(other) = self.encodings.iter().find(|other| other.name == name) {
+			return Err(other.clone());
 		}
 
-		self.encodings.push((name, regex));
+		self.encodings.push(Arc::new(Encoding { name, regex }));
 
 		Ok(self)
 	}
@@ -193,8 +194,8 @@ impl ParsingSpecBuilder {
 	pub fn build(self) -> ParsingSpec {
 		let mut rules: Vec<RootRule> = Vec::new();
 
-		let mut encoding_combinations: Vec<Vec<String>> = vec![Vec::new()];
-		let mut encoding_combination_index_map: BTreeMap<Vec<String>, usize> = BTreeMap::from([(Vec::new(), 0)]);
+		let mut encoding_combinations: Vec<Vec<Arc<Encoding>>> = vec![Vec::new()];
+		let mut encoding_combination_index_map: BTreeMap<Vec<Arc<Encoding>>, usize> = BTreeMap::from([(Vec::new(), 0)]);
 
 		let mut index: NonZero<u16> = NonZero::<u16>::MIN;
 		for (priority, rules_at_priority) in self.rules_by_priority.into_iter().rev() {
@@ -204,12 +205,12 @@ impl ParsingSpecBuilder {
 				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, |regex| {
 					let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex);
 
-					let mut possible_encodings: Vec<String> = Vec::new();
-					for (encoding_name, encoding_regex) in self.encodings.iter() {
-						let encoding_nfa: Tnfa = Tnfa::for_regex(encoding_regex);
+					let mut possible_encodings: Vec<Arc<Encoding>> = Vec::new();
+					for encoding in self.encodings.iter() {
+						let encoding_nfa: Tnfa = Tnfa::for_regex(&encoding.regex);
 						let intersection: Tnfa = rule_nfa.intersect::<false>(&encoding_nfa);
 						if intersection.can_accept() {
-							possible_encodings.push(encoding_name.clone());
+							possible_encodings.push(Arc::clone(encoding));
 						}
 					}
 					let encoding_idx: usize = *encoding_combination_index_map
@@ -335,7 +336,7 @@ impl std::ops::Index<RuleIdx> for ParsingSpec {
 }
 
 impl std::ops::Index<Option<EncodingIdx>> for ParsingSpec {
-	type Output = [String];
+	type Output = [Arc<Encoding>];
 
 	fn index(&self, maybe_idx: Option<EncodingIdx>) -> &Self::Output {
 		&self.encodings[usize::from(maybe_idx.map_or(0, u16::from))]
@@ -458,7 +459,10 @@ mod test {
 
 		let spec: ParsingSpec = builder.build();
 
-		assert_eq!(spec.rules[0][None].maybe_encoding_idx, Some(NonZero::<u16>::MIN));
+		assert_eq!(
+			spec.rules[0][None].maybe_encoding_idx,
+			Some(EncodingIdx::from(NonZero::<u16>::MIN))
+		);
 		assert_eq!(spec.rules[1][None].maybe_encoding_idx, None);
 	}
 }

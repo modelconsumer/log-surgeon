@@ -63,11 +63,6 @@ struct CRange {
     Idx end;
 };
 
-/// Index in the parsing specification, offset by/starting at 1.
-/// `Option<EncodingIdx>` is ABI equivalent to `u16` (for FFI);
-/// `None`/`0` represents no encoding.
-using EncodingIdx = uint16_t;
-
 /// A pointer-length pair with unchecked/untied lifetime.
 template <typename T>
 struct UncheckedCArray {
@@ -108,7 +103,14 @@ struct Match {
     /// Relative to the start of the log message.
     CRange<size_t> range;
     bool is_leaf;
-    Option<EncodingIdx> encoding_idx;
+    /// This should be `Option<EncodingIdx>`,
+    /// but cbindgen doesn't translate it to `uint16_t` properly.
+    ///
+    /// See:
+    /// - https://github.com/mozilla/cbindgen/issues/690
+    /// - https://github.com/mozilla/cbindgen/issues/326
+    /// - https://github.com/mozilla/cbindgen/pull/1029
+    uint16_t encoding_idx;
     /// DANGEROUS fields exposed for FFI.
     /// But it's not dangerous if you don't look at it (in Rust).
     /// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`] as

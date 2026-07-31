@@ -5,7 +5,6 @@ use crate::ffi::CArray;
 use crate::ffi::CRange;
 use crate::ffi::CUtf8;
 use crate::ffi::UncheckedCArray;
-use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleIdx;
 
@@ -48,7 +47,14 @@ pub struct Match {
 
 	pub is_leaf: bool,
 
-	pub encoding_idx: Option<EncodingIdx>,
+	/// This should be `Option<EncodingIdx>`,
+	/// but cbindgen doesn't translate it to `uint16_t` properly.
+	///
+	/// See:
+	/// - https://github.com/mozilla/cbindgen/issues/690
+	/// - https://github.com/mozilla/cbindgen/issues/326
+	/// - https://github.com/mozilla/cbindgen/pull/1029
+	pub encoding_idx: Option<NonZero<u16>>,
 
 	/// DANGEROUS fields exposed for FFI.
 	/// But it's not dangerous if you don't look at it (in Rust).
