@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::Arc;
 
+pub use rule::EncodingIdx;
 pub use rule::RootRule;
 pub use rule::RuleIdx;
 pub use rule::RuleInfo;
@@ -42,6 +43,9 @@ pub struct ParsingSpec {
 
 	pub delimiters: String,
 
+	/// Encodings indexed by [`EncodingIdx`];
+	/// the `0`th encoding is always the empty set.
+	/// Encoding sets are stored as `Vec<_>`s for easier FFI/memory access.
 	pub encodings: Vec<Vec<String>>,
 
 	/// TDFA used for lexing/parsing.
@@ -143,6 +147,10 @@ impl ParsingSpecBuilder {
 		Ok(self)
 	}
 
+	/// Panics if `name` is empty or one of the reserved words:
+	///
+	/// - `"delimiters"`
+	///
 	pub fn add_placeholder<LikeString>(&mut self, name: LikeString, regex: Regex) -> Result<&mut Self, Regex>
 	where
 		LikeString: Into<String>,
@@ -159,6 +167,7 @@ impl ParsingSpecBuilder {
 		Ok(self)
 	}
 
+	/// Panics if `name` is empty.
 	pub fn add_encoding<LikeString>(&mut self, name: LikeString, regex: Regex) -> Result<&mut Self, Regex>
 	where
 		LikeString: Into<String>,
@@ -214,7 +223,7 @@ impl ParsingSpecBuilder {
 					let encoding_idx: u16 =
 						u16::try_from(encoding_idx).expect("more than `u16::MAX` encodings (not supported)");
 
-					NonZero::new(encoding_idx)
+					NonZero::new(encoding_idx).map(EncodingIdx::from)
 				}));
 
 				index = index
@@ -305,7 +314,7 @@ impl ParsingSpec {
 			}
 			Some(possibilities)
 		} else {
-			// Just a root name (no trailing parts).
+			// Just a root name; no trailing parts.
 			Some(
 				self.rules
 					.iter()
@@ -325,10 +334,18 @@ impl std::ops::Index<RuleIdx> for ParsingSpec {
 	}
 }
 
+impl std::ops::Index<Option<EncodingIdx>> for ParsingSpec {
+	type Output = [String];
+
+	fn index(&self, maybe_idx: Option<EncodingIdx>) -> &Self::Output {
+		&self.encodings[usize::from(maybe_idx.map_or(0, u16::from))]
+	}
+}
+
 impl RootRule {
 	pub fn new<F>(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, mut lookup_encoding: F) -> Self
 	where
-		F: FnMut(&Regex) -> Option<NonZero<u16>>,
+		F: FnMut(&Regex) -> Option<EncodingIdx>,
 	{
 		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
 		rule_info.push(RuleInfo {

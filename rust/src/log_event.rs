@@ -5,6 +5,7 @@ use crate::ffi::CArray;
 use crate::ffi::CRange;
 use crate::ffi::CUtf8;
 use crate::ffi::UncheckedCArray;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleIdx;
 
@@ -47,7 +48,7 @@ pub struct Match {
 
 	pub is_leaf: bool,
 
-	pub encoding_idx: Option<NonZero<u16>>,
+	pub encoding_idx: Option<EncodingIdx>,
 
 	/// DANGEROUS fields exposed for FFI.
 	/// But it's not dangerous if you don't look at it (in Rust).

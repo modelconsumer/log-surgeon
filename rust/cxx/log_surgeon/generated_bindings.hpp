@@ -51,9 +51,9 @@ struct InternalSubQuery;
 template <typename T = void>
 struct Vec;
 
-/// Index in the parsing spec, offset by/starting at 1.
-/// In FFI, `Option<RuleIdx>` is ABI equivalent to `u16`,
-/// where we use `0` to represent static text fragments.
+/// Index in the parsing specification, offset by/starting at 1.
+/// `Option<RuleIdx>` is ABI equivalent to `u16` (for FFI);
+/// `None`/`0` represents static text fragments.
 using RuleIdx = uint16_t;
 
 /// Can't use `std::range::Range` because it's not `#[repr(C)]`.
@@ -62,6 +62,11 @@ struct CRange {
     Idx start;
     Idx end;
 };
+
+/// Index in the parsing specification, offset by/starting at 1.
+/// `Option<EncodingIdx>` is ABI equivalent to `u16` (for FFI);
+/// `None`/`0` represents no encoding.
+using EncodingIdx = uint16_t;
 
 /// A pointer-length pair with unchecked/untied lifetime.
 template <typename T>
@@ -103,7 +108,7 @@ struct Match {
     /// Relative to the start of the log message.
     CRange<size_t> range;
     bool is_leaf;
-    uint16_t encoding_idx;
+    Option<EncodingIdx> encoding_idx;
     /// DANGEROUS fields exposed for FFI.
     /// But it's not dangerous if you don't look at it (in Rust).
     /// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`] as

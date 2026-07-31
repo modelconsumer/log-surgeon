@@ -5,12 +5,19 @@ use crate::dfa::Tdfa;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 
-/// Index in the parsing spec, offset by/starting at 1.
-/// In FFI, `Option<RuleIdx>` is ABI equivalent to `u16`,
-/// where we use `0` to represent static text fragments.
+/// Index in the parsing specification, offset by/starting at 1.
+/// `Option<RuleIdx>` is ABI equivalent to `u16` (for FFI);
+/// `None`/`0` represents static text fragments.
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct RuleIdx(NonZero<u16>);
+
+/// Index in the parsing specification, offset by/starting at 1.
+/// `Option<EncodingIdx>` is ABI equivalent to `u16` (for FFI);
+/// `None`/`0` represents no encoding.
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[repr(transparent)]
+pub struct EncodingIdx(NonZero<u16>);
 
 #[derive(Debug, Clone)]
 pub struct RootRule {
@@ -69,7 +76,7 @@ pub struct RuleInfo {
 
 	pub fully_qualified_name: Arc<str>,
 
-	pub maybe_encoding_idx: Option<NonZero<u16>>,
+	pub maybe_encoding_idx: Option<EncodingIdx>,
 }
 
 impl std::ops::Index<Option<NonZero<u16>>> for RootRule {
@@ -105,6 +112,24 @@ impl From<RuleIdx> for u16 {
 impl From<NonZero<u16>> for RuleIdx {
 	fn from(rule_idx: NonZero<u16>) -> Self {
 		Self(rule_idx)
+	}
+}
+
+impl From<EncodingIdx> for NonZero<u16> {
+	fn from(encoding_idx: EncodingIdx) -> Self {
+		encoding_idx.0
+	}
+}
+
+impl From<EncodingIdx> for u16 {
+	fn from(encoding_idx: EncodingIdx) -> Self {
+		encoding_idx.0.get()
+	}
+}
+
+impl From<NonZero<u16>> for EncodingIdx {
+	fn from(encoding_idx: NonZero<u16>) -> Self {
+		Self(encoding_idx)
 	}
 }
 
