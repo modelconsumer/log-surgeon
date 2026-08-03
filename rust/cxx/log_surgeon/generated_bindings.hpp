@@ -80,7 +80,6 @@ struct UncheckedCArray {
 struct MatchFfiPointers {
     Match const* parent;
     UncheckedCArray<char> lexeme;
-    UncheckedCArray<char> root_rule_name;
     /// Name of _this_ (root or sub-) rule.
     UncheckedCArray<char> rule_name;
     /// Fully-qualified name, including the root rule and all nested regex capture expressions.
@@ -94,9 +93,6 @@ struct Match {
     /// `None`/`0` for a root rule,
     /// See [`SubRule`](crate::parsing_spec::SubRule).
     uint16_t sub_rule_id;
-    /// Parent SubRule ID, if any;
-    /// `None` for both a root rule and a top-level capture in a regex pattern.
-    uint16_t parent_id;
     /// Index of the parent in the full list of matches (including variables/root rules).
     /// For a variable, the parent index equals its own index.
     size_t parent_index;
@@ -122,16 +118,14 @@ struct Match {
     MatchFfiPointers ffi_pointers;
 
     // Custom
+    [[nodiscard]] auto is_root() const noexcept -> bool { return this->sub_rule_id == 0; }
+
     [[nodiscard]] auto get_parent() const noexcept -> Match const* {
         return this->ffi_pointers.parent;
     }
 
     [[nodiscard]] auto get_lexeme() const noexcept -> std::string_view {
         return this->ffi_pointers.lexeme.as_cpp_view();
-    }
-
-    [[nodiscard]] auto get_root_rule_name() const noexcept -> std::string_view {
-        return this->ffi_pointers.root_rule_name.as_cpp_view();
     }
 
     [[nodiscard]] auto get_rule_name() const noexcept -> std::string_view {

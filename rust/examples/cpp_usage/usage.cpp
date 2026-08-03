@@ -27,17 +27,25 @@ int main() {
     assert(pos == input.length);
 
     EventHandle event{*maybe_event};
-    // assert(event.log_type() == "d%1.1:hello.foo%f foobarbaz");
-
-    std::optional<Match> maybe_match{event.get_leaf_match(0)};
-    assert(maybe_match.has_value());
-
-    Match const& mat{*maybe_match};
-    assert(mat.ffi_pointers.root_rule_name.as_cpp_view() == "hello");
-
-    assert(!event.get_leaf_match(1).has_value());
 
     assert(event.get_all_matches().size() == 2);
+
+    {
+        Match const& mat{event.get_all_matches()[0]};
+        assert(mat.get_rule_name() == "hello");
+    }
+
+    {
+        std::optional<Match> maybe_match{event.get_leaf_match(0)};
+        assert(maybe_match.has_value());
+
+        Match const& mat{*maybe_match};
+        assert(mat.get_rule_name() == "foo");
+    }
+
+    {
+        assert(!event.get_leaf_match(1).has_value());
+    }
 
     try_interpretations();
 

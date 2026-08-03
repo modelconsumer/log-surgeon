@@ -40,9 +40,6 @@ pub struct Match {
 	/// `None`/`0` for a root rule,
 	/// See [`SubRule`](crate::parsing_spec::SubRule).
 	pub sub_rule_id: Option<NonZero<u16>>,
-	/// Parent SubRule ID, if any;
-	/// `None` for both a root rule and a top-level capture in a regex pattern.
-	pub parent_id: Option<NonZero<u16>>,
 
 	/// Index of the parent in the full list of matches (including variables/root rules).
 	/// For a variable, the parent index equals its own index.
@@ -77,7 +74,6 @@ pub struct Match {
 pub struct MatchFfiPointers {
 	pub parent: *const Match,
 	pub lexeme: UncheckedCArray<c_char>,
-	pub root_rule_name: UncheckedCArray<c_char>,
 	/// Name of _this_ (root or sub-) rule.
 	pub rule_name: UncheckedCArray<c_char>,
 	/// Fully-qualified name, including the root rule and all nested regex capture expressions.
@@ -113,10 +109,9 @@ impl<'parser> LogEvent<'parser> {
 impl std::fmt::Display for Match {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		fmt.write_fmt(format_args!(
-			"Match(rule: {}, id: {}, parent: {}, range: {}..{})",
+			"Match(rule: {}, id: {}, range: {}..{})",
 			self.rule_idx,
 			self.sub_rule_id.map_or(0, NonZero::get),
-			self.parent_id.map_or(0, NonZero::get),
 			self.range.start,
 			self.range.end,
 		))
@@ -124,15 +119,18 @@ impl std::fmt::Display for Match {
 }
 
 impl Match {
+	pub fn is_root(&self) -> bool {
+		self.sub_rule_id.is_none()
+	}
+
 	/// Debugging function to stringify a `Match`;
 	/// unsafe because the `Match` object may outlive the parser whose input
 	/// this object implicitly refers to.
 	pub unsafe fn show(&self) -> String {
 		format!(
-			"Match(rule: {}, id: {}, parent: {}, {:?})",
+			"Match(rule: {}, id: {}, {:?})",
 			self.rule_idx,
 			self.sub_rule_id.map_or(0, NonZero::get),
-			self.parent_id.map_or(0, NonZero::get),
 			unsafe { self.ffi_pointers.lexeme.as_str() },
 		)
 	}
@@ -142,7 +140,6 @@ impl MatchFfiPointers {
 	pub const NULL: Self = Self {
 		parent: std::ptr::null(),
 		lexeme: UncheckedCArray::NULL,
-		root_rule_name: UncheckedCArray::NULL,
 		rule_name: UncheckedCArray::NULL,
 		fully_qualified_name: UncheckedCArray::NULL,
 	};

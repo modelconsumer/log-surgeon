@@ -21,6 +21,11 @@ pub struct RootRule {
 	pub priority: i32,
 
 	pub regex: AnchoredRegex,
+	/// If and only if a root rule has no sub-rules,
+	/// it is split into multiple root rules corresponding to the different encodings.
+	/// If a root rule does have sub-rules, it is not a leaf rule,
+	/// so the root matches are not encoded/the encoding is not relevant
+	/// (`maybe_encoding` is `None` in this case).
 	pub maybe_encoding: Option<Arc<Encoding>>,
 	pub rule_info: Vec<RuleInfo>,
 

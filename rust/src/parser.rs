@@ -102,7 +102,6 @@ impl Parser {
 					let variable_capture: Match = Match {
 						rule_idx: rule.idx,
 						sub_rule_id: None,
-						parent_id: None,
 						parent_index: token_starting_capture_count,
 						range: CRange {
 							start: token_start,
@@ -125,7 +124,6 @@ impl Parser {
 						self.current_log.all_matches.push(Match {
 							rule_idx: rule.idx,
 							sub_rule_id: Some(regex_capture.capture_id),
-							parent_id: regex_capture.parent_id,
 							parent_index: token_starting_capture_count + regex_capture.parent_index,
 							range: CRange {
 								start: token_start + regex_capture.range.start,
@@ -195,7 +193,6 @@ impl Parser {
 			mat.ffi_pointers.lexeme = UncheckedCArray::new(&self.current_log.message[mat.range.start..mat.range.end]);
 
 			let rule_info: &RuleInfo = &self.spec[mat.rule_idx][mat.sub_rule_id];
-			mat.ffi_pointers.root_rule_name = UncheckedCArray::new(&rule_info.root_name);
 			mat.ffi_pointers.rule_name = UncheckedCArray::new(if let Some(sub_rule) = &rule_info.maybe_sub_rule {
 				&sub_rule.name
 			} else {

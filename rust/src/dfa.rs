@@ -105,7 +105,7 @@ struct DfaState {
 	/// than the full range of unicode code points,
 	/// but technically the code should work for any value here;
 	/// comments in the relevant parts of the implementation explain why.
-	#[serde(skip, default = "default_ascii_cache")]
+	#[serde(skip, default = "DfaState::default_ascii_cache")]
 	ascii_cache: [Transition; 0x80],
 }
 
@@ -413,16 +413,7 @@ impl Tdfa {
 	/// Initialize the cache for ASCII transitions, must be called after deserializing.
 	pub fn initialize_ascii_cache(&mut self) {
 		for state in self.states.iter_mut() {
-			for (i, cached_transition) in state.ascii_cache.iter_mut().enumerate() {
-				// It doesn't matter whether this is a (lossless) upcast (`usize::BITS <= u32::BITS`)
-				// or (lossy) downcast (`usize::BITS > u32::BITS`);
-				// a lossless cast is necessarily harmless,
-				// and a lossy downcast simply means the cache contains more slots than necessary,
-				// which won't be touched during simulation/lexing.
-				if let Some(transition) = state.transitions.lookup(i as u32) {
-					*cached_transition = transition.clone();
-				}
-			}
+			state.initialize_ascii_cache();
 		}
 	}
 
@@ -555,7 +546,7 @@ impl Tdfa {
 			final_operations,
 			tag_for_register,
 			registers_clobbered: BTreeSet::new(),
-			ascii_cache: default_ascii_cache(),
+			ascii_cache: DfaState::default_ascii_cache(),
 		});
 		self.kernels.insert(kernel, idx);
 		idx
@@ -898,8 +889,10 @@ impl Tdfa {
 }
 
 impl Tdfa {
+	/// Compute the canonical (minimal) DFA;
+	/// should not be used with a TDFA (DFA with tagged transitions).
 	#[tracing::instrument(skip_all, level = "debug")]
-	pub fn minimize(&self) -> Tdfa {
+	pub fn canonicalize(&self) -> Tdfa {
 		let partitions: Vec<BTreeSet<usize>> = self.partition_states();
 
 		let mut map: Vec<usize> = vec![usize::MAX; self.states.len()];
@@ -946,19 +939,8 @@ impl Tdfa {
 				final_operations: Vec::new(),
 				tag_for_register: BTreeMap::new(),
 				registers_clobbered: BTreeSet::new(),
-				ascii_cache: first.ascii_cache.clone(),
+				ascii_cache: DfaState::default_ascii_cache(),
 			});
-		}
-
-		for state in new_states.iter_mut() {
-			// for (_, transition) in state.transitions.iter_mut() {
-			// 	transition.target = map[transition.target];
-			// }
-			for transition in state.ascii_cache.iter_mut() {
-				if transition.is_valid() {
-					transition.target = map[transition.target];
-				}
-			}
 		}
 
 		let kernels: BTreeMap<Kernel, usize> = BTreeMap::from_iter(
@@ -968,13 +950,15 @@ impl Tdfa {
 				.map(|(i, state)| (state.kernel.clone(), i)),
 		);
 
-		Self {
+		let mut canonical: Self = Self {
 			states: new_states,
 			kernels,
 			tags: Vec::new(),
 			tag_pairs: Vec::new(),
 			number_of_registers: 0,
-		}
+		};
+		canonical.initialize_ascii_cache();
+		canonical
 	}
 
 	/// Hopcroft's DFA minimization algorithm.
@@ -1044,6 +1028,25 @@ impl Tdfa {
 		p.swap(0, z);
 
 		p
+	}
+}
+
+impl DfaState {
+	fn initialize_ascii_cache(&mut self) {
+		for (i, cached_transition) in self.ascii_cache.iter_mut().enumerate() {
+			// It doesn't matter whether this is a (lossless) upcast (`usize::BITS <= u32::BITS`)
+			// or (lossy) downcast (`usize::BITS > u32::BITS`);
+			// a lossless cast is necessarily harmless,
+			// and a lossy downcast simply means the cache contains more slots than necessary,
+			// which won't be touched during simulation/lexing.
+			if let Some(transition) = self.transitions.lookup(i as u32) {
+				*cached_transition = transition.clone();
+			}
+		}
+	}
+
+	fn default_ascii_cache() -> [Transition; 0x80] {
+		std::array::from_fn(|_| Transition::invalid())
 	}
 }
 
@@ -1173,10 +1176,6 @@ impl std::ops::Index<NonZero<usize>> for PrefixTree {
 	fn index(&self, i: NonZero<usize>) -> &Self::Output {
 		&self.nodes[i.get()]
 	}
-}
-
-fn default_ascii_cache() -> [Transition; 0x80] {
-	std::array::from_fn(|_| Transition::invalid())
 }
 
 #[cfg(test)]

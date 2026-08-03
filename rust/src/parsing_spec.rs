@@ -26,6 +26,7 @@ pub struct ParsingSpecBuilder {
 	placeholders: BTreeMap<String, Regex>,
 	encodings: Vec<Arc<Encoding>>,
 
+	/// Cached (canonicalized) DFA for [`ParsingSpec::main_dfa`].
 	maybe_cached_dfa: Option<Tdfa>,
 
 	delimiters: String,
@@ -46,7 +47,8 @@ pub struct ParsingSpec {
 
 	pub encodings: Vec<Arc<Encoding>>,
 
-	/// TDFA used for lexing/parsing.
+	/// DFA used for lexing/parsing;
+	/// determine which root rule matched, without tags for matching sub-rules.
 	pub main_dfa: Tdfa,
 	/// TNFA used for search.
 	pub main_nfa: Tnfa,
@@ -247,7 +249,7 @@ impl ParsingSpecBuilder {
 			now!(t0);
 			let main_dfa: Tdfa = Tdfa::for_rules(rules.iter(), self.delimiters.clone());
 			now!(t1);
-			let minimized: Tdfa = main_dfa.minimize();
+			let minimized: Tdfa = main_dfa.canonicalize();
 			now!(t2);
 			debug!(
 				"[minimizing dfa] took ({:?}, {:?})",
@@ -352,6 +354,8 @@ impl std::ops::Index<EncodingIdx> for ParsingSpec {
 }
 
 impl RootRule {
+	/// Construct a new root rule;
+	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
 	pub fn new(
 		idx: RuleIdx,
 		name: Arc<str>,

@@ -107,16 +107,16 @@ renaming_overrides_prefixing = false
 
 "Match" = """
 	// Custom
+	[[nodiscard]] auto is_root() const noexcept -> bool {
+		return this->sub_rule_id == 0;
+	}
+
 	[[nodiscard]] auto get_parent() const noexcept -> Match const* {
 		return this->ffi_pointers.parent;
 	}
 
 	[[nodiscard]] auto get_lexeme() const noexcept -> std::string_view {
 		return this->ffi_pointers.lexeme.as_cpp_view();
-	}
-
-	[[nodiscard]] auto get_root_rule_name() const noexcept -> std::string_view {
-		return this->ffi_pointers.root_rule_name.as_cpp_view();
 	}
 
 	[[nodiscard]] auto get_rule_name() const noexcept -> std::string_view {
