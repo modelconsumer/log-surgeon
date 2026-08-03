@@ -138,8 +138,10 @@ struct LogEvent {
     /// Strictly speaking, this field is redundant;
     /// however, the spec is needed to get info about the rules,
     /// and is included here for convenience.
-    /// Note that since [`Parser::next_event`](crate::parser::Parser::next_event)
-    /// returns a `LogEvent` that `mut` (exclusively) borrows from the parser,
+    ///
+    /// In particular, since [`Parser::next_event`](crate::parser::Parser::next_event)
+    /// returns a `LogEvent` that `mut` (exclusively) borrows from the parser
+    /// (see [`Parser`](crate::parser::Parser) for more details),
     /// the caller can't access the parser's spec and the event at the same time.
     /// So, `Parser::next_event` passes a reference to the spec through the returned `LogEvent`.
     ParsingSpec const* spec;
@@ -151,8 +153,8 @@ struct LogEvent {
     ///
     /// In particular, root rule matches always come before their sub-rule matches.
     CArray<Match> all_matches;
+    CArray<size_t> root_indices;
     CArray<size_t> leaf_indices;
-    CArray<size_t> variable_indices;
 };
 
 extern "C" {

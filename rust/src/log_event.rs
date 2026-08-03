@@ -14,8 +14,10 @@ pub struct LogEvent<'parser> {
 	/// Strictly speaking, this field is redundant;
 	/// however, the spec is needed to get info about the rules,
 	/// and is included here for convenience.
-	/// Note that since [`Parser::next_event`](crate::parser::Parser::next_event)
-	/// returns a `LogEvent` that `mut` (exclusively) borrows from the parser,
+	///
+	/// In particular, since [`Parser::next_event`](crate::parser::Parser::next_event)
+	/// returns a `LogEvent` that `mut` (exclusively) borrows from the parser
+	/// (see [`Parser`](crate::parser::Parser) for more details),
 	/// the caller can't access the parser's spec and the event at the same time.
 	/// So, `Parser::next_event` passes a reference to the spec through the returned `LogEvent`.
 	pub spec: &'parser ParsingSpec,
@@ -27,8 +29,8 @@ pub struct LogEvent<'parser> {
 	///
 	/// In particular, root rule matches always come before their sub-rule matches.
 	pub all_matches: CArray<'parser, Match>,
+	pub root_indices: CArray<'parser, usize>,
 	pub leaf_indices: CArray<'parser, usize>,
-	pub variable_indices: CArray<'parser, usize>,
 }
 
 /// `Match`es are exposed to FFI, so they need to be `#[repr(C)]`.
@@ -91,9 +93,10 @@ impl<'parser> LogEvent<'parser> {
 		message: CUtf8::NULL,
 		all_matches: CArray::null(),
 		leaf_indices: CArray::null(),
-		variable_indices: CArray::null(),
+		root_indices: CArray::null(),
 	};
 
+	/// Check the ordering for [`LogEvent::all_matches`].
 	pub fn check_invariants(&self) {
 		assert!(self.all_matches.is_sorted_by(|lhs, rhs| {
 			lhs.range

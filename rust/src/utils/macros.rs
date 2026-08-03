@@ -44,4 +44,18 @@ mod test {
 			spec
 		}};
 	}
+
+	#[macro_export]
+	macro_rules! parser {
+		($definition:expr) => {{
+			use ::std::sync::Arc;
+			use $crate::parsing_spec::ParsingSpec;
+
+			let definition: &::std::primitive::str = $definition;
+
+			let spec: ParsingSpec = $crate::spec! { definition };
+
+			Parser::new(Arc::new(spec))
+		}};
+	}
 }

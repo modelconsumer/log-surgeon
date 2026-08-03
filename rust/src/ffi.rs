@@ -115,6 +115,10 @@ impl<'lifetime, T> CArray<'lifetime, T> {
 	pub fn as_slice(&self) -> &'lifetime [T] {
 		unsafe { std::slice::from_raw_parts(self.pointer, self.length) }
 	}
+
+	pub fn len(&self) -> usize {
+		self.length
+	}
 }
 
 impl<T> std::ops::Deref for CArray<'_, T> {
@@ -188,5 +192,11 @@ impl std::ops::Deref for CUtf8<'_> {
 
 	fn deref(&self) -> &Self::Target {
 		self.as_str()
+	}
+}
+
+impl<Idx> CRange<Idx> {
+	pub const fn new(start: Idx, end: Idx) -> Self {
+		Self { start, end }
 	}
 }

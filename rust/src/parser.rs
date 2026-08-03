@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod test;
+
 use std::num::NonZero;
 use std::sync::Arc;
 
@@ -41,10 +44,12 @@ pub struct Parser {
 /// so that the memory can be re-used.
 #[derive(Debug, Clone)]
 struct WorkingLogEvent {
+	/// The full text/substring of the input of the log event
+	/// (or of the header matched so far).
 	message: String,
 	all_matches: Vec<Match>,
+	root_indices: Vec<usize>,
 	leaf_indices: Vec<usize>,
-	variable_indices: Vec<usize>,
 }
 
 impl Parser {
@@ -67,6 +72,8 @@ impl Parser {
 		}
 	}
 
+	/// Return the next log event;
+	/// update `*pos` to the position after the returned event.
 	pub fn next_event(&mut self, input: &str, pos: &mut usize) -> Option<LogEvent<'_>> {
 		if *pos == input.len() {
 			return None;
@@ -116,7 +123,7 @@ impl Parser {
 					if variable_is_implicit_capture {
 						self.current_log.leaf_indices.push(token_starting_capture_count);
 					}
-					self.current_log.variable_indices.push(token_starting_capture_count);
+					self.current_log.root_indices.push(token_starting_capture_count);
 
 					for regex_capture in self.dfa_execution.captures.iter() {
 						let capture_index: usize = self.current_log.all_matches.len();
@@ -144,8 +151,8 @@ impl Parser {
 								self.maybe_pending_header.get_or_insert_with(WorkingLogEvent::new);
 							assert_eq!(pending_header.message.len(), 0);
 							assert_eq!(pending_header.all_matches.len(), 0);
+							assert_eq!(pending_header.root_indices.len(), 0);
 							assert_eq!(pending_header.leaf_indices.len(), 0);
-							assert_eq!(pending_header.variable_indices.len(), 0);
 							pending_header.message.push_str(lexeme);
 							for mut capture in self.current_log.all_matches.drain(token_starting_capture_count..) {
 								capture.range.start -= token_start;
@@ -157,8 +164,8 @@ impl Parser {
 								index -= token_starting_capture_count;
 								pending_header.leaf_indices.push(index);
 							}
-							self.current_log.variable_indices.pop().unwrap();
-							pending_header.variable_indices.push(0);
+							self.current_log.root_indices.pop().unwrap();
+							pending_header.root_indices.push(0);
 							break pos_before_token;
 						} else if token_start == 0 {
 							have_header = true;
@@ -205,11 +212,13 @@ impl Parser {
 			spec: &self.spec,
 			message: CUtf8::new(&self.current_log.message),
 			all_matches: CArray::from_slice(&self.current_log.all_matches),
+			root_indices: CArray::from_slice(&self.current_log.root_indices),
 			leaf_indices: CArray::from_slice(&self.current_log.leaf_indices),
-			variable_indices: CArray::from_slice(&self.current_log.variable_indices),
 		})
 	}
 
+	/// Reset the internal state of the parser;
+	/// used when "refilling" the input buffer.
 	pub fn reset(&mut self) {
 		self.current_log.clear();
 		if let Some(pending_header) = &mut self.maybe_pending_header {
@@ -223,8 +232,8 @@ impl WorkingLogEvent {
 		Self {
 			message: String::new(),
 			all_matches: Vec::new(),
+			root_indices: Vec::new(),
 			leaf_indices: Vec::new(),
-			variable_indices: Vec::new(),
 		}
 	}
 
@@ -232,6 +241,6 @@ impl WorkingLogEvent {
 		self.message.clear();
 		self.all_matches.clear();
 		self.leaf_indices.clear();
-		self.variable_indices.clear();
+		self.root_indices.clear();
 	}
 }
