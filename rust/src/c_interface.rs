@@ -75,7 +75,7 @@ mod parsing_spec {
 
 	/// See [`ParsingSpecBuilder::add_encoding`].
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_add_encoding(
+	extern "C" fn log_surgeon_parsing_spec_builder_add_encoding(
 		builder: &mut ParsingSpecBuilder,
 		name: CCharArray<'_>,
 		pattern: CCharArray<'_>,
@@ -243,6 +243,11 @@ mod clone_impls {
 	use super::*;
 
 	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_parsing_spec_builder_clone(value: &ParsingSpecBuilder) -> Box<ParsingSpecBuilder> {
+		Box::new(value.clone())
+	}
+
+	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parser_clone(value: &Parser) -> Box<Parser> {
 		Box::new(value.clone())
 	}
@@ -257,6 +262,11 @@ mod clone_impls {
 /// but then `cbindgen` can't process them without `-Zunpretty=expanded`, which is only in nightly...
 mod destructor_impls {
 	use super::*;
+
+	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_parsing_spec_builder_drop(value: Box<ParsingSpecBuilder>) {
+		std::mem::drop(value);
+	}
 
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parser_drop(value: Box<Parser>) {

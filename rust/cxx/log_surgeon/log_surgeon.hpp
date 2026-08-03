@@ -18,9 +18,59 @@
 #include <vector>
 
 namespace log_surgeon {
+using imp::CRange;
+using imp::Interpretation;
+using imp::LogEvent;
+using imp::Match;
+using imp::Parser;
+using imp::ParsingSpec;
+using imp::RuleIdx;
+using imp::SearchResult;
+using imp::UncheckedCArray;
+
+class ParsingSpecBuilder;
 class ParserHandle;
 class EventHandle;
 struct SubQuery;
+
+class ParsingSpecBuilder {
+public:
+    ParsingSpecBuilder();
+    /**
+     * Create and initialize a parsing specification builder from a serialized parsing
+     * specification.
+     *
+     * See <https://github.com/y-scope/log-surgeon/blob/log-mechanic/rust/docs/parsing-spec-file.md>
+     * for more details.
+     * TODO: update link after PR merge.
+     *
+     * @param definition Definition as a string (file contents, not file path).
+     */
+    ParsingSpecBuilder(std::string_view definition);
+
+    ~ParsingSpecBuilder();
+    ParsingSpecBuilder(ParsingSpecBuilder const& other);
+    ParsingSpecBuilder(ParsingSpecBuilder&& other) noexcept;
+    auto operator=(ParsingSpecBuilder other) noexcept -> ParsingSpecBuilder&;
+    auto operator=(ParsingSpecBuilder&& other) noexcept -> ParsingSpecBuilder&;
+
+    friend auto swap(ParsingSpecBuilder& first, ParsingSpecBuilder& second) noexcept -> void;
+
+    /**
+     * Construct the parsing specification and parser from the parsing specification.
+     * Afterwards, this builder is in a (defined but) invalid state.
+     */
+    auto build() -> ParserHandle;
+
+    auto
+    add_rule_with_priority(std::string_view name, std::string_view pattern, int32_t priority = 0)
+            -> bool;
+
+    auto add_encoding(std::string_view name, std::string_view pattern) -> bool;
+
+private:
+    imp::ParsingSpecBuilder* m_builder{};
+};
 
 class ParserHandle {
 public:
@@ -29,54 +79,13 @@ public:
      *
      * @param spec An owned`ParsingSpec*` (takes ownership).
      */
-    ParserHandle(ParsingSpec* spec) : ParserHandle{} {
-        if (nullptr == spec) {
-            throw std::invalid_argument("spec must not be null");
-        }
-        m_parser = log_surgeon_parser_new(spec);
-        m_event = log_surgeon_log_event_new();
-    }
+    ParserHandle(ParsingSpec* spec);
 
-    ~ParserHandle() {
-        if (nullptr != m_event) {
-            log_surgeon_log_event_drop(m_event);
-        }
-        if (nullptr != m_parser) {
-            log_surgeon_parser_drop(m_parser);
-        }
-    }
-
-    ParserHandle(ParserHandle const& other) : ParserHandle{} {
-        // Copy-and swap idiom: The first "centerpiece";
-        // the "semantics" of this type's resource management must be
-        // bona fide implemented here.
-        m_parser = log_surgeon_parser_clone(other.m_parser);
-        m_event = log_surgeon_log_event_clone(other.m_event);
-    }
-
-    ParserHandle(ParserHandle&& other) noexcept : ParserHandle{} {
-        // Copy-and-swap idiom: The move constructor is handled by the same
-        // `swap` mechanism used to safely implement copy assignment.
-        swap(*this, other);
-    }
-
-    auto operator=(ParserHandle other) noexcept -> ParserHandle& {
-        // Copy-and-swap idiom: It is important that `other` is taken by value.
-        // This would handle both copy and move assignment;
-        // when called with an rvalue reference,
-        // the compiler would use the move constructor to create `other`,
-        // which we then swap with.
-        // Supposedly, that allows for better optimization opportunities too.
-        swap(*this, other);
-        return *this;
-    }
-
-    auto operator=(ParserHandle&& other) noexcept -> ParserHandle& {
-        // Copy-and-swap idiom: Duplicate of copy assignment;
-        // lints aren't smart enough to realize that this would be covered as above.
-        swap(*this, other);
-        return *this;
-    }
+    ~ParserHandle();
+    ParserHandle(ParserHandle const& other);
+    ParserHandle(ParserHandle&& other) noexcept;
+    auto operator=(ParserHandle other) noexcept -> ParserHandle&;
+    auto operator=(ParserHandle&& other) noexcept -> ParserHandle&;
 
     /**
      * Conventional `swap` function, declared using `friend` for ADL.
@@ -85,12 +94,7 @@ public:
      * @param first
      * @param second
      */
-    friend void swap(ParserHandle& first, ParserHandle& second) noexcept {
-        using std::swap;
-
-        swap(first.m_parser, second.m_parser);
-        swap(first.m_event, second.m_event);
-    }
+    friend auto swap(ParserHandle& first, ParserHandle& second) noexcept -> void;
 
     /**
      * Get the next log event, as a handle.
@@ -162,6 +166,154 @@ struct SubQuery {
     std::string value;
 };
 
+inline ParsingSpecBuilder::ParsingSpecBuilder()
+        : m_builder{imp::log_surgeon_parsing_spec_builder_new()} {}
+
+inline ParsingSpecBuilder::ParsingSpecBuilder(std::string_view definition)
+        : m_builder{imp::log_surgeon_parsing_spec_builder_from_definition(
+                  CCharArray::from_string_view(definition)
+          )} {}
+
+inline ParsingSpecBuilder::~ParsingSpecBuilder() {
+    if (nullptr != m_builder) {
+        imp::log_surgeon_parsing_spec_builder_drop(m_builder);
+    }
+}
+
+inline ParsingSpecBuilder::ParsingSpecBuilder(ParsingSpecBuilder const& other)
+        : ParsingSpecBuilder{} {
+    // Copy-and swap idiom: The first "centerpiece";
+    // the "semantics" of this type's resource management must be
+    // bona fide implemented here.
+    m_builder = imp::log_surgeon_parsing_spec_builder_clone(other.m_builder);
+}
+
+inline ParsingSpecBuilder::ParsingSpecBuilder(ParsingSpecBuilder&& other) noexcept
+        : ParsingSpecBuilder{} {
+    // Copy-and-swap idiom: The move constructor is handled by the same
+    // `swap` mechanism used to safely implement copy assignment.
+    swap(*this, other);
+}
+
+inline auto ParsingSpecBuilder::operator=(ParsingSpecBuilder other) noexcept
+        -> ParsingSpecBuilder& {
+    // Copy-and-swap idiom: It is important that `other` is taken by value.
+    // This would handle both copy and move assignment;
+    // when called with an rvalue reference,
+    // the compiler would use the move constructor to create `other`,
+    // which we then swap with.
+    // Supposedly, that allows for better optimization opportunities too.
+    swap(*this, other);
+    return *this;
+}
+
+inline auto ParsingSpecBuilder::operator=(ParsingSpecBuilder&& other) noexcept
+        -> ParsingSpecBuilder& {
+    // Copy-and-swap idiom: Duplicate of copy assignment;
+    // lints aren't smart enough to realize that this would be covered as above.
+    swap(*this, other);
+    return *this;
+}
+
+inline auto swap(ParsingSpecBuilder& first, ParsingSpecBuilder& second) noexcept -> void {
+    using std::swap;
+
+    swap(first.m_builder, second.m_builder);
+}
+
+inline auto ParsingSpecBuilder::build() -> ParserHandle {
+    if (nullptr == m_builder) {
+        throw std::invalid_argument("builder already constructed");
+    }
+    ParserHandle parser{imp::log_surgeon_parsing_spec_builder_build(m_builder)};
+    m_builder = nullptr;
+    return parser;
+}
+
+inline auto ParsingSpecBuilder::add_rule_with_priority(
+        std::string_view name,
+        std::string_view pattern,
+        int32_t priority
+) -> bool {
+    if (nullptr == m_builder) {
+        throw std::invalid_argument("builder already constructed");
+    }
+    return imp::log_surgeon_parsing_spec_builder_add_rule_with_priority(
+            m_builder,
+            priority,
+            CCharArray::from_string_view(name),
+            CCharArray::from_string_view(pattern)
+    );
+}
+
+inline auto ParsingSpecBuilder::add_encoding(std::string_view name, std::string_view pattern)
+        -> bool {
+    if (nullptr == m_builder) {
+        throw std::invalid_argument("builder already constructed");
+    }
+    return imp::log_surgeon_parsing_spec_builder_add_encoding(
+            m_builder,
+            CCharArray::from_string_view(name),
+            CCharArray::from_string_view(pattern)
+    );
+}
+
+inline ParserHandle::ParserHandle(ParsingSpec* spec) : ParserHandle{} {
+    if (nullptr == spec) {
+        throw std::invalid_argument("spec must not be null");
+    }
+    m_parser = imp::log_surgeon_parser_new(spec);
+    m_event = imp::log_surgeon_log_event_new();
+}
+
+inline ParserHandle::~ParserHandle() {
+    if (nullptr != m_event) {
+        imp::log_surgeon_log_event_drop(m_event);
+    }
+    if (nullptr != m_parser) {
+        imp::log_surgeon_parser_drop(m_parser);
+    }
+}
+
+inline ParserHandle::ParserHandle(ParserHandle const& other) : ParserHandle{} {
+    // Copy-and swap idiom: The first "centerpiece";
+    // the "semantics" of this type's resource management must be
+    // bona fide implemented here.
+    m_parser = imp::log_surgeon_parser_clone(other.m_parser);
+    m_event = imp::log_surgeon_log_event_clone(other.m_event);
+}
+
+inline ParserHandle::ParserHandle(ParserHandle&& other) noexcept : ParserHandle{} {
+    // Copy-and-swap idiom: The move constructor is handled by the same
+    // `swap` mechanism used to safely implement copy assignment.
+    swap(*this, other);
+}
+
+inline auto ParserHandle::operator=(ParserHandle other) noexcept -> ParserHandle& {
+    // Copy-and-swap idiom: It is important that `other` is taken by value.
+    // This would handle both copy and move assignment;
+    // when called with an rvalue reference,
+    // the compiler would use the move constructor to create `other`,
+    // which we then swap with.
+    // Supposedly, that allows for better optimization opportunities too.
+    swap(*this, other);
+    return *this;
+}
+
+inline auto ParserHandle::operator=(ParserHandle&& other) noexcept -> ParserHandle& {
+    // Copy-and-swap idiom: Duplicate of copy assignment;
+    // lints aren't smart enough to realize that this would be covered as above.
+    swap(*this, other);
+    return *this;
+}
+
+inline auto swap(ParserHandle& first, ParserHandle& second) noexcept -> void {
+    using std::swap;
+
+    swap(first.m_parser, second.m_parser);
+    swap(first.m_event, second.m_event);
+}
+
 inline auto ParserHandle::next_event(std::string_view input, size_t* pos)
         -> std::optional<EventHandle> {
     if (!log_surgeon_parser_next(m_parser, CCharArray::from_string_view(input), pos, m_event)) {
@@ -171,14 +323,14 @@ inline auto ParserHandle::next_event(std::string_view input, size_t* pos)
 }
 
 inline auto ParserHandle::reset() {
-    log_surgeon_parser_reset(m_parser);
+    imp::log_surgeon_parser_reset(m_parser);
 }
 
 inline auto ParserHandle::query_interpretations(std::string_view name, std::string_view query)
         -> std::vector<std::vector<SubQuery>> {
     std::vector<std::vector<SubQuery>> interpretations;
 
-    Box<Vec<Interpretation>> rust_interpretations{log_surgeon_search_query_interpretations(
+    Box<Vec<Interpretation>> rust_interpretations{imp::log_surgeon_search_query_interpretations(
             m_parser,
             CCharArray::from_string_view(query),
             CCharArray::from_string_view(name)
@@ -187,7 +339,7 @@ inline auto ParserHandle::query_interpretations(std::string_view name, std::stri
     size_t i{0};
     while (true) {
         Interpretation const* interpretation{
-                log_surgeon_search_get_interpretation(rust_interpretations, i)
+                imp::log_surgeon_search_get_interpretation(rust_interpretations, i)
         };
         if (nullptr == interpretation) {
             break;
@@ -196,15 +348,15 @@ inline auto ParserHandle::query_interpretations(std::string_view name, std::stri
         std::vector<SubQuery> sub_queries;
         size_t j{0};
         while (true) {
-            InternalSubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, j)};
+            imp::SubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, j)};
             if (nullptr == sub_query) {
                 break;
             }
 
             std::string_view const qualified_name{
-                    log_surgeon_search_sub_query_get_qualified_name(sub_query)
+                    imp::log_surgeon_search_sub_query_get_qualified_name(sub_query)
             };
-            std::string_view const value{log_surgeon_search_sub_query_get_value(sub_query)};
+            std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
 
             sub_queries.push_back({
                     .qualified_name = std::string{qualified_name},
@@ -218,7 +370,7 @@ inline auto ParserHandle::query_interpretations(std::string_view name, std::stri
         i++;
     }
 
-    log_surgeon_search_interpretations_drop(rust_interpretations);
+    imp::log_surgeon_search_interpretations_drop(rust_interpretations);
 
     return interpretations;
 }

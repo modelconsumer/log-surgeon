@@ -30,6 +30,7 @@ format-rust:
 
 format-cpp:
 	task lint:fix-cpp-format-log-surgeon
+	find cxx -name '*.hpp' | xargs clang-format -i
 
 format: format-rust format-cpp
 

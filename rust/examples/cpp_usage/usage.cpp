@@ -1,4 +1,3 @@
-#include "log_surgeon/generated_bindings.hpp"
 #include "log_surgeon/log_surgeon.hpp"
 
 #include <cassert>
@@ -13,11 +12,11 @@ using namespace log_surgeon;
 static void try_interpretations();
 
 int main() {
-    Box<ParsingSpecBuilder> builder{log_surgeon_parsing_spec_builder_new()};
+    ParsingSpecBuilder builder;
 
-    log_surgeon_parsing_spec_builder_add_rule_with_priority(builder, 0, "hello"_rust, "abc|d(?<foo>[a-z])f"_rust);
+    builder.add_rule_with_priority("hello", "abc|d(?<foo>[a-z])f");
 
-    ParserHandle parser{log_surgeon_parsing_spec_builder_build(builder)};
+    ParserHandle parser{builder.build()};
 
     CArray<char> const input{"def foobarbaz\n"_rust};
     size_t pos{0};
@@ -55,11 +54,11 @@ int main() {
 }
 
 static void try_interpretations() {
-    Box<ParsingSpecBuilder> builder{log_surgeon_parsing_spec_builder_new()};
+    ParsingSpecBuilder builder;
 
-    log_surgeon_parsing_spec_builder_add_rule_with_priority(builder, 0, "email"_rust, R"((?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+))"_rust);
+    builder.add_rule_with_priority("email"_rust, R"((?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+))");
 
-    ParserHandle parser{log_surgeon_parsing_spec_builder_build(builder)};
+    ParserHandle parser{builder.build()};
 
     std::vector<std::vector<SubQuery>> interpretations{parser.query_interpretations("email"_rust, "a*@*com"_rust)};
 

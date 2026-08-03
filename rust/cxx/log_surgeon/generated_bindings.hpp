@@ -10,12 +10,12 @@
     #include <cstddef>
     #include <cstdint>
 
-namespace log_surgeon {
+namespace log_surgeon::imp {
 // https://github.com/mozilla/cbindgen/issues/43
 struct Match;
-}  // namespace log_surgeon
+}  // namespace log_surgeon::imp
 
-namespace log_surgeon {
+namespace log_surgeon::imp {
 struct Interpretation;
 
 /// Newtype wrapper around a `usize` index.
@@ -46,10 +46,7 @@ struct ParsingSpecBuilder;
 
 struct SearchResult;
 
-struct InternalSubQuery;
-
-template <typename T = void>
-struct Vec;
+struct SubQuery;
 
 /// Index in the parsing specification, offset by/starting at 1.
 /// `Option<RuleIdx>` is ABI equivalent to `u16` (for FFI);
@@ -190,7 +187,7 @@ extern "C" {
     void log_surgeon_parser_reset(Parser* parser);
 
     /// See [`ParsingSpecBuilder::add_encoding`].
-    bool log_surgeon_parsing_spec_add_encoding(
+    bool log_surgeon_parsing_spec_builder_add_encoding(
             ParsingSpecBuilder* builder,
             CCharArray name,
             CCharArray pattern
@@ -206,6 +203,10 @@ extern "C" {
 
     /// Consume the (boxed) [`ParsingSpecBuilder`] to construct a [`ParsingSpec`].
     Box<ParsingSpec> log_surgeon_parsing_spec_builder_build(Box<ParsingSpecBuilder> builder);
+
+    Box<ParsingSpecBuilder> log_surgeon_parsing_spec_builder_clone(ParsingSpecBuilder const* value);
+
+    void log_surgeon_parsing_spec_builder_drop(Box<ParsingSpecBuilder> value);
 
     /// See [`ParsingSpecBuilder::from_parsing_spec_definition`].
     Option<Box<ParsingSpecBuilder>> log_surgeon_parsing_spec_builder_from_definition(
@@ -226,7 +227,7 @@ extern "C" {
     Interpretation const*
     log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);
 
-    InternalSubQuery const*
+    SubQuery const*
     log_surgeon_search_get_sub_query(Interpretation const* interpretation, size_t i);
 
     void log_surgeon_search_interpretations_drop(Box<Vec<Interpretation>> value);
@@ -242,12 +243,12 @@ extern "C" {
     Match const*
     log_surgeon_search_result_get_leaf_matches(SearchResult const* search_result, size_t* len);
 
-    CCharArray log_surgeon_search_sub_query_get_qualified_name(InternalSubQuery const* sub_query);
+    CCharArray log_surgeon_search_sub_query_get_qualified_name(SubQuery const* sub_query);
 
-    CCharArray log_surgeon_search_sub_query_get_value(InternalSubQuery const* sub_query);
+    CCharArray log_surgeon_search_sub_query_get_value(SubQuery const* sub_query);
 
 }  // extern "C"
-}  // namespace log_surgeon
+}  // namespace log_surgeon::imp
 
 #endif  // LOG_SURGEON_GENERATED_BINDINGS_HPP
 
