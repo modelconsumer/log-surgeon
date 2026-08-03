@@ -20,17 +20,15 @@
 namespace log_surgeon {
 using imp::CRange;
 using imp::Interpretation;
-using imp::LogEvent;
 using imp::Match;
-using imp::Parser;
 using imp::ParsingSpec;
 using imp::RuleIdx;
 using imp::SearchResult;
 using imp::UncheckedCArray;
 
 class ParsingSpecBuilder;
-class ParserHandle;
-class EventHandle;
+class Parser;
+class LogEvent;
 struct SubQuery;
 
 class ParsingSpecBuilder {
@@ -60,7 +58,7 @@ public:
      * Construct the parsing specification and parser from the parsing specification.
      * Afterwards, this builder is in a (defined but) invalid state.
      */
-    auto build() -> ParserHandle;
+    auto build() -> Parser;
 
     auto
     add_rule_with_priority(std::string_view name, std::string_view pattern, int32_t priority = 0)
@@ -72,20 +70,20 @@ private:
     imp::ParsingSpecBuilder* m_builder{};
 };
 
-class ParserHandle {
+class Parser {
 public:
     /**
      * Creates a parser (handle) for the given parsing spec.
      *
      * @param spec An owned`ParsingSpec*` (takes ownership).
      */
-    ParserHandle(ParsingSpec* spec);
+    Parser(ParsingSpec* spec);
 
-    ~ParserHandle();
-    ParserHandle(ParserHandle const& other);
-    ParserHandle(ParserHandle&& other) noexcept;
-    auto operator=(ParserHandle other) noexcept -> ParserHandle&;
-    auto operator=(ParserHandle&& other) noexcept -> ParserHandle&;
+    ~Parser();
+    Parser(Parser const& other);
+    Parser(Parser&& other) noexcept;
+    auto operator=(Parser other) noexcept -> Parser&;
+    auto operator=(Parser&& other) noexcept -> Parser&;
 
     /**
      * Conventional `swap` function, declared using `friend` for ADL.
@@ -94,7 +92,7 @@ public:
      * @param first
      * @param second
      */
-    friend auto swap(ParserHandle& first, ParserHandle& second) noexcept -> void;
+    friend auto swap(Parser& first, Parser& second) noexcept -> void;
 
     /**
      * Get the next log event, as a handle.
@@ -105,8 +103,7 @@ public:
      * @param pos Pointer to an offset value in the text.
      * @return `std::nullopt` iff EOF.
      */
-    [[nodiscard]] auto next_event(std::string_view input, size_t* pos)
-            -> std::optional<EventHandle>;
+    [[nodiscard]] auto next_event(std::string_view input, size_t* pos) -> std::optional<LogEvent>;
 
     /**
      * Reset the internal state of the parser;
@@ -128,19 +125,19 @@ private:
      * Last piece of copy-and-swap;
      * private since we only want this for copy-and-swap.
      */
-    ParserHandle() noexcept = default;
+    Parser() noexcept = default;
 
-    Parser* m_parser{};
-    LogEvent* m_event{};
+    imp::Parser* m_parser{};
+    imp::LogEvent* m_event{};
 };
 
-class EventHandle {
+class LogEvent {
 public:
     /**
-     * @param event A borrowed `Event const*` (doesn't take ownership).
-     * @param parser A borrowed `Parser const*` (doesn't take ownership).
+     * @param event A borrowed `imp::LogEvent const*` (doesn't take ownership).
+     * @param parser A borrowed `imp::Parser const*` (doesn't take ownership).
      */
-    EventHandle(LogEvent const* event);
+    LogEvent(imp::LogEvent const* event);
 
     [[nodiscard]] auto get_all_matches() const -> std::span<Match const> { return m_matches; }
 
@@ -156,7 +153,7 @@ public:
     [[nodiscard]] auto get_message() const -> std::string_view;
 
 private:
-    LogEvent const* m_event;
+    imp::LogEvent const* m_event;
     std::span<Match const> m_matches;
     std::span<size_t const> m_leaf_indices;
 };
@@ -221,11 +218,11 @@ inline auto swap(ParsingSpecBuilder& first, ParsingSpecBuilder& second) noexcept
     swap(first.m_builder, second.m_builder);
 }
 
-inline auto ParsingSpecBuilder::build() -> ParserHandle {
+inline auto ParsingSpecBuilder::build() -> Parser {
     if (nullptr == m_builder) {
         throw std::invalid_argument("builder already constructed");
     }
-    ParserHandle parser{imp::log_surgeon_parsing_spec_builder_build(m_builder)};
+    Parser parser{imp::log_surgeon_parsing_spec_builder_build(m_builder)};
     m_builder = nullptr;
     return parser;
 }
@@ -258,7 +255,7 @@ inline auto ParsingSpecBuilder::add_encoding(std::string_view name, std::string_
     );
 }
 
-inline ParserHandle::ParserHandle(ParsingSpec* spec) : ParserHandle{} {
+inline Parser::Parser(ParsingSpec* spec) : Parser{} {
     if (nullptr == spec) {
         throw std::invalid_argument("spec must not be null");
     }
@@ -266,7 +263,7 @@ inline ParserHandle::ParserHandle(ParsingSpec* spec) : ParserHandle{} {
     m_event = imp::log_surgeon_log_event_new();
 }
 
-inline ParserHandle::~ParserHandle() {
+inline Parser::~Parser() {
     if (nullptr != m_event) {
         imp::log_surgeon_log_event_drop(m_event);
     }
@@ -275,7 +272,7 @@ inline ParserHandle::~ParserHandle() {
     }
 }
 
-inline ParserHandle::ParserHandle(ParserHandle const& other) : ParserHandle{} {
+inline Parser::Parser(Parser const& other) : Parser{} {
     // Copy-and swap idiom: The first "centerpiece";
     // the "semantics" of this type's resource management must be
     // bona fide implemented here.
@@ -283,13 +280,13 @@ inline ParserHandle::ParserHandle(ParserHandle const& other) : ParserHandle{} {
     m_event = imp::log_surgeon_log_event_clone(other.m_event);
 }
 
-inline ParserHandle::ParserHandle(ParserHandle&& other) noexcept : ParserHandle{} {
+inline Parser::Parser(Parser&& other) noexcept : Parser{} {
     // Copy-and-swap idiom: The move constructor is handled by the same
     // `swap` mechanism used to safely implement copy assignment.
     swap(*this, other);
 }
 
-inline auto ParserHandle::operator=(ParserHandle other) noexcept -> ParserHandle& {
+inline auto Parser::operator=(Parser other) noexcept -> Parser& {
     // Copy-and-swap idiom: It is important that `other` is taken by value.
     // This would handle both copy and move assignment;
     // when called with an rvalue reference,
@@ -300,33 +297,32 @@ inline auto ParserHandle::operator=(ParserHandle other) noexcept -> ParserHandle
     return *this;
 }
 
-inline auto ParserHandle::operator=(ParserHandle&& other) noexcept -> ParserHandle& {
+inline auto Parser::operator=(Parser&& other) noexcept -> Parser& {
     // Copy-and-swap idiom: Duplicate of copy assignment;
     // lints aren't smart enough to realize that this would be covered as above.
     swap(*this, other);
     return *this;
 }
 
-inline auto swap(ParserHandle& first, ParserHandle& second) noexcept -> void {
+inline auto swap(Parser& first, Parser& second) noexcept -> void {
     using std::swap;
 
     swap(first.m_parser, second.m_parser);
     swap(first.m_event, second.m_event);
 }
 
-inline auto ParserHandle::next_event(std::string_view input, size_t* pos)
-        -> std::optional<EventHandle> {
+inline auto Parser::next_event(std::string_view input, size_t* pos) -> std::optional<LogEvent> {
     if (!log_surgeon_parser_next(m_parser, CCharArray::from_string_view(input), pos, m_event)) {
         return std::nullopt;
     }
-    return std::make_optional(EventHandle{m_event});
+    return std::make_optional(LogEvent{m_event});
 }
 
-inline auto ParserHandle::reset() {
+inline auto Parser::reset() {
     imp::log_surgeon_parser_reset(m_parser);
 }
 
-inline auto ParserHandle::query_interpretations(std::string_view name, std::string_view query)
+inline auto Parser::query_interpretations(std::string_view name, std::string_view query)
         -> std::vector<std::vector<SubQuery>> {
     std::vector<std::vector<SubQuery>> interpretations;
 
@@ -375,12 +371,12 @@ inline auto ParserHandle::query_interpretations(std::string_view name, std::stri
     return interpretations;
 }
 
-inline EventHandle::EventHandle(LogEvent const* event) : m_event(event) {
+inline LogEvent::LogEvent(imp::LogEvent const* event) : m_event(event) {
     m_matches = event->all_matches.as_span();
     m_leaf_indices = event->leaf_indices.as_span();
 }
 
-inline auto EventHandle::get_leaf_match(size_t i) const -> std::optional<Match> {
+inline auto LogEvent::get_leaf_match(size_t i) const -> std::optional<Match> {
     if (i < m_leaf_indices.size()) {
         // `std::span` doesn't have `.at()` until C++26...
         // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-avoid-unchecked-container-access)
@@ -389,7 +385,7 @@ inline auto EventHandle::get_leaf_match(size_t i) const -> std::optional<Match> 
     return std::nullopt;
 }
 
-inline auto EventHandle::get_message() const -> std::string_view {
+inline auto LogEvent::get_message() const -> std::string_view {
     return m_event->message;
 }
 }  // namespace log_surgeon

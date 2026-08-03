@@ -5,6 +5,7 @@ Cargo.lock
 # Python
 __pycache__/
 *.pyc
+.mypy_cache/
 
 # Miscellaneous
 *.vim

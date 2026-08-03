@@ -16,16 +16,16 @@ int main() {
 
     builder.add_rule_with_priority("hello", "abc|d(?<foo>[a-z])f");
 
-    ParserHandle parser{builder.build()};
+    Parser parser{builder.build()};
 
     CArray<char> const input{"def foobarbaz\n"_rust};
     size_t pos{0};
 
-    std::optional<EventHandle> maybe_event{parser.next_event(input, &pos)};
+    std::optional<LogEvent> maybe_event{parser.next_event(input, &pos)};
     assert(maybe_event.has_value());
     assert(pos == input.length);
 
-    EventHandle event{*maybe_event};
+    LogEvent event{*maybe_event};
 
     assert(event.get_all_matches().size() == 2);
 
@@ -58,7 +58,7 @@ static void try_interpretations() {
 
     builder.add_rule_with_priority("email"_rust, R"((?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+))");
 
-    ParserHandle parser{builder.build()};
+    Parser parser{builder.build()};
 
     std::vector<std::vector<SubQuery>> interpretations{parser.query_interpretations("email"_rust, "a*@*com"_rust)};
 
