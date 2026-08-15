@@ -168,7 +168,7 @@ impl TryFrom<&str> for Regex {
 	type Error = RegexError;
 
 	fn try_from(pattern: &str) -> Result<Self, Self::Error> {
-		Regex::from_pattern_with_placeholders::<true, _>(pattern, &mut ())
+		Regex::from_pattern_with_placeholders(pattern, &mut ())
 	}
 }
 
@@ -383,8 +383,9 @@ impl Regex {
 				max: *max,
 				item: Box::new(item.deep_clone()),
 			},
-			Self::Placeholder { .. } => {
-				unreachable!("placeholders should not be deep cloned");
+			Self::Placeholder { name, item } => Self::Placeholder {
+				name: name.clone(),
+				item: Box::new(item.deep_clone()),
 			},
 			Self::Sequence(items) => Self::Sequence(items.iter().map(Self::deep_clone).collect::<Vec<_>>()),
 			Self::Alternation(items) => Self::Alternation(items.iter().map(Self::deep_clone).collect::<Vec<_>>()),

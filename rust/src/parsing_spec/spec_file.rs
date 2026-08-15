@@ -135,11 +135,12 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let regex: Regex = Regex::from_pattern_with_placeholders::<true, _>(pattern, &mut builder)
-						.map_err(|e| ParsingSpecFileError {
+					let regex: Regex = Regex::from_pattern_with_placeholders(pattern, &mut builder).map_err(|e| {
+						ParsingSpecFileError {
 							line_offset,
 							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
-						})?;
+						}
+					})?;
 
 					builder
 						.add_placeholder(name.to_owned(), regex)
@@ -372,6 +373,19 @@ mod test {
 		};
 
 		assert_eq!(spec1, spec2);
+	}
+
+	#[test]
+	fn placeholder_inside_placeholder() {
+		// Just making sure this succeeds.
+		let _spec: ParsingSpec = spec! {
+			r#"
+			!p1: "hello"
+			!p2: "(?<p1>) world"
+
+			r1: "(?<p2>)+"
+			"#
+		};
 	}
 
 	// TODO good way to test symbolically represented placeholders? nolonger flattened

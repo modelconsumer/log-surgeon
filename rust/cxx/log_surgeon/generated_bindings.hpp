@@ -224,8 +224,6 @@ extern "C" {
             CCharArray delimiters
     );
 
-    CCharArray log_surgeon_parsing_spec_get_encoding(Parser const* parser, uint16_t idx);
-
     Interpretation const*
     log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);
 

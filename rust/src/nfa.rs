@@ -430,10 +430,9 @@ mod test {
 
 	#[test]
 	fn intersect_match() {
-		let nfa1: Tnfa =
-			Tnfa::for_regex(&Regex::from_pattern_with_placeholders::<false, _>(r"\w*\d\w*", &mut ()).unwrap());
-		let nfa2: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders::<false, _>(r"\d+", &mut ()).unwrap());
-		let nfa3: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders::<false, _>(r"\w+", &mut ()).unwrap());
+		let nfa1: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\w*\d\w*", &mut ()).unwrap());
+		let nfa2: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\d+", &mut ()).unwrap());
+		let nfa3: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\w+", &mut ()).unwrap());
 
 		let intersection12: Tnfa = nfa1.intersect::<false>(&nfa2);
 		let dfa: Tdfa = Tdfa::determinization(&intersection12);

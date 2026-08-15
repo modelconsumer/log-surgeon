@@ -56,9 +56,11 @@ public:
 
     /**
      * Construct the parsing specification and parser from the parsing specification.
-     * Afterwards, this builder is in a (defined but) invalid state.
+     * Afterwards, this builder is in a well-defined but invalid state.
      */
     auto build() -> Parser;
+
+    auto set_delimiters(std::string_view delimiters) -> void;
 
     auto
     add_rule_with_priority(std::string_view name, std::string_view pattern, int32_t priority = 0)
@@ -166,10 +168,15 @@ struct SubQuery {
 inline ParsingSpecBuilder::ParsingSpecBuilder()
         : m_builder{imp::log_surgeon_parsing_spec_builder_new()} {}
 
-inline ParsingSpecBuilder::ParsingSpecBuilder(std::string_view definition)
-        : m_builder{imp::log_surgeon_parsing_spec_builder_from_definition(
-                  CCharArray::from_string_view(definition)
-          )} {}
+inline ParsingSpecBuilder::ParsingSpecBuilder(std::string_view definition) {
+    imp::ParsingSpecBuilder* builder{imp::log_surgeon_parsing_spec_builder_from_definition(
+            CCharArray::from_string_view(definition)
+    )};
+    if (nullptr == builder) {
+        throw std::invalid_argument("parsing specification definition invalid");
+    }
+    m_builder = builder;
+}
 
 inline ParsingSpecBuilder::~ParsingSpecBuilder() {
     if (nullptr != m_builder) {
@@ -225,6 +232,13 @@ inline auto ParsingSpecBuilder::build() -> Parser {
     Parser parser{imp::log_surgeon_parsing_spec_builder_build(m_builder)};
     m_builder = nullptr;
     return parser;
+}
+
+inline auto ParsingSpecBuilder::set_delimiters(std::string_view delimiters) -> void {
+    imp::log_surgeon_parsing_spec_builder_set_delimiters(
+            m_builder,
+            CCharArray::from_string_view(delimiters)
+    );
 }
 
 inline auto ParsingSpecBuilder::add_rule_with_priority(

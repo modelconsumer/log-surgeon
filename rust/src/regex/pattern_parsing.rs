@@ -110,7 +110,7 @@ impl AnchoredRegex {
 			pattern = prefix;
 		}
 
-		let mut regex: Regex = Regex::from_pattern_with_placeholders::<false, _>(pattern, lookup)?;
+		let mut regex: Regex = Regex::from_pattern_with_placeholders(pattern, lookup)?.ensure_not_nullable(pattern)?;
 
 		let mut total_captures: NonZero<u16> = NonZero::<u16>::MIN;
 
@@ -150,10 +150,7 @@ impl Regex {
 	/// but does not call [`Regex::initialize_captures`],
 	/// since the ID numbering is per-root rule/pattern
 	/// (i.e. it is done at the [`AnchoredRegex`] level).
-	pub fn from_pattern_with_placeholders<const ALLOW_NULLABLE: bool, T>(
-		pattern: &str,
-		lookup: &mut T,
-	) -> Result<Self, RegexError>
+	pub fn from_pattern_with_placeholders<T>(pattern: &str, lookup: &mut T) -> Result<Self, RegexError>
 	where
 		T: RegexPlaceholderLookup,
 	{
@@ -166,16 +163,6 @@ impl Regex {
 					remaining: String::new(),
 					kind,
 				})?;
-
-				if !ALLOW_NULLABLE {
-					if let Some(item) = regex.is_nullable() {
-						return Err(RegexError {
-							consumed: pattern.to_owned(),
-							remaining: String::new(),
-							kind: RegexErrorKind::NullableExpression(Box::new(item.clone())),
-						});
-					}
-				}
 
 				Ok(regex)
 			},
@@ -225,7 +212,7 @@ impl Regex {
 	/// Short form of [`Regex::from_pattern_with_placeholders`] for writing tests;
 	/// parses non-nullable patterns without placeholders.
 	pub fn from_pattern(pattern: &str) -> Result<Self, RegexError> {
-		Self::from_pattern_with_placeholders::<false, _>(pattern, &mut ())
+		Self::from_pattern_with_placeholders(pattern, &mut ())?.ensure_not_nullable(pattern)
 	}
 
 	/// Initializes sub-rule data for capture expressions.
@@ -277,6 +264,21 @@ impl Regex {
 			},
 		}
 		Some(bread)
+	}
+
+	/// Returns `Ok(self)` if the pattern does not accept the empty string,
+	/// and a [`RegexError`] with [`RegexErrorKind::NullableExpression`]
+	/// with minimal nullable (sub)expression per [`Regex::is_nullable`] otherwise.
+	fn ensure_not_nullable(self, pattern: &str) -> Result<Self, RegexError> {
+		if let Some(expr) = self.is_nullable() {
+			Err(RegexError {
+				consumed: pattern.to_owned(),
+				remaining: String::new(),
+				kind: RegexErrorKind::NullableExpression(Box::new(expr.clone())),
+			})
+		} else {
+			Ok(self)
+		}
 	}
 }
 
