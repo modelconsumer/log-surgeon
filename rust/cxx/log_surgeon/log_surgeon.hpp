@@ -23,7 +23,6 @@ using imp::Interpretation;
 using imp::Match;
 using imp::ParsingSpec;
 using imp::RuleIdx;
-using imp::SearchResult;
 using imp::UncheckedCArray;
 
 class ParsingSpecBuilder;
@@ -65,6 +64,8 @@ public:
     auto
     add_rule_with_priority(std::string_view name, std::string_view pattern, int32_t priority = 0)
             -> bool;
+
+    auto add_placeholder(std::string_view name, std::string_view pattern) -> bool;
 
     auto add_encoding(std::string_view name, std::string_view pattern) -> bool;
 
@@ -114,13 +115,22 @@ public:
     auto reset();
 
     /**
-     * Computes interpretations for a query.
+     * Computes interpretations for a named query.
      *
-     * @param name
      * @param query
+     * @param name
      */
-    [[nodiscard]] auto query_interpretations(std::string_view name, std::string_view query)
+    [[nodiscard]] auto search_by_name(std::string_view query, std::string_view name)
             -> std::vector<std::vector<SubQuery>>;
+
+    /**
+     * Computes interpretations for full-log search.
+     *
+     * @param query
+     * @param log_shapes
+     */
+    [[nodiscard]] auto search_by_log_shapes(std::string_view query, CArray<CCharArray> log_shapes)
+            -> std::vector<std::vector<std::vector<SubQuery>>>;
 
 private:
     /**
@@ -131,6 +141,19 @@ private:
 
     imp::Parser* m_parser{};
     imp::LogEvent* m_event{};
+
+    /**
+     * Conversion of FFI compatible Rust type to native C++ type.
+     */
+    [[nodiscard]] static auto convert_interpretations(
+            Vec<Interpretation> const* rust_interpretation
+    ) -> std::vector<std::vector<SubQuery>>;
+
+    /**
+     * Conversion of FFI compatible Rust type to native C++ type.
+     */
+    [[nodiscard]] static auto convert_interpretation(Interpretation const* interpretation)
+            -> std::vector<SubQuery>;
 };
 
 class LogEvent {
@@ -257,6 +280,18 @@ inline auto ParsingSpecBuilder::add_rule_with_priority(
     );
 }
 
+inline auto ParsingSpecBuilder::add_placeholder(std::string_view name, std::string_view pattern)
+        -> bool {
+    if (nullptr == m_builder) {
+        throw std::invalid_argument("builder already constructed");
+    }
+    return imp::log_surgeon_parsing_spec_builder_add_placeholder(
+            m_builder,
+            CCharArray::from_string_view(name),
+            CCharArray::from_string_view(pattern)
+    );
+}
+
 inline auto ParsingSpecBuilder::add_encoding(std::string_view name, std::string_view pattern)
         -> bool {
     if (nullptr == m_builder) {
@@ -336,16 +371,56 @@ inline auto Parser::reset() {
     imp::log_surgeon_parser_reset(m_parser);
 }
 
-inline auto Parser::query_interpretations(std::string_view name, std::string_view query)
+inline auto Parser::search_by_name(std::string_view query, std::string_view name)
         -> std::vector<std::vector<SubQuery>> {
-    std::vector<std::vector<SubQuery>> interpretations;
-
-    Box<Vec<Interpretation>> rust_interpretations{imp::log_surgeon_search_query_interpretations(
+    Box<Vec<Interpretation>> rust_interpretations{imp::log_surgeon_search_by_name(
             m_parser,
             CCharArray::from_string_view(query),
             CCharArray::from_string_view(name)
     )};
 
+    std::vector<std::vector<SubQuery>> interpretations{
+            Parser::convert_interpretations(rust_interpretations)
+    };
+
+    imp::log_surgeon_search_interpretations_by_name_drop(rust_interpretations);
+
+    return interpretations;
+}
+
+inline auto Parser::search_by_log_shapes(std::string_view query, CArray<CCharArray> log_shapes)
+        -> std::vector<std::vector<std::vector<SubQuery>>> {
+    std::vector<std::vector<std::vector<SubQuery>>> interpretations_by_shapes;
+    interpretations_by_shapes.reserve(log_shapes.length);
+
+    Box<Vec<Vec<Interpretation>>> rust_interpretations{imp::log_surgeon_search_by_log_shapes(
+            m_parser,
+            CCharArray::from_string_view(query),
+            log_shapes
+    )};
+
+    size_t i{0};
+    while (true) {
+        Vec<Interpretation> const* interpretations{
+                imp::log_surgeon_search_get_interpretations_for_shape(rust_interpretations, i)
+        };
+        if (nullptr == interpretations) {
+            break;
+        }
+
+        interpretations_by_shapes.push_back(Parser::convert_interpretations(interpretations));
+
+        i++;
+    }
+
+    imp::log_surgeon_search_interpretations_by_log_shapes_drop(rust_interpretations);
+
+    return interpretations_by_shapes;
+}
+
+inline auto Parser::convert_interpretations(Vec<Interpretation> const* rust_interpretations)
+        -> std::vector<std::vector<SubQuery>> {
+    std::vector<std::vector<SubQuery>> interpretations;
     size_t i{0};
     while (true) {
         Interpretation const* interpretation{
@@ -355,34 +430,36 @@ inline auto Parser::query_interpretations(std::string_view name, std::string_vie
             break;
         }
 
-        std::vector<SubQuery> sub_queries;
-        size_t j{0};
-        while (true) {
-            imp::SubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, j)};
-            if (nullptr == sub_query) {
-                break;
-            }
-
-            std::string_view const qualified_name{
-                    imp::log_surgeon_search_sub_query_get_qualified_name(sub_query)
-            };
-            std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
-
-            sub_queries.push_back({
-                    .qualified_name = std::string{qualified_name},
-                    .value = std::string{value},
-            });
-
-            j++;
-        }
-        interpretations.push_back(std::move(sub_queries));
+        interpretations.push_back(Parser::convert_interpretation(interpretation));
 
         i++;
     }
-
-    imp::log_surgeon_search_interpretations_drop(rust_interpretations);
-
     return interpretations;
+}
+
+inline auto Parser::convert_interpretation(Interpretation const* interpretation)
+        -> std::vector<SubQuery> {
+    std::vector<SubQuery> sub_queries;
+    size_t i{0};
+    while (true) {
+        imp::SubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, i)};
+        if (nullptr == sub_query) {
+            break;
+        }
+
+        std::string_view const qualified_name{
+                imp::log_surgeon_search_sub_query_get_qualified_name(sub_query)
+        };
+        std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
+
+        sub_queries.push_back({
+                .qualified_name = std::string{qualified_name},
+                .value = std::string{value},
+        });
+
+        i++;
+    }
+    return sub_queries;
 }
 
 inline LogEvent::LogEvent(imp::LogEvent const* event) : m_event(event) {

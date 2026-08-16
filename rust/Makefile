@@ -17,7 +17,7 @@ test-python:
 test-examples: examples
 	./examples/cpp_usage/usage.o
 
-test: test-cargo test-python test-examples
+test: test-cargo test-python test-examples format
 
 cxx/log_surgeon/generated_bindings.hpp: FORCE
 	cbindgen --config cbindgen.toml --crate log-surgeon > $@

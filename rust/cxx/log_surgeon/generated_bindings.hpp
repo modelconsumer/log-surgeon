@@ -44,8 +44,6 @@ struct ParsingSpec;
 
 struct ParsingSpecBuilder;
 
-struct SearchResult;
-
 struct SubQuery;
 
 /// Index in the parsing specification, offset by/starting at 1.
@@ -195,6 +193,13 @@ extern "C" {
             CCharArray pattern
     );
 
+    /// See [`ParsingSpecBuilder::add_placeholder`].
+    bool log_surgeon_parsing_spec_builder_add_placeholder(
+            ParsingSpecBuilder* builder,
+            CCharArray name,
+            CCharArray pattern
+    );
+
     /// See [`ParsingSpecBuilder::add_rule_with_priority`].
     bool log_surgeon_parsing_spec_builder_add_rule_with_priority(
             ParsingSpecBuilder* builder,
@@ -224,24 +229,29 @@ extern "C" {
             CCharArray delimiters
     );
 
+    Box<Vec<Vec<Interpretation>>> log_surgeon_search_by_log_shapes(
+            Parser const* _parser,
+            CCharArray _input,
+            CArray<CCharArray> _log_shapes
+    );
+
+    Box<Vec<Interpretation>>
+    log_surgeon_search_by_name(Parser const* parser, CCharArray query, CCharArray name);
+
     Interpretation const*
     log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);
+
+    Vec<Interpretation> const* log_surgeon_search_get_interpretations_for_shape(
+            Vec<Vec<Interpretation>> const* interpretations,
+            size_t i
+    );
 
     SubQuery const*
     log_surgeon_search_get_sub_query(Interpretation const* interpretation, size_t i);
 
-    void log_surgeon_search_interpretations_drop(Box<Vec<Interpretation>> value);
+    void log_surgeon_search_interpretations_by_log_shapes_drop(Box<Vec<Vec<Interpretation>>> value);
 
-    Box<Vec<Interpretation>> log_surgeon_search_query_interpretations(
-            Parser const* parser,
-            CCharArray input,
-            CCharArray name
-    );
-
-    void log_surgeon_search_result_drop(Box<SearchResult> value);
-
-    Match const*
-    log_surgeon_search_result_get_leaf_matches(SearchResult const* search_result, size_t* len);
+    void log_surgeon_search_interpretations_by_name_drop(Box<Vec<Interpretation>> value);
 
     CCharArray log_surgeon_search_sub_query_get_qualified_name(SubQuery const* sub_query);
 

@@ -60,7 +60,7 @@ static void try_interpretations() {
 
     Parser parser{builder.build()};
 
-    std::vector<std::vector<SubQuery>> interpretations{parser.query_interpretations("email"_rust, "a*@*com"_rust)};
+    std::vector<std::vector<SubQuery>> interpretations{parser.search_by_name("a*@*com"_rust, "email"_rust)};
 
     std::cout << "== Interpretations" << std::endl;
     for (std::vector<SubQuery> const& sub_queries : interpretations) {

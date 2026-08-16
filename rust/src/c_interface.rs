@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::ffi::CArray;
 use crate::ffi::CCharArray;
 use crate::log_event::LogEvent;
 use crate::log_event::Match;
@@ -22,11 +23,6 @@ use crate::regex::Regex;
 use crate::search::Interpretation;
 use crate::search::SearchString;
 use crate::search::SubQuery;
-
-#[derive(Debug)]
-pub struct SearchResult {
-	leaf_captures: Vec<Match>,
-}
 
 /// Enable tracing debugging logs; see [`README.md#Debugging`].
 #[unsafe(no_mangle)]
@@ -64,7 +60,30 @@ mod parsing_spec {
 		let name: &str = name.as_utf8().unwrap();
 		let pattern: &str = pattern.as_utf8().unwrap();
 		if let Err(err) = builder.add_rule_with_priority(priority, name, pattern) {
-			eprintln!("Invalid pattern '{}': {:?}", pattern.escape_default(), err);
+			eprintln!("Invalid pattern '{}': {:?}.", pattern.escape_default(), err);
+			return false;
+		}
+		true
+	}
+
+	/// See [`ParsingSpecBuilder::add_placeholder`].
+	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_parsing_spec_builder_add_placeholder(
+		builder: &mut ParsingSpecBuilder,
+		name: CCharArray<'_>,
+		pattern: CCharArray<'_>,
+	) -> bool {
+		let name: &str = name.as_utf8().unwrap();
+		let pattern: &str = pattern.as_utf8().unwrap();
+		let regex: Regex = match Regex::from_pattern_with_placeholders(pattern, builder) {
+			Ok(regex) => regex,
+			Err(err) => {
+				eprintln!("Invalid pattern '{}': {:?}.", pattern.escape_default(), err);
+				return false;
+			},
+		};
+		if builder.add_placeholder(name, regex).is_err() {
+			eprintln!("Placeholder '{}' already exists.", name.escape_default());
 			return false;
 		}
 		true
@@ -82,12 +101,14 @@ mod parsing_spec {
 		let regex: Regex = match Regex::from_pattern(pattern) {
 			Ok(regex) => regex,
 			Err(err) => {
-				eprintln!("Invalid pattern '{}': {:?}", pattern.escape_default(), err);
+				eprintln!("Invalid pattern '{}': {:?}.", pattern.escape_default(), err);
 				return false;
 			},
 		};
-		// TODO unwrap
-		builder.add_encoding(name, regex).unwrap();
+		if builder.add_encoding(name, regex).is_err() {
+			eprintln!("Encoding '{}' already exists.", name.escape_default());
+			return false;
+		}
 		true
 	}
 
@@ -103,10 +124,12 @@ mod parsing_spec {
 		definition: CCharArray<'_>,
 	) -> Option<Box<ParsingSpecBuilder>> {
 		let definition: &str = definition.as_utf8().unwrap();
-		if let Ok(builder) = ParsingSpecBuilder::from_parsing_spec_definition(definition) {
-			Some(Box::new(builder))
-		} else {
-			None
+		match ParsingSpecBuilder::from_parsing_spec_definition(definition) {
+			Ok(builder) => Some(Box::new(builder)),
+			Err(err) => {
+				eprintln!("Parsing specification definition invalid: {err:?}.");
+				return None;
+			},
 		}
 	}
 }
@@ -176,15 +199,33 @@ mod search {
 	use super::*;
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_query_interpretations(
+	extern "C" fn log_surgeon_search_by_log_shapes(
+		_parser: &Parser,
+		_input: CCharArray<'_>,
+		_log_shapes: CArray<'_, CCharArray<'_>>,
+	) -> Box<Vec<Vec<Interpretation>>> {
+		// TODO
+		Box::new(Vec::new())
+	}
+
+	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_search_by_name(
 		parser: &Parser,
-		input: CCharArray<'_>,
+		query: CCharArray<'_>,
 		name: CCharArray<'_>,
 	) -> Box<Vec<Interpretation>> {
-		let query: SearchString = SearchString::parse(input.as_utf8().unwrap()).unwrap();
+		let query: SearchString = SearchString::parse(query.as_utf8().unwrap()).unwrap();
 		let name: &str = name.as_utf8().unwrap();
 		let interpretations: Vec<Interpretation> = query.get_interpretations(&parser.spec, name);
 		Box::new(interpretations)
+	}
+
+	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_search_get_interpretations_for_shape(
+		interpretations: &Vec<Vec<Interpretation>>,
+		i: usize,
+	) -> Option<&Vec<Interpretation>> {
+		interpretations.get(i)
 	}
 
 	#[unsafe(no_mangle)]
@@ -212,15 +253,6 @@ mod search {
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_search_sub_query_get_value(sub_query: &SubQuery) -> CCharArray<'_> {
 		CCharArray::from_utf8(&sub_query.string_value)
-	}
-
-	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_result_get_leaf_matches<'a>(
-		search_result: &'a SearchResult,
-		len: &mut usize,
-	) -> *const Match {
-		*len = search_result.leaf_captures.len();
-		search_result.leaf_captures.as_ptr()
 	}
 }
 
@@ -266,12 +298,12 @@ mod destructor_impls {
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_interpretations_drop(value: Box<Vec<Interpretation>>) {
+	extern "C" fn log_surgeon_search_interpretations_by_name_drop(value: Box<Vec<Interpretation>>) {
 		std::mem::drop(value);
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_result_drop(value: Box<SearchResult>) {
+	extern "C" fn log_surgeon_search_interpretations_by_log_shapes_drop(value: Box<Vec<Vec<Interpretation>>>) {
 		std::mem::drop(value);
 	}
 }
