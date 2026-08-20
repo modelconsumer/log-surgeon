@@ -3,7 +3,7 @@
 //! - <https://arxiv.org/abs/2206.01398>
 //!
 
-mod graph_dot_output;
+// mod graph_dot_output;
 mod regex_construction;
 mod search_decomposition;
 
@@ -34,6 +34,7 @@ pub struct NfaState {
 	pub idx: NfaIdx,
 	pub transitions: Transitions,
 	pub maybe_accepts_for_rule: Option<RuleIdx>,
+	pub maybe_encoding: Option<Arc<Encoding>>,
 	/// Not strictly needed, but useful for debugging (including DOT output).
 	pub name: Cow<'static, str>,
 }
@@ -135,6 +136,7 @@ impl Tnfa {
 				name: Cow::Borrowed("begin"),
 				transitions: Transitions::Interval(IntervalTree::new()),
 				maybe_accepts_for_rule: None,
+				maybe_encoding: None,
 			}],
 			tags: BTreeSet::new(),
 		}
@@ -154,6 +156,7 @@ impl Tnfa {
 			name: name.into(),
 			transitions: Transitions::Interval(IntervalTree::new()),
 			maybe_accepts_for_rule: None,
+			maybe_encoding: None,
 		};
 		self.states.push(state);
 		idx
@@ -212,6 +215,7 @@ impl Tnfa {
 				name: Cow::Borrowed("begin"),
 				transitions: Transitions::Spontaneous(Vec::new()),
 				maybe_accepts_for_rule: None,
+				maybe_encoding: None,
 			}],
 			tags: BTreeSet::new(),
 		};
@@ -413,13 +417,15 @@ impl Tnfa {
 			name: Cow::Borrowed("begin"),
 			transitions: Transitions::Spontaneous(vec![NfaIdx(2), NfaIdx(2 + self.states.len())]),
 			maybe_accepts_for_rule: None,
+			maybe_encoding: None,
 		});
 
 		new_states.push(NfaState {
 			idx: end_idx,
+			name: Cow::Borrowed("end"),
 			transitions: Transitions::Interval(IntervalTree::new()),
 			maybe_accepts_for_rule: Some(RuleIdx::NIL),
-			name: Cow::Borrowed("end"),
+			maybe_encoding: None,
 		});
 
 		for state in new_states[2..].iter_mut() {
@@ -445,6 +451,7 @@ impl NfaState {
 	fn offset_idxes(&self, offset: usize) -> Self {
 		Self {
 			idx: NfaIdx(offset + self.idx.0),
+			name: self.name.clone(),
 			transitions: {
 				let mut transitions: Transitions = self.transitions.clone();
 				match &mut transitions {
@@ -464,8 +471,8 @@ impl NfaState {
 				};
 				transitions
 			},
-			maybe_accepts_for_rule: None,
-			name: self.name.clone(),
+			maybe_accepts_for_rule: self.maybe_accepts_for_rule,
+			maybe_encoding: self.maybe_encoding.clone(),
 		}
 	}
 }

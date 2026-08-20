@@ -566,13 +566,13 @@ impl<'a> SearchStringView<'a> {
 	fn interpretations_for_shape(&self, spec: &ParsingSpec, shape: &Regex) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
 
-		let rule_nfa: Tnfa = Tnfa::for_single_rule(RuleIdx::NIL, shape, &[]);
+		let shape_nfa: Tnfa = Tnfa::for_single_rule(RuleIdx::NIL, shape, &[]);
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
-		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(maybe_delimiters));
+		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(None));
 
-		let intersection: Tnfa = nfa.intersect::<true>(&search_nfa);
+		let intersection: Tnfa = shape_nfa.intersect::<true>(&search_nfa);
 
 		let paths: Vec<Path> = intersection.compute_paths::<false>();
 
@@ -622,12 +622,9 @@ impl<'a> SearchStringView<'a> {
 					PathComponent::Literal(contents) => {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
-					PathComponent::Capture {
-						maybe_sub_rule_id,
-						contents,
-					} => {
+					PathComponent::Capture { sub_rule, contents } => {
 						let rule: &RootRule = &spec[path.rule_idx];
-						let rule_info: &RuleInfo = &rule[*maybe_sub_rule_id];
+						let rule_info: &RuleInfo = &rule[sub_rule.id];
 						sub_queries.push(SubQuery::new(group, rule_info, contents.clone()));
 					},
 				}
@@ -712,12 +709,9 @@ impl<'a> SearchStringView<'a> {
 					PathComponent::Literal(contents) => {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
-					PathComponent::Capture {
-						maybe_sub_rule_id,
-						contents,
-					} => {
+					PathComponent::Capture { sub_rule, contents } => {
 						let rule: &RootRule = &spec[path.rule_idx];
-						let rule_info: &RuleInfo = &rule[*maybe_sub_rule_id];
+						let rule_info: &RuleInfo = &rule[sub_rule.id];
 						sub_queries.push(SubQuery::new(group, rule_info, contents.clone()));
 					},
 				}

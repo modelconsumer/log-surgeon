@@ -1,9 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::num::NonZero;
 use std::sync::Arc;
 
-use crate::nfa::CaptureTag;
 use crate::nfa::NfaIdx;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
@@ -23,7 +21,7 @@ pub struct Path {
 pub enum PathComponent {
 	Literal(Vec<SymbolicChar>),
 	Capture {
-		name: Arc<str>,
+		sub_rule: Arc<SubRule>,
 		contents: Vec<SymbolicChar>,
 	},
 }
@@ -32,7 +30,7 @@ pub enum PathComponent {
 enum PathEdge {
 	Literal(char),
 	Capture {
-		name: Arc<str>,
+		sub_rule: Arc<SubRule>,
 		is_start: bool,
 	},
 	/// Search query allows for any character.
@@ -168,9 +166,9 @@ impl std::fmt::Display for PathComponent {
 					}
 				}
 			},
-			Self::Capture { name, contents } => {
+			Self::Capture { sub_rule, contents } => {
 				// TODO
-				fmt.write_fmt(format_args!("(?<{:?}>{:?})", name, contents))?;
+				fmt.write_fmt(format_args!("(?<{:?}>{:?})", sub_rule.name, contents))?;
 			},
 		}
 		Ok(())
@@ -229,15 +227,15 @@ impl Tnfa {
 					&PathEdge::Literal(ch) => {
 						symbols.push(SymbolicChar::Literal(ch));
 					},
-					PathEdge::Capture { name, is_start } => {
+					PathEdge::Capture { sub_rule, is_start } => {
 						if let Some(current_rule) = maybe_capture {
 							// Closing capture.
 							assert!(!is_start);
-							assert_eq!(name, &current_rule);
+							assert_eq!(sub_rule, &current_rule);
 							assert!(!symbols.is_empty());
 
 							path.push(PathComponent::Capture {
-								name: name.clone(),
+								sub_rule: current_rule,
 								contents: symbols,
 							});
 							symbols = Vec::new();
@@ -260,7 +258,7 @@ impl Tnfa {
 								}
 							}
 							symbols = Vec::new();
-							maybe_capture = Some(*sub_rule);
+							maybe_capture = Some(sub_rule.clone());
 						}
 					},
 					PathEdge::QueryWildcard | PathEdge::PatternWildcard => {
@@ -387,12 +385,11 @@ impl Tnfa {
 				Transitions::Tagged { tag, positive, target } => {
 					assert!(tarjan.vertices[target.0].scc > tarjan.vertices[entry.idx.0].scc);
 
-					let sub_rule: &SubRule = &tag.sub_rule;
-					if *positive && sub_rule.is_leaf() {
+					if *positive && tag.sub_rule.is_leaf() {
 						let is_start: bool = !tag.is_close;
 						let mut prefix: PartialPath = prefix.clone();
 						let edge: PathEdge = PathEdge::Capture {
-							name: sub_rule.qualified_name,
+							sub_rule: tag.sub_rule.clone(),
 							is_start,
 						};
 						prefix.push(edge.clone());
@@ -518,11 +515,9 @@ impl Tnfa {
 					assert!(inserted);
 
 					if *positive {
-						let sub_rule: &SubRule = &tag.sub_rule;
-						if sub_rule.is_leaf() {
+						if tag.sub_rule.is_leaf() {
 							path.push(PathEdge::Capture {
-								sub_rule_id: sub_rule.id,
-								qualified_name: sub_rule.qualified_name.clone(),
+								sub_rule: tag.sub_rule.clone(),
 								is_start: !tag.is_close,
 							});
 							stack.push((&self[*target], path, seen));

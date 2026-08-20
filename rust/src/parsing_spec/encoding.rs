@@ -15,6 +15,7 @@ pub struct Encoding {
 	pub idx: EncodingIdx,
 	pub name: String,
 	pub regex: Regex,
+	/// Cached NFA for intersecting with.
 	pub nfa: Tnfa,
 }
 

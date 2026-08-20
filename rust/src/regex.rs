@@ -57,7 +57,8 @@ pub enum Regex {
 	Sequence(Vec<Regex>),
 	Alternation(Vec<Regex>),
 	/// No effect on string matching;
-	/// this variant is for serializing a [`crate::parsing_spec::ParsingSpec`].
+	/// this variant is for "remembering" the original structure/definition
+	/// of a pattern from a [`crate::parsing_spec::ParsingSpec`].
 	Placeholder {
 		name: Arc<str>,
 		item: Box<Regex>,
