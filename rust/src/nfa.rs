@@ -71,9 +71,12 @@ pub enum Transitions {
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub enum CaptureTag {
-	Start(SubRule, Option<Arc<Encoding>>),
-	Stop(SubRule, Option<Arc<Encoding>>),
+pub struct CaptureTag {
+	pub rule_idx: RuleIdx,
+	pub sub_rule: Arc<SubRule>,
+	pub maybe_encoding: Option<Arc<Encoding>>,
+	/// "Open" before "close" in the derived ordering.
+	pub is_close: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -359,6 +362,114 @@ impl Tnfa {
 	}
 }
 
+impl Tnfa {
+	pub fn concat(&self, other: &Self) -> Tnfa {
+		let mut new_states: Vec<NfaState> = self
+			.states
+			.iter()
+			.cloned()
+			.chain(other.states.iter().map(|state| state.offset_idxes(self.states.len())))
+			.collect::<Vec<_>>();
+
+		for my_state in new_states[..self.states.len()].iter_mut() {
+			if let Some(rule_idx) = my_state.maybe_accepts_for_rule {
+				assert_eq!(rule_idx, RuleIdx::NIL);
+				assert_eq!(my_state.transitions.len(), 0);
+				my_state.maybe_accepts_for_rule = None;
+				my_state.transitions = Transitions::Spontaneous(vec![NfaIdx(self.states.len())]);
+			}
+		}
+
+		for other_state in new_states[self.states.len()..].iter_mut() {
+			if let Some(rule_idx) = other_state.maybe_accepts_for_rule {
+				assert_eq!(rule_idx, RuleIdx::NIL);
+			}
+		}
+
+		Self {
+			states: new_states,
+			tags: &self.tags | &other.tags,
+		}
+	}
+
+	/// TODO: name of this function
+	pub fn or(&self, other: &Self) -> Self {
+		let my_states: Vec<NfaState> = self
+			.states
+			.iter()
+			.map(|state| state.offset_idxes(2))
+			.collect::<Vec<_>>();
+		let other_states: Vec<NfaState> = self
+			.states
+			.iter()
+			.map(|state| state.offset_idxes(2 + self.states.len()))
+			.collect::<Vec<_>>();
+
+		let mut new_states: Vec<NfaState> = Vec::with_capacity(2 + self.states.len());
+		let end_idx: NfaIdx = NfaIdx(1);
+
+		new_states.push(NfaState {
+			idx: NfaIdx::BEGIN,
+			name: Cow::Borrowed("begin"),
+			transitions: Transitions::Spontaneous(vec![NfaIdx(2), NfaIdx(2 + self.states.len())]),
+			maybe_accepts_for_rule: None,
+		});
+
+		new_states.push(NfaState {
+			idx: end_idx,
+			transitions: Transitions::Interval(IntervalTree::new()),
+			maybe_accepts_for_rule: Some(RuleIdx::NIL),
+			name: Cow::Borrowed("end"),
+		});
+
+		for state in new_states[2..].iter_mut() {
+			if let Some(rule_idx) = state.maybe_accepts_for_rule {
+				assert_eq!(rule_idx, RuleIdx::NIL);
+				assert_eq!(state.transitions.len(), 0);
+				state.maybe_accepts_for_rule = None;
+				state.transitions = Transitions::Spontaneous(vec![end_idx]);
+			}
+		}
+
+		new_states.extend(my_states.into_iter());
+		new_states.extend(other_states.into_iter());
+
+		Self {
+			states: new_states,
+			tags: &self.tags | &other.tags,
+		}
+	}
+}
+
+impl NfaState {
+	fn offset_idxes(&self, offset: usize) -> Self {
+		Self {
+			idx: NfaIdx(offset + self.idx.0),
+			transitions: {
+				let mut transitions: Transitions = self.transitions.clone();
+				match &mut transitions {
+					Transitions::Interval(transitions) => {
+						transitions.iter_mut().for_each(|(_interval, target)| {
+							target.0 += offset;
+						});
+					},
+					Transitions::Spontaneous(transitions) => {
+						transitions.iter_mut().for_each(|target| {
+							target.0 += offset;
+						});
+					},
+					Transitions::Tagged { target, .. } => {
+						target.0 += offset;
+					},
+				};
+				transitions
+			},
+			maybe_accepts_for_rule: None,
+			name: self.name.clone(),
+		}
+	}
+}
+
 impl std::ops::Index<NfaIdx> for Tnfa {
 	type Output = NfaState;
 
@@ -407,18 +518,6 @@ impl Transitions {
 			Self::Spontaneous(transitions) => Box::new(transitions.iter().copied()),
 			Self::Tagged { target, .. } => Box::new(std::iter::once(*target)),
 		}
-	}
-}
-
-impl CaptureTag {
-	pub fn sub_rule(&self) -> &SubRule {
-		let (Self::Start(sub_rule, _) | Self::Stop(sub_rule, _)): &Self = self;
-		sub_rule
-	}
-
-	pub fn maybe_encoding(&self) -> Option<&Arc<Encoding>> {
-		let (Self::Start(_, encoding) | Self::Stop(_, encoding)): &Self = self;
-		encoding.as_ref()
 	}
 }
 

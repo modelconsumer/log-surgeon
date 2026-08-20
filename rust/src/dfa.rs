@@ -296,18 +296,26 @@ impl Tdfa {
 			&self.states[current_state].tag_for_register,
 		);
 
-		for (start, stop) in self.tag_pairs.iter().enumerate().rev() {
-			let sub_rule: &SubRule = self.tags[start].sub_rule();
-			let maybe_encoding: Option<&Arc<Encoding>> = self.tags[start].maybe_encoding();
+		// TODO: explain rev, it's heuristic since we push ends up in reverse?
+		for (open, close) in self
+			.tag_pairs
+			.iter()
+			.rev()
+			.copied()
+			.filter(|&corresponding| self.tags[corresponding].is_close)
+			.enumerate()
+		{
+			let sub_rule: &SubRule = &self.tags[open].sub_rule;
+			let maybe_encoding: Option<&Arc<Encoding>> = self.tags[open].maybe_encoding.as_ref();
 
-			let mut maybe_start: Option<NonZero<usize>> = registers[self.tags.len() + start];
-			let mut maybe_stop: Option<NonZero<usize>> = registers[self.tags.len() + stop];
+			let mut maybe_open: Option<NonZero<usize>> = registers[self.tags.len() + open];
+			let mut maybe_close: Option<NonZero<usize>> = registers[self.tags.len() + close];
 
-			while let Some(start_node) = maybe_start {
-				let stop_node: NonZero<usize> = maybe_stop.unwrap();
+			while let Some(open_node) = maybe_open {
+				let close_node: NonZero<usize> = maybe_close.unwrap();
 
-				let start: usize = prefix_tree[start_node].lexeme_position;
-				let end: usize = prefix_tree[stop_node].lexeme_position;
+				let start: usize = prefix_tree[open_node].lexeme_position;
+				let end: usize = prefix_tree[close_node].lexeme_position;
 				captures.push(MatchedCapture {
 					rule_idx,
 					capture_id: sub_rule.id,
@@ -317,8 +325,8 @@ impl Tdfa {
 					is_leaf: sub_rule.is_leaf(),
 					range: Range { start, end },
 				});
-				maybe_start = prefix_tree[start_node].maybe_predecessor;
-				maybe_stop = prefix_tree[stop_node].maybe_predecessor;
+				maybe_open = prefix_tree[open_node].maybe_predecessor;
+				maybe_close = prefix_tree[close_node].maybe_predecessor;
 			}
 		}
 		captures.sort_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
@@ -422,14 +430,12 @@ impl Tdfa {
 	pub fn determinization(nfa: &Tnfa) -> Self {
 		let tags: Vec<CaptureTag> = nfa.tags().iter().cloned().collect::<Vec<_>>();
 		assert_eq!(tags.len() % 2, 0);
-		let mut tag_pairs: Vec<usize> = Vec::with_capacity(tags.len() / 2);
-		for (i, tag) in tags.iter().enumerate() {
-			if i >= tags.len() / 2 {
-				break;
-			}
-			let j: usize = i + tags.len() / 2;
-			assert_eq!(tag.sub_rule(), tags[j].sub_rule());
-			tag_pairs.push(j);
+		let mut tag_pairs: Vec<usize> = Vec::with_capacity(tags.len());
+		// XXX: use array_chunks when stable.
+		for (i, chunk) in tags.chunks_exact(2).enumerate() {
+			assert_eq!(chunk[0].sub_rule, chunk[1].sub_rule);
+			tag_pairs.push((i * 2) + 1);
+			tag_pairs.push(i * 2);
 		}
 
 		let mut dfa: Self = Self {

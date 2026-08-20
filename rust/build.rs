@@ -21,9 +21,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 	// Try to format the generated CXX bindings;
 	// ignore errors so it doesn't choke the build.
-	let _: Result<_, _> = Command::new("task")
-		.arg("--force")
-		.arg("lint:fix-cpp-format-log-surgeon")
+	// let _: Result<_, _> = Command::new("task")
+	// 	.arg("--force")
+	// 	.arg("lint:fix-cpp-format-log-surgeon")
+	// 	.status();
+	let _: Result<_, _> = Command::new("clang-format")
+		.arg("-i")
+		.arg(root_dir.join("cxx").join("log_surgeon").join("generated_bindings.hpp"))
 		.status();
 
 	Ok(())

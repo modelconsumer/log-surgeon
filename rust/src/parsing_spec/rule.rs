@@ -44,7 +44,7 @@ impl PartialEq for RootRule {
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct SubRule {
-	pub name: String,
+	pub name: Arc<str>,
 	pub regex: Regex,
 
 	/// ID statically assigned left-to-right based on the regex pattern.
@@ -63,6 +63,9 @@ pub struct SubRule {
 	/// Qualified name w.r.t captures including the leading dot;
 	/// a top-level capture is ".a", a second-level capture is ".a.b".
 	pub qualified_name: Arc<str>,
+
+	// TODO
+	pub fully_qualified_name: Arc<str>,
 }
 
 /// Common info for both root rules and sub-rules.
@@ -116,6 +119,100 @@ impl From<NonZero<u16>> for RuleIdx {
 impl std::fmt::Display for RuleIdx {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		self.0.fmt(fmt)
+	}
+}
+
+impl RootRule {
+	/// Construct a new root rule;
+	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
+	pub fn new(
+		idx: RuleIdx,
+		name: Arc<str>,
+		priority: i32,
+		regex: AnchoredRegex,
+		maybe_encoding: Option<Arc<Encoding>>,
+		dfa: Tdfa,
+	) -> Self {
+		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
+		rule_info.push(RuleInfo {
+			root_idx: idx,
+			root_name: name.clone(),
+			maybe_sub_rule: None,
+			fully_qualified_name: name.clone(),
+		});
+
+		let mut stack: Vec<&Regex> = vec![&regex.regex];
+		while let Some(regex) = stack.pop() {
+			match regex {
+				Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
+				Regex::Capture(sub_rule) => {
+					let i: usize = sub_rule.id_as_usize();
+					assert_eq!(rule_info.len(), i);
+					rule_info.push(RuleInfo {
+						root_idx: idx,
+						root_name: name.clone(),
+						maybe_sub_rule: Some((**sub_rule).clone()),
+						fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
+					});
+					stack.push(&sub_rule.regex);
+				},
+				Regex::KleeneClosure(item)
+				| Regex::KleenePlus(item)
+				| Regex::BoundedRepetition { item, .. }
+				| Regex::Placeholder { item, .. } => {
+					stack.push(item);
+				},
+				Regex::Sequence(items) | Regex::Alternation(items) => {
+					// Push on to stack in reverse to mirror DFS.
+					for sub_item in items.iter().rev() {
+						stack.push(sub_item);
+					}
+				},
+			}
+		}
+
+		Self {
+			idx,
+			name,
+			priority,
+			regex,
+			maybe_encoding,
+			rule_info,
+			dfa,
+		}
+	}
+
+	/// Find matching (nested) captures matching exactly (the fragments of) a fully qualified name.
+	pub fn find_capture<'a>(
+		&'a self,
+		current_regex: &'a Regex,
+		first: &str,
+		rest: &[&str],
+		collect: &mut Vec<(&'a RuleInfo, &'a Regex)>,
+	) {
+		match current_regex {
+			Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
+			Regex::Capture(sub_rule) => {
+				if &*sub_rule.name == first {
+					if let Some(first) = rest.first().copied() {
+						self.find_capture(&sub_rule.regex, first, &rest[1..], collect);
+					} else {
+						collect.push((&self[Some(sub_rule.id)], current_regex));
+					}
+				}
+			},
+			Regex::KleeneClosure(item)
+			| Regex::KleenePlus(item)
+			| Regex::BoundedRepetition { item, .. }
+			| Regex::Placeholder { item, .. } => {
+				self.find_capture(item, first, rest, collect);
+			},
+			Regex::Sequence(items) | Regex::Alternation(items) => {
+				for item in items.iter() {
+					self.find_capture(item, first, rest, collect);
+				}
+			},
+		}
 	}
 }
 

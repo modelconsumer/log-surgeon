@@ -7,6 +7,7 @@ use nom::error::ErrorKind as NomErrorKind;
 pub use pattern_parsing::RegexPlaceholderLookup;
 
 use crate::parsing_spec::SubRule;
+use crate::utils::DeepClone;
 use crate::utils::Escaped;
 
 /// Meta-characters that must be escaped, aside from inside bracketed ranges.
@@ -31,7 +32,10 @@ pub enum Regex {
 	/// Any character, including newline.
 	AnyChar,
 	Literal(char),
-	Capture(Arc<SubRule>),
+	/// If a placeholder contains a regex capture/[`SubRule`],
+	/// each substitution of the placeholder should be a unique sub-rule.
+	/// In other words, we must deep clone the regex of the placeholder when substituting.
+	Capture(DeepClone<Arc<SubRule>>),
 	BracketedRanges {
 		negated: bool,
 		items: Vec<(char, char)>,
@@ -55,7 +59,7 @@ pub enum Regex {
 	/// No effect on string matching;
 	/// this variant is for serializing a [`crate::parsing_spec::ParsingSpec`].
 	Placeholder {
-		name: String,
+		name: Arc<str>,
 		item: Box<Regex>,
 	},
 }
@@ -123,6 +127,7 @@ pub enum RegexErrorKind {
 	/// but exists because 1. it models "what's happening", and 2. it's useful for debugging.
 	ExpectedOneOf { characters: &'static str, negate: bool },
 	/// No definition for placeholder.
+	/// TODO: this could be `Arc<str>`?
 	UndefinedPlaceholder(String),
 	/// A (sub)expression of a regex can match an empty string,
 	/// which isn't meaningful for parsing.
@@ -366,6 +371,7 @@ impl Regex {
 		}
 	}
 
+	/*
 	/// If a placeholder contains a regex capture/[`SubRule`],
 	/// each substitution of the placeholder should be a unique sub-rule.
 	/// In other words, we must deep clone the regex of the placeholder when substituting.
@@ -391,6 +397,7 @@ impl Regex {
 			Self::Alternation(items) => Self::Alternation(items.iter().map(Self::deep_clone).collect::<Vec<_>>()),
 		}
 	}
+	*/
 }
 
 impl std::fmt::Display for RegexError {

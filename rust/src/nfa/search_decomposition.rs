@@ -23,7 +23,7 @@ pub struct Path {
 pub enum PathComponent {
 	Literal(Vec<SymbolicChar>),
 	Capture {
-		maybe_sub_rule_id: Option<NonZero<u16>>,
+		name: Arc<str>,
 		contents: Vec<SymbolicChar>,
 	},
 }
@@ -32,9 +32,7 @@ pub enum PathComponent {
 enum PathEdge {
 	Literal(char),
 	Capture {
-		sub_rule_id: NonZero<u16>,
-		/// Exists for debugging.
-		qualified_name: Arc<str>,
+		name: Arc<str>,
 		is_start: bool,
 	},
 	/// Search query allows for any character.
@@ -170,12 +168,9 @@ impl std::fmt::Display for PathComponent {
 					}
 				}
 			},
-			Self::Capture {
-				maybe_sub_rule_id,
-				contents,
-			} => {
+			Self::Capture { name, contents } => {
 				// TODO
-				fmt.write_fmt(format_args!("(?<{maybe_sub_rule_id:?}>{contents:?})"))?;
+				fmt.write_fmt(format_args!("(?<{:?}>{:?})", name, contents))?;
 			},
 		}
 		Ok(())
@@ -226,7 +221,7 @@ impl Tnfa {
 			};
 
 			let mut path: Vec<PathComponent> = Vec::new();
-			let mut maybe_capture: Option<NonZero<u16>> = None;
+			let mut maybe_capture: Option<Arc<SubRule>> = None;
 			let mut symbols: Vec<SymbolicChar> = Vec::new();
 
 			for edge in edges[skip..].iter().rev().skip(skip) {
@@ -234,17 +229,15 @@ impl Tnfa {
 					&PathEdge::Literal(ch) => {
 						symbols.push(SymbolicChar::Literal(ch));
 					},
-					PathEdge::Capture {
-						sub_rule_id, is_start, ..
-					} => {
+					PathEdge::Capture { name, is_start } => {
 						if let Some(current_rule) = maybe_capture {
 							// Closing capture.
 							assert!(!is_start);
-							assert_eq!(sub_rule_id, &current_rule);
+							assert_eq!(name, &current_rule);
 							assert!(!symbols.is_empty());
 
 							path.push(PathComponent::Capture {
-								maybe_sub_rule_id: Some(*sub_rule_id),
+								name: name.clone(),
 								contents: symbols,
 							});
 							symbols = Vec::new();
@@ -267,7 +260,7 @@ impl Tnfa {
 								}
 							}
 							symbols = Vec::new();
-							maybe_capture = Some(*sub_rule_id);
+							maybe_capture = Some(*sub_rule);
 						}
 					},
 					PathEdge::QueryWildcard | PathEdge::PatternWildcard => {
@@ -394,13 +387,12 @@ impl Tnfa {
 				Transitions::Tagged { tag, positive, target } => {
 					assert!(tarjan.vertices[target.0].scc > tarjan.vertices[entry.idx.0].scc);
 
-					let sub_rule: &SubRule = tag.sub_rule();
+					let sub_rule: &SubRule = &tag.sub_rule;
 					if *positive && sub_rule.is_leaf() {
-						let is_start: bool = matches!(tag, CaptureTag::Start(_, _));
+						let is_start: bool = !tag.is_close;
 						let mut prefix: PartialPath = prefix.clone();
 						let edge: PathEdge = PathEdge::Capture {
-							sub_rule_id: sub_rule.id,
-							qualified_name: sub_rule.qualified_name.clone(),
+							name: sub_rule.qualified_name,
 							is_start,
 						};
 						prefix.push(edge.clone());
@@ -526,12 +518,12 @@ impl Tnfa {
 					assert!(inserted);
 
 					if *positive {
-						let sub_rule: &SubRule = tag.sub_rule();
+						let sub_rule: &SubRule = &tag.sub_rule;
 						if sub_rule.is_leaf() {
 							path.push(PathEdge::Capture {
 								sub_rule_id: sub_rule.id,
 								qualified_name: sub_rule.qualified_name.clone(),
-								is_start: matches!(tag, CaptureTag::Start(_, _)),
+								is_start: !tag.is_close,
 							});
 							stack.push((&self[*target], path, seen));
 							continue;

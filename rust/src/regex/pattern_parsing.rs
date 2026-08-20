@@ -17,6 +17,7 @@ use crate::regex::RegexError;
 use crate::regex::RegexErrorKind;
 use crate::regex::SPECIAL_CHARACTERS;
 use crate::regex::SPECIAL_CHARACTERS_IN_BRACKETED_RANGES;
+use crate::utils::DeepClone;
 use crate::utils::NomUtils;
 
 /// A helper trait for filling in placeholders when parsing regex patterns.
@@ -192,9 +193,9 @@ impl Regex {
 				.replace_with_placeholders(placeholder_lookup),
 			Self::Placeholder { name, item } => {
 				let Some(placeholder): Option<Regex> = placeholder_lookup.lookup(name) else {
-					return Err(RegexErrorKind::UndefinedPlaceholder(name.clone()));
+					return Err(RegexErrorKind::UndefinedPlaceholder(name.to_string()));
 				};
-				**item = placeholder.deep_clone();
+				**item = placeholder.clone();
 				Ok(())
 			},
 			Self::KleeneClosure(item) | Self::KleenePlus(item) | Self::BoundedRepetition { item, .. } => {
@@ -511,6 +512,7 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 
 	// Cut: After seeing a '?', we necessarily are expecting a capture.
 	let (input, name): (&str, &str) = cut(surrounded_cut::<'<', '>', _, _>(parse_capture_name)).parse(input)?;
+	let name: Arc<str> = Arc::from(name);
 
 	if input.starts_with(')') {
 		// This function is called from [`parse_parenthesized`] inside a [`surrounded_cut`];
@@ -528,7 +530,7 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 		Ok((
 			input,
 			Regex::Placeholder {
-				name: name.to_owned(),
+				name,
 				item: Box::new(Regex::NIL),
 			},
 		))
@@ -537,8 +539,8 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 
 		Ok((
 			input,
-			Regex::Capture(Arc::new(SubRule {
-				name: name.to_owned(),
+			Regex::Capture(DeepClone::new(Arc::new(SubRule {
+				name,
 				regex,
 				// [`Regex::initialize_captures`], called after the AST is parsed, sets these next 4 values;
 				// see also its comment on why this `MAX` is a valid temporary value.
@@ -546,7 +548,8 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 				parent_id: None,
 				descendents: 0,
 				qualified_name: Arc::from(""),
-			})),
+				fully_qualified_name: Arc::from(""),
+			}))),
 		))
 	}
 }

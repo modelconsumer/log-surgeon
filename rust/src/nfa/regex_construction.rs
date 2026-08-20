@@ -298,7 +298,7 @@ impl Tnfa {
 	fn capture(
 		&mut self,
 		rule: RuleIdx,
-		sub_rule: &SubRule,
+		sub_rule: &Arc<SubRule>,
 		encodings: &[Arc<Encoding>],
 		current: NfaIdx,
 		target: NfaIdx,
@@ -342,8 +342,16 @@ impl Tnfa {
 					enc.name.escape_default()
 				));
 
-				let start_tag: CaptureTag = CaptureTag::Start(sub_rule.clone(), Some(enc.clone()));
-				let end_tag: CaptureTag = CaptureTag::Stop(sub_rule.clone(), Some(enc.clone()));
+				let start_tag: CaptureTag = CaptureTag {
+					rule_idx: rule,
+					sub_rule: sub_rule.clone(),
+					maybe_encoding: Some(enc.clone()),
+					is_close: false,
+				};
+				let end_tag = CaptureTag {
+					is_close: true,
+					..start_tag.clone()
+				};
 
 				self[sub_start].transitions = Transitions::Tagged {
 					tag: start_tag.clone(),
@@ -376,8 +384,16 @@ impl Tnfa {
 		let sub_end: NfaIdx = self.new_state(format!("capture {} (fallback) ended", sub_rule.name.escape_default()));
 		let sub_end2: NfaIdx = self.new_state(format!("capture {} (fallback) ended2", sub_rule.name.escape_default()));
 
-		let start_tag: CaptureTag = CaptureTag::Start(sub_rule.clone(), None);
-		let end_tag: CaptureTag = CaptureTag::Stop(sub_rule.clone(), None);
+		let start_tag: CaptureTag = CaptureTag {
+			rule_idx: rule,
+			sub_rule: sub_rule.clone(),
+			maybe_encoding: None,
+			is_close: false,
+		};
+		let end_tag = CaptureTag {
+			is_close: true,
+			..start_tag.clone()
+		};
 
 		self[sub_start].transitions = Transitions::Tagged {
 			tag: start_tag.clone(),

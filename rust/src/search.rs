@@ -326,16 +326,28 @@ impl SearchString {
 		&self.0
 	}
 
-	pub fn get_interpretations(&self, spec: &ParsingSpec, name: &str) -> Vec<Interpretation> {
-		let Some(rows): Option<Vec<(&RuleInfo, &Regex)>> = spec.rules_for_name(name) else {
-			return Vec::new();
-		};
+	pub fn search_by_name(&self, spec: &ParsingSpec, name: &str) -> Vec<Interpretation> {
+		let rows: Vec<(&RuleInfo, &Regex)> = spec.rules_for_name(name);
 
-		if !name.is_empty() {
-			return self.view(0, self.0.len()).interpretations_for_name(spec, &rows);
+		// TODO remove
+		if name.is_empty() {
+			return self.full_log_interpretations(spec);
 		}
 
-		self.full_log_interpretations(spec)
+		self.view(0, self.0.len()).interpretations_for_name(spec, &rows)
+	}
+
+	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
+		let view: SearchStringView<'_> = self.view(0, self.0.len());
+
+		log_shapes
+			.iter()
+			.map(|shape| {
+				let shape: &str = shape.as_ref();
+				let shape_as_regex: Regex = spec.shape_as_regex(shape).unwrap();
+				view.interpretations_for_shape(spec, &shape_as_regex)
+			})
+			.collect::<Vec<_>>()
 	}
 
 	fn full_log_interpretations(&self, spec: &ParsingSpec) -> Vec<Interpretation> {
@@ -544,6 +556,87 @@ impl<'a> SearchStringView<'a> {
 
 			interpretations.extend(potential_interpretations.into_iter());
 		}
+
+		interpretations.sort();
+		interpretations.dedup();
+
+		interpretations
+	}
+
+	fn interpretations_for_shape(&self, spec: &ParsingSpec, shape: &Regex) -> Vec<Interpretation> {
+		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
+
+		let rule_nfa: Tnfa = Tnfa::for_single_rule(RuleIdx::NIL, shape, &[]);
+
+		let mut interpretations: Vec<Interpretation> = Vec::new();
+
+		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(maybe_delimiters));
+
+		let intersection: Tnfa = nfa.intersect::<true>(&search_nfa);
+
+		let paths: Vec<Path> = intersection.compute_paths::<false>();
+
+		for path in paths.iter() {
+			assert!(!path.components.is_empty());
+
+			let mut sub_queries: Vec<SubQuery> = Vec::new();
+
+			if let PathComponent::Literal(contents) = path.components.first().unwrap()
+				&& (path.components.len() == 1)
+			{
+				let rule: &RootRule = &spec[path.rule_idx];
+				let rule_info: &RuleInfo = if let Some(rule_info) = maybe_rule_info {
+					assert_eq!(rule_info.root_idx, rule.idx);
+					rule_info
+				} else {
+					&rule[None]
+				};
+
+				let mut implicit_capture: SubQuery = SubQuery::new(group, &rule[None], contents.clone());
+
+				if let Some(sub_rule) = &rule_info.maybe_sub_rule {
+					assert!(!sub_rule.is_leaf());
+
+					let mut static_text: SubQuery = SubQuery::new_static_text(contents.clone());
+
+					implicit_capture.surround_with_wildcards();
+					static_text.surround_with_wildcards();
+
+					interpretations.push(Interpretation {
+						sub_queries: vec![implicit_capture],
+					});
+					interpretations.push(Interpretation {
+						sub_queries: vec![static_text],
+					});
+				} else {
+					interpretations.push(Interpretation {
+						sub_queries: vec![implicit_capture],
+					});
+				}
+
+				continue;
+			}
+
+			for token in path.components.iter() {
+				match token {
+					PathComponent::Literal(contents) => {
+						sub_queries.push(SubQuery::new_static_text(contents.clone()));
+					},
+					PathComponent::Capture {
+						maybe_sub_rule_id,
+						contents,
+					} => {
+						let rule: &RootRule = &spec[path.rule_idx];
+						let rule_info: &RuleInfo = &rule[*maybe_sub_rule_id];
+						sub_queries.push(SubQuery::new(group, rule_info, contents.clone()));
+					},
+				}
+			}
+
+			interpretations.push(Interpretation { sub_queries });
+		}
+
+		interpretations.iter().for_each(Interpretation::invariants);
 
 		interpretations.sort();
 		interpretations.dedup();
@@ -1098,20 +1191,28 @@ mod test {
 			"#
 		};
 
-		let interpretations: Vec<Interpretation> = do_search(&spec, "*172.31.17.135*", "");
+		let interpretations: Vec<Interpretation> = do_full_search(&spec, "*172.31.17.135*", "hello172.31.17.135world");
 
 		println!("=== Interpretations");
 		for interpretation in interpretations.iter() {
 			println!("- {interpretation:?}");
 		}
 
-		assert_eq!(interpretations.len(), 3);
+		panic!();
+	}
+
+	fn do_full_search(spec: &ParsingSpec, query: &str, shape: &str) -> Vec<Interpretation> {
+		let query: SearchString = SearchString::parse(query).unwrap();
+
+		let mut interpretations: Vec<Vec<Interpretation>> = query.search_by_log_shapes(&spec, &[shape]);
+
+		interpretations.pop().unwrap()
 	}
 
 	fn do_search(spec: &ParsingSpec, query: &str, name: &str) -> Vec<Interpretation> {
 		let query: SearchString = SearchString::parse(query).unwrap();
 
-		let interpretations: Vec<Interpretation> = query.get_interpretations(&spec, name);
+		let interpretations: Vec<Interpretation> = query.search_by_name(&spec, name);
 
 		interpretations
 	}

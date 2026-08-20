@@ -308,11 +308,10 @@ impl ParsingSpec {
 		non_ascii_delimiters: String::new(),
 	};
 
-	/// Returns `None` iff `name` is empty.
-	/// Otherwise, returns (sub)rules with the exact fully qualified name match.
-	pub fn rules_for_name(&self, name: &str) -> Option<Vec<(&RuleInfo, &Regex)>> {
+	/// (Sub)rules with the exact fully qualified name match.
+	pub fn rules_for_name(&self, name: &str) -> Vec<(&RuleInfo, &Regex)> {
 		let parts: Vec<&str> = name.split('.').collect::<Vec<_>>();
-		let rule_name: &str = parts.first().copied()?;
+		let rule_name: &str = parts.first().copied().expect("name fragment is empty");
 		let capture_names: &[&str] = &parts[1..];
 
 		if let Some(first) = capture_names.first().copied() {
@@ -323,17 +322,94 @@ impl ParsingSpec {
 				}
 				root_rule.find_capture(&root_rule.regex.regex, first, &capture_names[1..], &mut possibilities);
 			}
-			Some(possibilities)
+			possibilities
 		} else {
 			// Just a root name; no trailing parts.
-			Some(
-				self.rules
-					.iter()
-					.filter(|root_rule| &*root_rule.name == rule_name)
-					.map(|root_rule| (&root_rule[None], &root_rule.regex.regex))
-					.collect::<Vec<_>>(),
-			)
+			self.rules
+				.iter()
+				.filter(|root_rule| &*root_rule.name == rule_name)
+				.map(|root_rule| (&root_rule[None], &root_rule.regex.regex))
+				.collect::<Vec<_>>()
 		}
+	}
+
+	/// Converts a shape string to a regular expression.
+	/// References to rules (by name) should be enclosed with percent symbols as `%foo.bar%`.
+	/// Returns `Err(name)` if a name is not found.
+	pub fn shape_as_automata(&self, shape: &str) -> Result<Tnfa, String> {
+		enum Kind {
+			Text(String),
+			Rule(String),
+		}
+
+		let mut sequence: Vec<Tnfa> = Vec::new();
+
+		let mut current: Kind = Kind::Text(String::new());
+
+		for ch in shape.chars() {
+			match current {
+				Kind::Text(mut buffer) => {
+					if ch == '%' {
+						// Append static text
+						let regex: Regex = Regex::Sequence(buffer.chars().map(Regex::Literal).collect::<Vec<_>>());
+						sequence.push(Tnfa::for_regex(&regex));
+
+						// Switch to parsing rule name.
+						current = Kind::Rule(String::new());
+					} else {
+						buffer.push(ch);
+						current = Kind::Text(buffer);
+					}
+				},
+				Kind::Rule(mut rule_name) => {
+					if ch == '%' {
+						// Append rule regexes.
+						let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(&rule_name);
+						if rules.is_empty() {
+							return Err(rule_name);
+						}
+						let branches: Tnfa = rules
+							.iter()
+							.map(|&(info, regex)| {
+								let regex: &Regex = if info.is_root() && !self[info.root_idx].has_captures() {
+									&Regex::Capture(
+										Arc::new(SubRule {
+											name: info.root_name.clone(),
+											regex: regex.clone(),
+											id: NonZero::<u16>::MAX,
+											parent_id: None,
+											descendents: 0,
+											qualified_name: info.root_name.clone(),
+											fully_qualified_name: info.root_name.clone(),
+										})
+										.into(),
+									)
+								} else {
+									regex
+								};
+								Tnfa::for_single_rule(info.root_idx, regex, &[])
+							})
+							.fold(Tnfa::BLANK, |accum, x| accum.or(&x));
+						sequence.push(branches);
+
+						// Switch to static text.
+						current = Kind::Text(String::new());
+					} else {
+						rule_name.push(ch);
+						current = Kind::Rule(rule_name);
+					}
+				},
+			}
+		}
+
+		let Kind::Text(buffer): Kind = current else {
+			panic!("malformed log shape '{}'", shape.escape_default());
+		};
+
+		let regex: Regex = Regex::Sequence(buffer.chars().map(Regex::Literal).collect::<Vec<_>>());
+		sequence.push(Tnfa::for_regex(&regex));
+
+		Ok(sequence.into_iter().fold(Tnfa::BLANK, |accum, x| accum.concat(&x)))
 	}
 }
 
@@ -350,100 +426,6 @@ impl std::ops::Index<EncodingIdx> for ParsingSpec {
 
 	fn index(&self, idx: EncodingIdx) -> &Self::Output {
 		&self.encodings[usize::from(u16::from(idx) - 1)]
-	}
-}
-
-impl RootRule {
-	/// Construct a new root rule;
-	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
-	pub fn new(
-		idx: RuleIdx,
-		name: Arc<str>,
-		priority: i32,
-		regex: AnchoredRegex,
-		maybe_encoding: Option<Arc<Encoding>>,
-		dfa: Tdfa,
-	) -> Self {
-		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
-		rule_info.push(RuleInfo {
-			root_idx: idx,
-			root_name: name.clone(),
-			maybe_sub_rule: None,
-			fully_qualified_name: name.clone(),
-		});
-
-		let mut stack: Vec<&Regex> = vec![&regex.regex];
-		while let Some(regex) = stack.pop() {
-			match regex {
-				Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
-				Regex::Capture(sub_rule) => {
-					let i: usize = sub_rule.id_as_usize();
-					assert_eq!(rule_info.len(), i);
-					rule_info.push(RuleInfo {
-						root_idx: idx,
-						root_name: name.clone(),
-						maybe_sub_rule: Some(sub_rule.clone()),
-						fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
-					});
-					stack.push(&sub_rule.regex);
-				},
-				Regex::KleeneClosure(item)
-				| Regex::KleenePlus(item)
-				| Regex::BoundedRepetition { item, .. }
-				| Regex::Placeholder { item, .. } => {
-					stack.push(item);
-				},
-				Regex::Sequence(items) | Regex::Alternation(items) => {
-					// Push on to stack in reverse to mirror DFS.
-					for sub_item in items.iter().rev() {
-						stack.push(sub_item);
-					}
-				},
-			}
-		}
-
-		Self {
-			idx,
-			name,
-			priority,
-			regex,
-			maybe_encoding,
-			rule_info,
-			dfa,
-		}
-	}
-
-	/// Find matching (nested) captures matching exactly (the fragments of) a fully qualified name.
-	fn find_capture<'a>(
-		&'a self,
-		current_regex: &'a Regex,
-		first: &str,
-		rest: &[&str],
-		collect: &mut Vec<(&'a RuleInfo, &'a Regex)>,
-	) {
-		match current_regex {
-			Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
-			Regex::Capture(sub_rule) => {
-				if sub_rule.name == first {
-					if let Some(first) = rest.first().copied() {
-						self.find_capture(&sub_rule.regex, first, &rest[1..], collect);
-					} else {
-						collect.push((&self[Some(sub_rule.id)], current_regex));
-					}
-				}
-			},
-			Regex::KleeneClosure(item)
-			| Regex::KleenePlus(item)
-			| Regex::BoundedRepetition { item, .. }
-			| Regex::Placeholder { item, .. } => {
-				self.find_capture(item, first, rest, collect);
-			},
-			Regex::Sequence(items) | Regex::Alternation(items) => {
-				for item in items.iter() {
-					self.find_capture(item, first, rest, collect);
-				}
-			},
-		}
 	}
 }
 

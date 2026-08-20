@@ -200,23 +200,28 @@ mod search {
 
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_search_by_log_shapes(
-		_parser: &Parser,
-		_input: CCharArray<'_>,
-		_log_shapes: CArray<'_, CCharArray<'_>>,
+		parser: &Parser,
+		input: CCharArray<'_>,
+		log_shapes: CArray<'_, CCharArray<'_>>,
 	) -> Box<Vec<Vec<Interpretation>>> {
-		// TODO
-		Box::new(Vec::new())
+		let input: SearchString = SearchString::parse(input.as_utf8().unwrap()).unwrap();
+		let log_shapes: Vec<&str> = log_shapes
+			.iter()
+			.map(|shape| shape.as_utf8().unwrap())
+			.collect::<Vec<_>>();
+		let interpretations_by_shapes: Vec<Vec<Interpretation>> = input.search_by_log_shapes(&parser.spec, &log_shapes);
+		Box::new(interpretations_by_shapes)
 	}
 
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_search_by_name(
 		parser: &Parser,
-		query: CCharArray<'_>,
+		input: CCharArray<'_>,
 		name: CCharArray<'_>,
 	) -> Box<Vec<Interpretation>> {
-		let query: SearchString = SearchString::parse(query.as_utf8().unwrap()).unwrap();
+		let input: SearchString = SearchString::parse(input.as_utf8().unwrap()).unwrap();
 		let name: &str = name.as_utf8().unwrap();
-		let interpretations: Vec<Interpretation> = query.get_interpretations(&parser.spec, name);
+		let interpretations: Vec<Interpretation> = input.search_by_name(&parser.spec, name);
 		Box::new(interpretations)
 	}
 

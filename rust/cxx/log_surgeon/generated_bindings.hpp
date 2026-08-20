@@ -230,13 +230,13 @@ extern "C" {
     );
 
     Box<Vec<Vec<Interpretation>>> log_surgeon_search_by_log_shapes(
-            Parser const* _parser,
-            CCharArray _input,
-            CArray<CCharArray> _log_shapes
+            Parser const* parser,
+            CCharArray input,
+            CArray<CCharArray> log_shapes
     );
 
     Box<Vec<Interpretation>>
-    log_surgeon_search_by_name(Parser const* parser, CCharArray query, CCharArray name);
+    log_surgeon_search_by_name(Parser const* parser, CCharArray input, CCharArray name);
 
     Interpretation const*
     log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);
