@@ -150,7 +150,7 @@ impl TryFrom<&str> for AnchoredRegex {
 	type Error = RegexError;
 
 	fn try_from(pattern: &str) -> Result<Self, Self::Error> {
-		AnchoredRegex::from_pattern_with_placeholders(pattern, "", &mut ())
+		AnchoredRegex::from_pattern_with_placeholders(pattern, &mut ())
 	}
 }
 
@@ -403,7 +403,7 @@ impl Regex {
 
 impl Regex {
 	// Post-order DFS; visit children first.
-	pub fn for_each_capture<E, F>(&mut self, func: &mut F) -> Result<(), E>
+	pub fn for_each_capture_mut<E, F>(&mut self, func: &mut F) -> Result<(), E>
 	where
 		F: FnMut(&mut SubRule) -> Result<(), E>,
 	{
@@ -411,18 +411,18 @@ impl Regex {
 			Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
 			Regex::Capture(sub_rule) => {
 				let sub_rule: &mut SubRule = Arc::get_mut(sub_rule).unwrap();
-				sub_rule.regex.for_each_capture(func)?;
+				sub_rule.regex.for_each_capture_mut(func)?;
 				func(sub_rule)?;
 			},
 			Regex::KleeneClosure(item)
 			| Regex::KleenePlus(item)
 			| Regex::BoundedRepetition { item, .. }
 			| Regex::Placeholder { item, .. } => {
-				item.for_each_capture(func)?;
+				item.for_each_capture_mut(func)?;
 			},
 			Regex::Sequence(items) | Regex::Alternation(items) => {
 				for child in items.iter_mut() {
-					child.for_each_capture(func)?;
+					child.for_each_capture_mut(func)?;
 				}
 			},
 		}

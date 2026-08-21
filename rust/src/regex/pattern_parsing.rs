@@ -95,11 +95,7 @@ impl<'a> RegexParsingError<'a> {
 
 impl AnchoredRegex {
 	/// Like [`Regex::from_pattern_with_placeholders`], but for a (potentially) anchored regex/pattern.
-	pub fn from_pattern_with_placeholders<T>(
-		mut pattern: &str,
-		root_name: &str,
-		lookup: &mut T,
-	) -> Result<Self, RegexError>
+	pub fn from_pattern_with_placeholders<T>(mut pattern: &str, lookup: &mut T) -> Result<Self, RegexError>
 	where
 		T: RegexPlaceholderLookup,
 	{
@@ -121,7 +117,7 @@ impl AnchoredRegex {
 		let mut total_captures: NonZero<u16> = NonZero::<u16>::MIN;
 
 		regex
-			.initialize_captures(root_name, &mut total_captures, &mut Vec::new())
+			.initialize_captures(&mut total_captures, &mut Vec::new())
 			.ok_or(RegexError {
 				consumed: pattern.to_owned(),
 				remaining: String::new(),
@@ -233,7 +229,6 @@ impl Regex {
 	/// Invariant: `parent_id < id`.
 	fn initialize_captures(
 		&mut self,
-		root_name: &str,
 		next_id: &mut NonZero<u16>,
 		stack: &mut Vec<(NonZero<u16>, Arc<str>)>,
 	) -> Option<usize> {
@@ -247,13 +242,13 @@ impl Regex {
 				sub_rule.id = *next_id;
 				sub_rule.qualified_name = Arc::from(format!(
 					"{}.{}",
-					maybe_parent.map_or(root_name, |(_, name)| name),
+					maybe_parent.map_or("", |(_, name)| name),
 					sub_rule.name
 				));
 				stack.push((sub_rule.id, sub_rule.qualified_name.clone()));
 				// `id` is `u16`.
 				*next_id = next_id.checked_add(1)?;
-				sub_rule.descendents = sub_rule.regex.initialize_captures(root_name, next_id, stack)?;
+				sub_rule.descendents = sub_rule.regex.initialize_captures(next_id, stack)?;
 				// `bread` is `usize`.
 				bread = 1 + sub_rule.descendents;
 				stack.pop();
@@ -262,11 +257,11 @@ impl Regex {
 			| Self::KleenePlus(item)
 			| Self::BoundedRepetition { item, .. }
 			| Self::Placeholder { item, .. } => {
-				bread += item.initialize_captures(root_name, next_id, stack)?;
+				bread += item.initialize_captures(next_id, stack)?;
 			},
 			Self::Sequence(items) | Self::Alternation(items) => {
 				for sub_item in items.iter_mut() {
-					bread += sub_item.initialize_captures(root_name, next_id, stack)?;
+					bread += sub_item.initialize_captures(next_id, stack)?;
 				}
 			},
 		}

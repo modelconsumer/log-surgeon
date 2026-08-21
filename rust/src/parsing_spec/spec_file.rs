@@ -153,12 +153,10 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let regex: AnchoredRegex =
-						AnchoredRegex::from_pattern_with_placeholders(pattern, name, &mut builder).map_err(|e| {
-							ParsingSpecFileError {
-								line_offset,
-								kind: ParsingSpecFileErrorKind::InvalidPattern(e),
-							}
+					let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(pattern, &mut builder)
+						.map_err(|e| ParsingSpecFileError {
+							line_offset,
+							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
 						})?;
 
 					let Ok(_) = builder.add_rule_with_priority(priority, name, regex);

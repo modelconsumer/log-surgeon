@@ -449,8 +449,6 @@ impl<'a> SearchStringView<'a> {
 
 		let has_wildcard: bool = extended.as_str().iter().any(SymbolicChar::is_wildcard);
 
-		todo!();
-		/*
 		let potential_interpretations: Vec<Interpretation> = extended.interpretations_for_nfa(
 			spec,
 			&spec.nfa_for_search,
@@ -479,10 +477,9 @@ impl<'a> SearchStringView<'a> {
 		}
 
 		interpretations
-		*/
 	}
 
-	fn _before(&self) -> char {
+	fn before(&self) -> char {
 		if self.start == 0 {
 			return '\n';
 		}
@@ -492,7 +489,7 @@ impl<'a> SearchStringView<'a> {
 		}
 	}
 
-	fn _after(&self) -> char {
+	fn after(&self) -> char {
 		if self.end == self.full_string.0.len() {
 			return '\n';
 		}
@@ -705,7 +702,7 @@ impl<'a> SearchStringView<'a> {
 		interpretations
 	}
 
-	fn _ends_with_delimiter(&self, spec: &ParsingSpec) -> bool {
+	fn ends_with_delimiter(&self, spec: &ParsingSpec) -> bool {
 		let SymbolicChar::Literal(ch): SymbolicChar = *self.as_str().last().unwrap() else {
 			return true;
 		};
@@ -798,6 +795,10 @@ impl SubQuery {
 			accum.push_str(&ch.to_string());
 			accum
 		});
+		if sub_rule.fully_qualified_name.is_empty() {
+			panic!("qualified name is {}", sub_rule.qualified_name);
+		}
+		assert!(!sub_rule.fully_qualified_name.is_empty());
 		Self {
 			group,
 			rule_idx: Some(sub_rule.root_rule_idx),

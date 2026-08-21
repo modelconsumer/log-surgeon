@@ -2,6 +2,7 @@ use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::dfa::Tdfa;
+use crate::parsing_spec::Encoding;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 
@@ -119,7 +120,7 @@ impl std::fmt::Display for RuleIdx {
 impl RootRule {
 	/// Construct a new root rule;
 	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
-	pub fn new(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, dfa: Tdfa) -> Self {
+	pub fn new(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, encodings: &[Arc<Encoding>]) -> Self {
 		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
 		rule_info.push(RuleInfo {
 			root_idx: idx,
@@ -177,6 +178,8 @@ impl RootRule {
 				},
 			}
 		}
+
+		let dfa: Tdfa = Tdfa::for_single_rule(idx, &regex.regex, encodings);
 
 		Self {
 			idx,

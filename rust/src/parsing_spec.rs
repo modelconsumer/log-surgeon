@@ -49,6 +49,7 @@ pub struct ParsingSpec {
 	/// DFA used for lexing/parsing;
 	/// determine which root rule matched, without tags for matching sub-rules.
 	pub dfa_for_parsing: Tdfa,
+	pub nfa_for_search: Tnfa,
 
 	/// Derived from `delimiters`.
 	pub ascii_delimiters: [bool; 0x80],
@@ -132,7 +133,11 @@ impl ParsingSpecBuilder {
 		assert!(!name.is_empty());
 		assert_ne!(&*name, "delimiters");
 
-		let regex: AnchoredRegex = regex.try_into()?;
+		let mut regex: AnchoredRegex = regex.try_into()?;
+		regex.regex.for_each_capture_mut(&mut |sub_rule| {
+			sub_rule.fully_qualified_name = Arc::from(format!("{}{}", name, sub_rule.qualified_name));
+			Ok::<(), std::convert::Infallible>(())
+		});
 
 		let rules: &mut Vec<(Arc<str>, AnchoredRegex)> =
 			self.rules_by_priority.entry(priority).or_insert_with(Vec::new);
@@ -199,9 +204,9 @@ impl ParsingSpecBuilder {
 			for (rule_name, rule_regex) in rules_at_priority.into_iter() {
 				let rule_idx: RuleIdx = RuleIdx::new(index);
 
-				let dfa: Tdfa = Tdfa::for_single_rule(rule_idx, &rule_regex.regex, &self.encodings);
-
-				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, dfa));
+				rules.push(RootRule::new(
+					rule_idx, rule_name, priority, rule_regex, &self.encodings,
+				));
 
 				index = index
 					.checked_add(1)
@@ -223,6 +228,8 @@ impl ParsingSpecBuilder {
 			minimized
 		});
 
+		let nfa_for_search: Tnfa = Tnfa::for_rules(&rules, &self.delimiters, &self.encodings);
+
 		let mut ascii_delimiters: [bool; 0x80] = [false; 0x80];
 		let mut non_ascii_delimiters: String = String::new();
 		for ch in self.delimiters.chars() {
@@ -241,6 +248,7 @@ impl ParsingSpecBuilder {
 			delimiters: self.delimiters,
 			encodings: self.encodings,
 			dfa_for_parsing,
+			nfa_for_search,
 			ascii_delimiters,
 			non_ascii_delimiters,
 		}
@@ -262,7 +270,7 @@ impl ParsingSpec {
 		delimiters: String::new(),
 		encodings: Vec::new(),
 		dfa_for_parsing: Tdfa::BLANK,
-		// nfa_for_search: Tnfa::BLANK,
+		nfa_for_search: Tnfa::BLANK,
 		ascii_delimiters: [false; 0x80],
 		non_ascii_delimiters: String::new(),
 	};
