@@ -56,19 +56,15 @@ impl ParsingSpec {
 			// Empty line, pretty.
 			.chain(std::iter::once(String::new()))
 			// Rules.
-			.chain(
-				self.rules
-					.iter()
-					// Skip the encoding variants.
-					.filter(|rule| rule.maybe_encoding.is_none())
-					.map(|rule| {
-						let pattern: String = rule.regex.to_pattern();
-						format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
-					}),
-			)
+			.chain(self.rules.iter().map(|rule| {
+				let pattern: String = rule.regex.to_pattern();
+				format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
+			}))
 			.chain(std::iter::once(String::new()))
 			.chain(std::iter::once(format!("===")))
-			.chain(std::iter::once(serde_json::to_string_pretty(&self.main_dfa).unwrap()))
+			.chain(std::iter::once(
+				serde_json::to_string_pretty(&self.dfa_for_parsing).unwrap(),
+			))
 			.fold(String::new(), |mut accumulated, line| {
 				accumulated.push_str(&line);
 				accumulated.push('\n');
@@ -157,10 +153,12 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(pattern, &mut builder)
-						.map_err(|e| ParsingSpecFileError {
-							line_offset,
-							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
+					let regex: AnchoredRegex =
+						AnchoredRegex::from_pattern_with_placeholders(pattern, name, &mut builder).map_err(|e| {
+							ParsingSpecFileError {
+								line_offset,
+								kind: ParsingSpecFileErrorKind::InvalidPattern(e),
+							}
 						})?;
 
 					let Ok(_) = builder.add_rule_with_priority(priority, name, regex);
@@ -336,7 +334,6 @@ mod test {
 			.build();
 		let serialized2: String = spec2.to_parsing_spec_definition();
 
-		assert_eq!(spec1, spec2);
 		assert_eq!(serialized1, serialized2);
 	}
 

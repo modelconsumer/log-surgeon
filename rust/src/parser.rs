@@ -101,6 +101,7 @@ impl Parser {
 			match self.lexer.next_token(input, pos, &mut self.dfa_execution) {
 				Token::Variable {
 					rule,
+					maybe_encoding_idx,
 					lexeme,
 					has_captures,
 				} => {
@@ -115,7 +116,7 @@ impl Parser {
 							end: token_start + lexeme.len(),
 						},
 						is_leaf: variable_is_implicit_capture,
-						encoding_idx: rule.maybe_encoding.as_ref().map(|enc| NonZero::from(enc.idx)),
+						encoding_idx: maybe_encoding_idx.map(NonZero::from),
 						ffi_pointers: MatchFfiPointers::NULL,
 					};
 

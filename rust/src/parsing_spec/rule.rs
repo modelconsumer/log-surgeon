@@ -2,7 +2,6 @@ use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::dfa::Tdfa;
-use crate::parsing_spec::Encoding;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 
@@ -21,12 +20,6 @@ pub struct RootRule {
 	pub priority: i32,
 
 	pub regex: AnchoredRegex,
-	/// If and only if a root rule has no sub-rules,
-	/// it is split into multiple root rules corresponding to the different encodings.
-	/// If a root rule does have sub-rules, it is not a leaf rule,
-	/// so the root matches are not encoded/the encoding is not relevant
-	/// (`maybe_encoding` is `None` in this case).
-	pub maybe_encoding: Option<Arc<Encoding>>,
 	pub rule_info: Vec<RuleInfo>,
 
 	pub dfa: Tdfa,
@@ -47,6 +40,7 @@ pub struct SubRule {
 	pub name: Arc<str>,
 	pub regex: Regex,
 
+	pub root_rule_idx: RuleIdx,
 	/// ID statically assigned left-to-right based on the regex pattern.
 	/// For example, the pattern `(?<start>[a-z]+(?<rest>\.[a-z]+)*)|(?<start>[0-9]+)` has three non-zero capture IDs.
 	/// When the pattern is actually matched,
@@ -125,14 +119,7 @@ impl std::fmt::Display for RuleIdx {
 impl RootRule {
 	/// Construct a new root rule;
 	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
-	pub fn new(
-		idx: RuleIdx,
-		name: Arc<str>,
-		priority: i32,
-		regex: AnchoredRegex,
-		maybe_encoding: Option<Arc<Encoding>>,
-		dfa: Tdfa,
-	) -> Self {
+	pub fn new(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, dfa: Tdfa) -> Self {
 		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
 		rule_info.push(RuleInfo {
 			root_idx: idx,
@@ -141,6 +128,23 @@ impl RootRule {
 			fully_qualified_name: name.clone(),
 		});
 
+		/*
+		regex.regex.for_each_capture(&mut |sub_rule| {
+			{
+				sub_rule.fully_qualified_name = Arc::from(format!("{}{}", name, sub_rule.qualified_name));
+			}
+			// let i: usize = sub_rule.id_as_usize();
+			// assert_eq!(rule_info.len(), i);
+			// rule_info.push(RuleInfo {
+			// 	root_idx: idx,
+			// 	root_name: name.clone(),
+			// 	maybe_sub_rule: Some(sub_rule.clone()),
+			// 	fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
+			// });
+			Ok::<(), std::convert::Infallible>(())
+		});
+		*/
+
 		let mut stack: Vec<&Regex> = vec![&regex.regex];
 		while let Some(regex) = stack.pop() {
 			match regex {
@@ -148,13 +152,16 @@ impl RootRule {
 				Regex::Capture(sub_rule) => {
 					let i: usize = sub_rule.id_as_usize();
 					assert_eq!(rule_info.len(), i);
+					stack.push(&sub_rule.regex);
 					rule_info.push(RuleInfo {
 						root_idx: idx,
 						root_name: name.clone(),
+						// Note: `sub_rule` has type `&DeepClone<Arc<SubRule>>`;
+						// `(*sub_rule)` has type `DeepClone<Arc<SubRule>>`,
+						// and so `(**sub_rule)` has type `Arc<SubRule>`.
 						maybe_sub_rule: Some((**sub_rule).clone()),
 						fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
 					});
-					stack.push(&sub_rule.regex);
 				},
 				Regex::KleeneClosure(item)
 				| Regex::KleenePlus(item)
@@ -176,7 +183,6 @@ impl RootRule {
 			name,
 			priority,
 			regex,
-			maybe_encoding,
 			rule_info,
 			dfa,
 		}

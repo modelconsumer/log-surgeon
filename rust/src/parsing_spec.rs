@@ -13,7 +13,6 @@ pub use rule::RuleIdx;
 pub use rule::RuleInfo;
 pub use rule::SubRule;
 
-use crate::dfa::CompressedDfa;
 use crate::dfa::Tdfa;
 use crate::nfa::Tnfa;
 use crate::regex::AnchoredRegex;
@@ -49,11 +48,7 @@ pub struct ParsingSpec {
 
 	/// DFA used for lexing/parsing;
 	/// determine which root rule matched, without tags for matching sub-rules.
-	pub main_dfa: Tdfa,
-	/// TNFA used for search.
-	pub main_nfa: Tnfa,
-	/// TODO
-	pub optimized_dfa: CompressedDfa,
+	pub dfa_for_parsing: Tdfa,
 
 	/// Derived from `delimiters`.
 	pub ascii_delimiters: [bool; 0x80],
@@ -202,40 +197,11 @@ impl ParsingSpecBuilder {
 		let mut index: NonZero<u16> = NonZero::<u16>::MIN;
 		for (priority, rules_at_priority) in self.rules_by_priority.into_iter().rev() {
 			for (rule_name, rule_regex) in rules_at_priority.into_iter() {
-				if rule_regex.total_captures == NonZero::<u16>::MIN {
-					let leaf_nfa: Tnfa = Tnfa::for_regex(&rule_regex.regex);
-
-					for enc in self.encodings.iter() {
-						let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
-
-						if !intersection.can_accept() {
-							continue;
-						}
-
-						let rule_idx: RuleIdx = RuleIdx::new(index);
-
-						let dfa: Tdfa = Tdfa::determinization(&intersection);
-
-						rules.push(RootRule::new(
-							rule_idx,
-							rule_name.clone(),
-							priority,
-							rule_regex.clone(),
-							Some(enc.clone()),
-							dfa,
-						));
-
-						index = index
-							.checked_add(1)
-							.expect("more than `u16::MAX` rules (not supported)");
-					}
-				}
-
 				let rule_idx: RuleIdx = RuleIdx::new(index);
 
 				let dfa: Tdfa = Tdfa::for_single_rule(rule_idx, &rule_regex.regex, &self.encodings);
 
-				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, None, dfa));
+				rules.push(RootRule::new(rule_idx, rule_name, priority, rule_regex, dfa));
 
 				index = index
 					.checked_add(1)
@@ -243,11 +209,9 @@ impl ParsingSpecBuilder {
 			}
 		}
 
-		let main_nfa: Tnfa = Tnfa::for_rules::<true, _>(rules.iter(), &self.delimiters);
-
-		let main_dfa: Tdfa = self.maybe_cached_dfa.unwrap_or_else(|| {
+		let dfa_for_parsing: Tdfa = self.maybe_cached_dfa.unwrap_or_else(|| {
 			now!(t0);
-			let main_dfa: Tdfa = Tdfa::for_rules(rules.iter(), self.delimiters.clone());
+			let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
 			now!(t1);
 			let minimized: Tdfa = main_dfa.canonicalize();
 			now!(t2);
@@ -258,8 +222,6 @@ impl ParsingSpecBuilder {
 			);
 			minimized
 		});
-
-		let optimized_dfa: CompressedDfa = main_dfa.compress();
 
 		let mut ascii_delimiters: [bool; 0x80] = [false; 0x80];
 		let mut non_ascii_delimiters: String = String::new();
@@ -278,9 +240,7 @@ impl ParsingSpecBuilder {
 			placeholders: self.placeholders,
 			delimiters: self.delimiters,
 			encodings: self.encodings,
-			main_nfa,
-			main_dfa,
-			optimized_dfa,
+			dfa_for_parsing,
 			ascii_delimiters,
 			non_ascii_delimiters,
 		}
@@ -301,9 +261,8 @@ impl ParsingSpec {
 		placeholders: BTreeMap::new(),
 		delimiters: String::new(),
 		encodings: Vec::new(),
-		main_dfa: Tdfa::BLANK,
-		main_nfa: Tnfa::BLANK,
-		optimized_dfa: CompressedDfa::BLANK,
+		dfa_for_parsing: Tdfa::BLANK,
+		// nfa_for_search: Tnfa::BLANK,
 		ascii_delimiters: [false; 0x80],
 		non_ascii_delimiters: String::new(),
 	};
@@ -336,7 +295,9 @@ impl ParsingSpec {
 	/// Converts a shape string to a regular expression.
 	/// References to rules (by name) should be enclosed with percent symbols as `%foo.bar%`.
 	/// Returns `Err(name)` if a name is not found.
-	pub fn shape_as_automata(&self, shape: &str) -> Result<Tnfa, String> {
+	pub fn automata_for_shape(&self, shape: &str) -> Result<Tnfa, String> {
+		const SEPARATOR: char = '%';
+
 		enum Kind {
 			Text(String),
 			Rule(String),
@@ -349,7 +310,7 @@ impl ParsingSpec {
 		for ch in shape.chars() {
 			match current {
 				Kind::Text(mut buffer) => {
-					if ch == '%' {
+					if ch == SEPARATOR {
 						// Append static text
 						let regex: Regex = Regex::Sequence(buffer.chars().map(Regex::Literal).collect::<Vec<_>>());
 						sequence.push(Tnfa::for_regex(&regex));
@@ -362,12 +323,13 @@ impl ParsingSpec {
 					}
 				},
 				Kind::Rule(mut rule_name) => {
-					if ch == '%' {
+					if ch == SEPARATOR {
 						// Append rule regexes.
 						let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(&rule_name);
 						if rules.is_empty() {
 							return Err(rule_name);
 						}
+
 						let branches: Tnfa = rules
 							.iter()
 							.map(|&(info, regex)| {
@@ -376,6 +338,8 @@ impl ParsingSpec {
 										Arc::new(SubRule {
 											name: info.root_name.clone(),
 											regex: regex.clone(),
+											root_rule_idx: info.root_idx,
+											// TODO
 											id: NonZero::<u16>::MAX,
 											parent_id: None,
 											descendents: 0,
@@ -447,13 +411,13 @@ mod test {
 			.unwrap();
 
 		let spec: ParsingSpec = builder.build();
-		assert_eq!(spec.rules.len(), 3);
+		assert_eq!(spec.rules.len(), 2);
 
 		let mut parser: Parser = Parser::new(Arc::new(spec));
 
 		let event: LogEvent<'_> = parser.next_event("a1b", &mut 0).unwrap();
 		assert_eq!(event.all_matches.len(), 1);
-		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(2).unwrap()));
+		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(1).unwrap()));
 		assert_eq!(event.all_matches[0].encoding_idx, None);
 
 		let event: LogEvent<'_> = parser.next_event("123", &mut 0).unwrap();
@@ -462,8 +426,10 @@ mod test {
 		assert_eq!(event.all_matches[0].encoding_idx.unwrap(), NonZero::new(1).unwrap());
 
 		let event: LogEvent<'_> = parser.next_event("12.34.56.78", &mut 0).unwrap();
+		assert_eq!(event.message.as_str(), "12.34.56.78");
+		println!("matches are {:?}", event.all_matches.as_slice());
 		assert_eq!(event.all_matches.len(), 2);
-		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(3).unwrap()));
+		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(2).unwrap()));
 		assert_eq!(event.all_matches[0].encoding_idx, None);
 		assert_eq!(event.all_matches[1].encoding_idx.unwrap(), NonZero::new(1).unwrap());
 	}

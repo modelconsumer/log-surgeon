@@ -9,6 +9,7 @@ use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::RuleInfo;
+use crate::parsing_spec::SubRule;
 use crate::regex::Regex;
 
 #[derive(Debug)]
@@ -344,8 +345,9 @@ impl SearchString {
 			.iter()
 			.map(|shape| {
 				let shape: &str = shape.as_ref();
-				let shape_as_regex: Regex = spec.shape_as_regex(shape).unwrap();
-				view.interpretations_for_shape(spec, &shape_as_regex)
+				// TODO unwrap
+				let automata: Tnfa = spec.automata_for_shape(shape).unwrap();
+				view.interpretations_for_shape(spec, &automata)
 			})
 			.collect::<Vec<_>>()
 	}
@@ -430,6 +432,7 @@ impl SearchString {
 }
 
 impl<'a> SearchStringView<'a> {
+	#[allow(unused)]
 	fn single_token_interpretations(&self, spec: &ParsingSpec, group: usize) -> Vec<Interpretation> {
 		assert!(!self.is_empty());
 
@@ -446,9 +449,11 @@ impl<'a> SearchStringView<'a> {
 
 		let has_wildcard: bool = extended.as_str().iter().any(SymbolicChar::is_wildcard);
 
+		todo!();
+		/*
 		let potential_interpretations: Vec<Interpretation> = extended.interpretations_for_nfa(
 			spec,
-			&spec.main_nfa,
+			&spec.nfa_for_search,
 			group,
 			None,
 			Some((extended.before(), extended.after())),
@@ -474,9 +479,10 @@ impl<'a> SearchStringView<'a> {
 		}
 
 		interpretations
+		*/
 	}
 
-	fn before(&self) -> char {
+	fn _before(&self) -> char {
 		if self.start == 0 {
 			return '\n';
 		}
@@ -486,7 +492,7 @@ impl<'a> SearchStringView<'a> {
 		}
 	}
 
-	fn after(&self) -> char {
+	fn _after(&self) -> char {
 		if self.end == self.full_string.0.len() {
 			return '\n';
 		}
@@ -563,10 +569,8 @@ impl<'a> SearchStringView<'a> {
 		interpretations
 	}
 
-	fn interpretations_for_shape(&self, spec: &ParsingSpec, shape: &Regex) -> Vec<Interpretation> {
+	fn interpretations_for_shape(&self, _spec: &ParsingSpec, shape_nfa: &Tnfa) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
-
-		let shape_nfa: Tnfa = Tnfa::for_single_rule(RuleIdx::NIL, shape, &[]);
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
@@ -581,51 +585,13 @@ impl<'a> SearchStringView<'a> {
 
 			let mut sub_queries: Vec<SubQuery> = Vec::new();
 
-			if let PathComponent::Literal(contents) = path.components.first().unwrap()
-				&& (path.components.len() == 1)
-			{
-				let rule: &RootRule = &spec[path.rule_idx];
-				let rule_info: &RuleInfo = if let Some(rule_info) = maybe_rule_info {
-					assert_eq!(rule_info.root_idx, rule.idx);
-					rule_info
-				} else {
-					&rule[None]
-				};
-
-				let mut implicit_capture: SubQuery = SubQuery::new(group, &rule[None], contents.clone());
-
-				if let Some(sub_rule) = &rule_info.maybe_sub_rule {
-					assert!(!sub_rule.is_leaf());
-
-					let mut static_text: SubQuery = SubQuery::new_static_text(contents.clone());
-
-					implicit_capture.surround_with_wildcards();
-					static_text.surround_with_wildcards();
-
-					interpretations.push(Interpretation {
-						sub_queries: vec![implicit_capture],
-					});
-					interpretations.push(Interpretation {
-						sub_queries: vec![static_text],
-					});
-				} else {
-					interpretations.push(Interpretation {
-						sub_queries: vec![implicit_capture],
-					});
-				}
-
-				continue;
-			}
-
 			for token in path.components.iter() {
 				match token {
 					PathComponent::Literal(contents) => {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						let rule: &RootRule = &spec[path.rule_idx];
-						let rule_info: &RuleInfo = &rule[sub_rule.id];
-						sub_queries.push(SubQuery::new(group, rule_info, contents.clone()));
+						sub_queries.push(SubQuery::new(1, sub_rule, contents.clone()));
 					},
 				}
 			}
@@ -679,7 +645,21 @@ impl<'a> SearchStringView<'a> {
 					&rule[None]
 				};
 
-				let mut implicit_capture: SubQuery = SubQuery::new(group, &rule[None], contents.clone());
+				let mut implicit_capture: SubQuery = SubQuery::new(
+					group,
+					&Arc::new(SubRule {
+						name: rule.name.clone(),
+						regex: rule.regex.regex.clone(),
+						root_rule_idx: rule.idx,
+						// TODO
+						id: NonZero::<u16>::MAX,
+						parent_id: None,
+						descendents: 0,
+						qualified_name: rule.name.clone(),
+						fully_qualified_name: rule.name.clone(),
+					}),
+					contents.clone(),
+				);
 
 				if let Some(sub_rule) = &rule_info.maybe_sub_rule {
 					assert!(!sub_rule.is_leaf());
@@ -710,9 +690,7 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						let rule: &RootRule = &spec[path.rule_idx];
-						let rule_info: &RuleInfo = &rule[sub_rule.id];
-						sub_queries.push(SubQuery::new(group, rule_info, contents.clone()));
+						sub_queries.push(SubQuery::new(group, sub_rule, contents.clone()));
 					},
 				}
 			}
@@ -727,7 +705,7 @@ impl<'a> SearchStringView<'a> {
 		interpretations
 	}
 
-	fn ends_with_delimiter(&self, spec: &ParsingSpec) -> bool {
+	fn _ends_with_delimiter(&self, spec: &ParsingSpec) -> bool {
 		let SymbolicChar::Literal(ch): SymbolicChar = *self.as_str().last().unwrap() else {
 			return true;
 		};
@@ -814,7 +792,7 @@ impl SubQuery {
 		}
 	}
 
-	fn new(group: usize, rule_info: &RuleInfo, symbolic_value: Vec<SymbolicChar>) -> Self {
+	fn new(group: usize, sub_rule: &SubRule, symbolic_value: Vec<SymbolicChar>) -> Self {
 		// TODO duplicated above
 		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
 			accum.push_str(&ch.to_string());
@@ -822,8 +800,8 @@ impl SubQuery {
 		});
 		Self {
 			group,
-			rule_idx: Some(rule_info.root_idx),
-			fully_qualified_name: rule_info.fully_qualified_name.clone(),
+			rule_idx: Some(sub_rule.root_rule_idx),
+			fully_qualified_name: sub_rule.fully_qualified_name.clone(),
 			symbolic_value,
 			string_value,
 		}

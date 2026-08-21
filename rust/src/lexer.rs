@@ -5,6 +5,7 @@ use crate::dfa::Jit;
 use crate::dfa::JittedDfa;
 use crate::dfa::MatchedRule;
 use crate::dfa::TdfaExecution;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
@@ -24,6 +25,7 @@ pub struct Lexer {
 pub enum Token<'spec, 'input> {
 	Variable {
 		rule: &'spec RootRule,
+		maybe_encoding_idx: Option<EncodingIdx>,
 		lexeme: &'input str,
 		has_captures: bool,
 	},
@@ -37,7 +39,7 @@ impl Lexer {
 		let mut jit: Jit = Jit::new();
 
 		let maybe_jitted_dfa: Option<JittedDfa> = if cfg!(feature = "jit") {
-			Some(jit.jit(&spec.main_dfa).unwrap())
+			Some(jit.jit(&spec.dfa_for_parsing).unwrap())
 		} else {
 			None
 		};
@@ -98,12 +100,14 @@ impl Lexer {
 
 		let char_before: u32 = u32::from(input_before.chars().rev().next().unwrap_or('\n'));
 
-		if let Some(MatchedRule { rule_idx, lexeme }) =
-			self.execute_dfa::<{ cfg!(feature = "jit") }>(input_remaining, char_before)
+		if let Some(MatchedRule {
+			rule_idx,
+			maybe_encoding_idx,
+			lexeme,
+		}) = self.execute_dfa::<{ cfg!(feature = "jit") }>(input_remaining, char_before)
 		{
 			let rule: &RootRule = &self.spec[rule_idx];
 			let has_captures: bool = rule.has_captures();
-			dfa_execution.clear();
 			if has_captures {
 				let matched: bool = rule.dfa.execute_with_captures(lexeme, dfa_execution, rule.idx);
 				assert!(matched);
@@ -111,6 +115,7 @@ impl Lexer {
 			*pos += lexeme.len();
 			Token::Variable {
 				rule,
+				maybe_encoding_idx,
 				lexeme,
 				has_captures,
 			}
@@ -137,20 +142,30 @@ impl Lexer {
 		if JIT {
 			let input: std::ops::Range<*const u8> = input.as_bytes().as_ptr_range();
 			let mut end: *const u8 = std::ptr::null();
+			let mut maybe_encoding_idx: Option<EncodingIdx> = None;
 
 			unsafe {
-				let rule_idx: RuleIdx =
-					(self.maybe_jitted_dfa.unwrap_unchecked())(input.start, input.end, char_before, &mut end)?;
+				let rule_idx: RuleIdx = (self.maybe_jitted_dfa.unwrap_unchecked())(
+					input.start,
+					input.end,
+					char_before,
+					&mut end,
+					&mut maybe_encoding_idx,
+				)?;
 				let start: *const u8 = input.start;
 				let len: isize = end.offset_from(start);
 				assert!(len >= 0);
 				let bytes: &[u8] = std::slice::from_raw_parts(start, len as usize);
 				let lexeme: &str = std::str::from_utf8_unchecked(bytes);
-				Some(MatchedRule { rule_idx, lexeme })
+				Some(MatchedRule {
+					rule_idx,
+					maybe_encoding_idx,
+					lexeme,
+				})
 			}
 		} else {
-			// self.main_dfa.execute_without_captures(input, last_was_delimited)
-			self.spec.optimized_dfa.execute(input, char_before)
+			self.spec.dfa_for_parsing.execute_without_captures(input, char_before)
+			// self.spec.optimized_dfa.execute(input, char_before)
 		}
 	}
 

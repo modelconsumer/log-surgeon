@@ -4,7 +4,7 @@
 //!
 //! [tdfa]: https://arxiv.org/abs/2206.01398
 
-mod compressed;
+// mod compressed;
 mod jit;
 
 use std::cmp::Reverse;
@@ -15,7 +15,7 @@ use std::num::NonZero;
 use std::range::Range;
 use std::sync::Arc;
 
-pub use compressed::CompressedDfa;
+// pub use compressed::CompressedDfa;
 pub use jit::Jit;
 pub use jit::JittedDfa;
 
@@ -63,6 +63,7 @@ pub struct TdfaExecution {
 #[derive(Debug)]
 pub struct MatchedRule<'input> {
 	pub rule_idx: RuleIdx,
+	pub maybe_encoding_idx: Option<EncodingIdx>,
 	pub lexeme: &'input str,
 }
 
@@ -84,7 +85,7 @@ struct DfaState {
 	transitions: IntervalTree<u32, Transition>,
 	/// If this is a final state (the kernel contains an accepting NFA state),
 	/// the rule that this state has matched for.
-	accepting_rule: Option<RuleIdx>,
+	accepting_rule: Option<(RuleIdx, Option<EncodingIdx>)>,
 	/// Register operations upon finalizing a match (if applicable); copy to the final registers.
 	#[serde(skip)]
 	final_operations: Vec<RegisterOperation>,
@@ -195,6 +196,7 @@ struct PrefixTreeNode {
 #[derive(Debug, Clone, Copy)]
 struct BackupState {
 	rule_idx: RuleIdx,
+	maybe_encoding_idx: Option<EncodingIdx>,
 	consumed: usize,
 }
 
@@ -237,9 +239,10 @@ impl Tdfa {
 		for (pos, ch) in input.char_indices().chain(std::iter::once((input.len(), '\n'))) {
 			if let Some(transition) = self.lookup_transition(current_state, u32::from(ch)) {
 				current_state = transition.target;
-				if let Some(rule) = self.states[current_state].accepting_rule {
+				if let Some((rule_idx, maybe_encoding_idx)) = self.states[current_state].accepting_rule {
 					maybe_backup = Some(BackupState {
-						rule_idx: rule,
+						rule_idx,
+						maybe_encoding_idx,
 						consumed: pos,
 					});
 				}
@@ -252,6 +255,7 @@ impl Tdfa {
 
 		Some(MatchedRule {
 			rule_idx: backup.rule_idx,
+			maybe_encoding_idx: backup.maybe_encoding_idx,
 			lexeme: &input[..backup.consumed],
 		})
 	}
@@ -300,10 +304,10 @@ impl Tdfa {
 		for (open, close) in self
 			.tag_pairs
 			.iter()
-			.rev()
 			.copied()
-			.filter(|&corresponding| self.tags[corresponding].is_close)
 			.enumerate()
+			.rev()
+			.filter(|&(_open, corresponding)| self.tags[corresponding].is_close)
 		{
 			let sub_rule: &SubRule = &self.tags[open].sub_rule;
 			let maybe_encoding: Option<&Arc<Encoding>> = self.tags[open].maybe_encoding.as_ref();
@@ -339,6 +343,7 @@ impl Tdfa {
 						&& (captures[i].range.end <= captures[j].range.end)
 					{
 						captures[i].parent_index = 1 + j;
+						break;
 					}
 				}
 				assert_ne!(captures[i].parent_index, usize::MAX);
@@ -404,18 +409,15 @@ impl Tdfa {
 	/// Construct the TDFA for the combination (alternation) of multiple rules,
 	/// i.e. from a parsing specification.
 	/// Capturing is not enabled.
-	pub fn for_rules<'a, Rules>(rules: Rules, delimiters: String) -> Self
-	where
-		Rules: IntoIterator<Item = &'a RootRule>,
-	{
-		let nfa: Tnfa = Tnfa::for_rules::<false, _>(rules, &delimiters);
-		Self::determinization(&nfa)
+	pub fn for_rules(rules: &[RootRule], delimiters: &str, encodings: &[Arc<Encoding>]) -> Self {
+		let nfa: Tnfa = Tnfa::for_rules(rules, delimiters, encodings);
+		Self::determinization::<false>(&nfa)
 	}
 
 	/// Construct the TDFA for a single rule, with captures.
 	pub fn for_single_rule(rule_idx: RuleIdx, regex: &Regex, encodings: &[Arc<Encoding>]) -> Self {
 		let nfa: Tnfa = Tnfa::for_single_rule(rule_idx, regex, encodings);
-		Self::determinization(&nfa)
+		Self::determinization::<true>(&nfa)
 	}
 
 	/// Initialize the cache for ASCII transitions, must be called after deserializing.
@@ -427,13 +429,14 @@ impl Tdfa {
 
 	/// Algorithm 3 in the [paper][tdfa].
 	#[tracing::instrument(skip_all, level = "trace")]
-	pub fn determinization(nfa: &Tnfa) -> Self {
+	pub fn determinization<const WITH_TAGS: bool>(nfa: &Tnfa) -> Self {
 		let tags: Vec<CaptureTag> = nfa.tags().iter().cloned().collect::<Vec<_>>();
 		assert_eq!(tags.len() % 2, 0);
 		let mut tag_pairs: Vec<usize> = Vec::with_capacity(tags.len());
 		// XXX: use array_chunks when stable.
 		for (i, chunk) in tags.chunks_exact(2).enumerate() {
 			assert_eq!(chunk[0].sub_rule, chunk[1].sub_rule);
+			assert_eq!(chunk[0].maybe_encoding, chunk[1].maybe_encoding);
 			tag_pairs.push((i * 2) + 1);
 			tag_pairs.push(i * 2);
 		}
@@ -456,7 +459,7 @@ impl Tdfa {
 		);
 
 		let initial: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> =
-			Self::epsilon_closure(nfa, &vec![initial]);
+			Self::epsilon_closure::<WITH_TAGS>(nfa, &vec![initial]);
 
 		dfa.add_state(nfa, initial, &mut Vec::new());
 
@@ -471,7 +474,8 @@ impl Tdfa {
 
 			let mut register_action_tag: BTreeMap<(CaptureTag, RegisterAction), usize> = BTreeMap::new();
 			for (interval, next) in kernel.step_on_intervals(nfa).iter() {
-				let next: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> = Self::epsilon_closure(nfa, next);
+				let next: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> =
+					Self::epsilon_closure::<WITH_TAGS>(nfa, next);
 
 				let (next, mut operations): (
 					Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
@@ -509,7 +513,7 @@ impl Tdfa {
 		configurations: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
 		ops: &mut Vec<RegisterOperation>,
 	) -> usize {
-		let mut accepting_rule: Option<RuleIdx> = None;
+		let mut accepting_rule: Option<(RuleIdx, Option<EncodingIdx>)> = None;
 		let mut final_operations: Vec<RegisterOperation> = Vec::new();
 		let mut tag_for_register: BTreeMap<usize, CaptureTag> = BTreeMap::new();
 		let configurations: Vec<Configuration> = configurations
@@ -517,7 +521,7 @@ impl Tdfa {
 			.map(|(config, _)| {
 				if let Some(rule) = nfa[config.nfa_state].maybe_accepts_for_rule {
 					if accepting_rule.is_none() {
-						accepting_rule = Some(rule);
+						accepting_rule = Some((rule, nfa[config.nfa_state].maybe_encoding.as_ref().map(|e| e.idx)));
 					}
 					final_operations = self.final_operations(&config.register_for_tag, &config.tag_path_in_closure);
 				}
@@ -682,7 +686,7 @@ impl Tdfa {
 	}
 
 	/// Algorithm 3 in the [paper][tdfa].
-	fn epsilon_closure(
+	fn epsilon_closure<const WITH_TAGS: bool>(
 		nfa: &Tnfa,
 		configurations: &Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
 	) -> Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> {
@@ -729,14 +733,19 @@ impl Tdfa {
 						..config.clone()
 					};
 
-					new_config.tag_path_in_closure.push((
-						tag.clone(),
-						if *positive {
-							SymbolicPosition::Current
-						} else {
-							SymbolicPosition::Nil
-						},
-					));
+					if WITH_TAGS {
+						new_config.tag_path_in_closure.push((
+							tag.clone(),
+							if *positive {
+								SymbolicPosition::Current
+							} else {
+								SymbolicPosition::Nil
+							},
+						));
+					} else {
+						// If `!WITH_TAGS`,
+						// this path is identical to the branch for `Transitions::Spontaneous`.
+					}
 
 					nfa_states_on_stack.insert(new_config.nfa_state);
 					stack.push((new_config, inherited.clone()));
@@ -971,7 +980,7 @@ impl Tdfa {
 	fn partition_states(&self) -> Vec<BTreeSet<usize>> {
 		use crate::interval_tree::PolicyNoop;
 
-		let mut by_accepting: BTreeMap<Option<RuleIdx>, BTreeSet<usize>> = BTreeMap::new();
+		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, BTreeSet<usize>> = BTreeMap::new();
 		let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
 
 		for (i, state) in self.states.iter().enumerate() {

@@ -541,11 +541,11 @@ mod test {
 		let nfa3: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\w+", &mut ()).unwrap());
 
 		let intersection12: Tnfa = nfa1.intersect::<false>(&nfa2);
-		let dfa: Tdfa = Tdfa::determinization(&intersection12);
+		let dfa: Tdfa = Tdfa::determinization::<false>(&intersection12);
 		assert!(!dfa.execute("a1b"));
 
 		let intersection13: Tnfa = nfa1.intersect::<false>(&nfa3);
-		let dfa: Tdfa = Tdfa::determinization(&intersection13);
+		let dfa: Tdfa = Tdfa::determinization::<false>(&intersection13);
 		assert!(dfa.execute("a1b"));
 	}
 }

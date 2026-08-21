@@ -35,9 +35,17 @@ use cranelift_module::default_libcall_names;
 
 use crate::dfa::DfaState;
 use crate::dfa::Tdfa;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RuleIdx;
 
-pub type JittedDfa = extern "C" fn(*const u8, *const u8, u32, *const *const u8) -> Option<RuleIdx>;
+// TODO encoding
+pub type JittedDfa = extern "C" fn(
+	input_start: *const u8,
+	input_end: *const u8,
+	char_before: u32,
+	end_ptr: *const *const u8,
+	encoding_idx_ptr: &mut Option<EncodingIdx>,
+) -> Option<RuleIdx>;
 
 pub struct Jit {
 	module: JITModule,
@@ -95,6 +103,7 @@ impl Jit {
 		sig.params.push(AbiParam::new(ptr_ty)); // input_ptr_end
 		sig.params.push(AbiParam::new(types::I32)); // anchor
 		sig.params.push(AbiParam::new(ptr_ty)); // new input ptr
+		sig.params.push(AbiParam::new(ptr_ty)); // encoding idx ptr
 		sig.returns.push(AbiParam::new(types::I16)); // rule
 
 		let func: FuncId = self.module.declare_anonymous_function(&sig).unwrap();
@@ -150,9 +159,11 @@ impl Compilation<'_> {
 		let input_ptr: Value = self.asm.block_params(entry)[0];
 		let input_ptr_end: Value = self.asm.block_params(entry)[1];
 		let anchor: Value = self.asm.block_params(entry)[2];
-		let output: Value = self.asm.block_params(entry)[3];
+		let output_input_ptr: Value = self.asm.block_params(entry)[3];
+		let output_encoding_ptr: Value = self.asm.block_params(entry)[4];
 
 		let last_matched_rule: Value = zero16;
+		let last_matched_encoding: Value = zero16;
 		let last_matched_input_ptr: Value = self.asm.ins().iadd_imm(input_ptr, 1);
 
 		self.asm.ins().jump(
@@ -161,6 +172,7 @@ impl Compilation<'_> {
 				BlockArg::Value(input_ptr),
 				BlockArg::Value(last_matched_input_ptr),
 				BlockArg::Value(last_matched_rule),
+				BlockArg::Value(last_matched_encoding),
 			],
 		);
 
@@ -170,6 +182,7 @@ impl Compilation<'_> {
 		let exit_b: Block = self.asm.create_block();
 		self.asm.append_block_param(exit_b, self.ptr_ty); // last_matched_input_ptr
 		self.asm.append_block_param(exit_b, types::I16); // last_matched_rule
+		self.asm.append_block_param(exit_b, types::I16); // last_matched_encoding
 		self.asm.set_cold_block(exit_b);
 		{
 			self.asm.switch_to_block(exit_b);
@@ -178,10 +191,16 @@ impl Compilation<'_> {
 
 			let last_matched_input_ptr: Value = params[0];
 			let last_matched_rule: Value = params[1];
+			let last_matched_encoding: Value = params[2];
 
 			let last_matched_input_ptr: Value = self.asm.ins().iadd_imm(last_matched_input_ptr, -1);
 
-			self.asm.ins().store(MemFlags::new(), last_matched_input_ptr, output, 0);
+			self.asm
+				.ins()
+				.store(MemFlags::new(), last_matched_input_ptr, output_input_ptr, 0);
+			self.asm
+				.ins()
+				.store(MemFlags::new(), last_matched_encoding, output_encoding_ptr, 0);
 
 			self.asm.ins().return_(&[last_matched_rule]);
 		}
@@ -190,6 +209,7 @@ impl Compilation<'_> {
 		self.asm.append_block_param(exit2_b, self.ptr_ty); // next_input_ch
 		self.asm.append_block_param(exit2_b, self.ptr_ty); // last_matched_input_ptr
 		self.asm.append_block_param(exit2_b, types::I16); // last_matched_rule
+		self.asm.append_block_param(exit2_b, types::I16); // last_matched_encoding
 		self.asm.set_cold_block(exit2_b);
 		{
 			self.asm.switch_to_block(exit2_b);
@@ -198,12 +218,14 @@ impl Compilation<'_> {
 
 			let last_matched_input_ptr: Value = params[1];
 			let last_matched_rule: Value = params[2];
+			let last_matched_encoding: Value = params[3];
 
 			self.asm.ins().jump(
 				exit_b,
 				&[
 					BlockArg::Value(last_matched_input_ptr),
 					BlockArg::Value(last_matched_rule),
+					BlockArg::Value(last_matched_encoding),
 				],
 			);
 		}
@@ -214,19 +236,29 @@ impl Compilation<'_> {
 			self.asm.append_block_param(block, self.ptr_ty); // input_ptr
 			self.asm.append_block_param(block, self.ptr_ty); // last_matched_input_ptr
 			self.asm.append_block_param(block, types::I16); // last_matched_rule
+			self.asm.append_block_param(block, types::I16); // last_matched_encoding
 
 			self.asm.switch_to_block(block);
 
 			let params: &[Value] = self.asm.block_params(block);
 			let current_input_ptr: Value = params[0];
 
-			let mut last_matched: [BlockArg; 2] = [BlockArg::Value(params[1]), BlockArg::Value(params[2])];
+			let mut last_matched: [BlockArg; 3] = [
+				BlockArg::Value(params[1]),
+				BlockArg::Value(params[2]),
+				BlockArg::Value(params[3]),
+			];
 
 			let (next_input_ptr, input_ch): (Value, Value) = if i > 0 {
-				if let Some(rule_idx) = state.accepting_rule {
+				if let Some((rule_idx, encoding)) = state.accepting_rule {
 					let rule: Value = self.asm.ins().iconst(types::I16, i64::from(u16::from(rule_idx)));
+					let encoding: Value = self
+						.asm
+						.ins()
+						.iconst(types::I16, i64::from(u16::from(encoding.map_or(0, u16::from))));
 					last_matched[0] = BlockArg::Value(current_input_ptr);
 					last_matched[1] = BlockArg::Value(rule);
+					last_matched[2] = BlockArg::Value(encoding);
 				} else {
 					assert_ne!(state.transitions.len(), 0);
 				}
@@ -634,7 +666,12 @@ impl Compilation<'_> {
 			self.asm.ins().brif(
 				in_range,
 				target_b,
-				&[BlockArg::Value(next_input_ptr), last_match[0], last_match[1]],
+				&[
+					BlockArg::Value(next_input_ptr),
+					last_match[0],
+					last_match[1],
+					last_match[2],
+				],
 				exit_b,
 				last_match,
 			);
@@ -671,7 +708,7 @@ mod test {
 
 		let spec: ParsingSpec = spec! {
 			r#"
-			delimiters: "\ ."
+			delimiters: " ."
 			int: "[0-9]+$"
 			word: "[a-z]+"
 			"#
@@ -679,23 +716,25 @@ mod test {
 
 		assert_eq!(spec.delimiters, " .\n");
 
-		let f = jit.jit(&spec.main_dfa).unwrap();
+		let f = jit.jit(&spec.dfa_for_parsing).unwrap();
 
 		let input: &[u8] = "abc 123 def 456".as_bytes();
 
 		let mut end: *const u8 = std::ptr::null();
+		let mut encoding: Option<EncodingIdx> = None;
 
 		let x: u16 = f(
 			input.as_ptr_range().start,
 			input.as_ptr_range().end,
 			u32::from('\0'),
 			&mut end,
+			&mut encoding,
 		)
 		.map_or(0, u16::from);
 		assert_eq!(x, 2);
 		assert_eq!(end, input[.."abc".len()].as_ptr_range().end);
 
-		let x: u16 = f(end, input.as_ptr_range().end, u32::from('\0'), &mut end).map_or(0, u16::from);
+		let x: u16 = f(end, input.as_ptr_range().end, u32::from('\0'), &mut end, &mut encoding).map_or(0, u16::from);
 		assert_eq!(x, 0);
 		assert_eq!(end, input[.."abc".len()].as_ptr_range().end);
 
@@ -704,6 +743,7 @@ mod test {
 			input.as_ptr_range().end,
 			u32::from('\0'),
 			&mut end,
+			&mut encoding,
 		)
 		.map_or(0, u16::from);
 		assert_eq!(x, 1);
@@ -714,6 +754,7 @@ mod test {
 			input.as_ptr_range().end,
 			u32::from('\0'),
 			&mut end,
+			&mut encoding,
 		)
 		.map_or(0, u16::from);
 		assert_eq!(x, 2);
@@ -724,6 +765,7 @@ mod test {
 			input.as_ptr_range().end,
 			u32::from('\0'),
 			&mut end,
+			&mut encoding,
 		)
 		.map_or(0, u16::from);
 		assert_eq!(x, 1);
@@ -734,6 +776,7 @@ mod test {
 			input.as_ptr_range().end,
 			u32::from('\0'),
 			&mut end,
+			&mut encoding,
 		)
 		.map_or(0, u16::from);
 		assert_eq!(x, 0);
