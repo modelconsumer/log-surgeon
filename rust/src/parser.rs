@@ -197,7 +197,11 @@ impl Parser {
 		for mat in self.current_log.all_matches.iter_mut() {
 			// The "more optimizable" pointer primitive `add` is technically ok here,
 			// but is/would need to be marked `unsafe`.
-			mat.ffi_pointers.parent = matches_base.wrapping_add(mat.parent_index);
+			mat.ffi_pointers.parent = if mat.parent_index > 0 {
+				matches_base.wrapping_add(mat.parent_index)
+			} else {
+				std::ptr::null()
+			};
 			mat.ffi_pointers.lexeme = UncheckedCArray::new(&self.current_log.message[mat.range.start..mat.range.end]);
 
 			let rule_info: &RuleInfo = &self.spec[mat.rule_idx][mat.sub_rule_id];

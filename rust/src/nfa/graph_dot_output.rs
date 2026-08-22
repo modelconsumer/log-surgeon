@@ -1,4 +1,3 @@
-use crate::nfa::CaptureTag;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
 use crate::nfa::Transitions;
@@ -69,10 +68,7 @@ impl Tnfa {
 						let src_scc: usize = tarjan.vertices[state.idx.0].scc;
 						let dst_scc: usize = tarjan.vertices[target.0].scc;
 						let colour: &str = if src_scc == dst_scc { " [color=\"red\"]" } else { "" };
-						lines.push_str(&format!(
-							"\t{} -> {} [label=\"\u{03b5}\"]{colour};\n",
-							state.idx, target
-						));
+						lines.push_str(&format!("\t{} -> {} [label=\"epsilon\"]{colour};\n", state.idx, target));
 					}
 				},
 				Transitions::Tagged { tag, positive, target } => {

@@ -3,7 +3,7 @@
 //! - <https://arxiv.org/abs/2206.01398>
 //!
 
-// mod graph_dot_output;
+mod graph_dot_output;
 mod regex_construction;
 mod search_decomposition;
 
@@ -380,6 +380,7 @@ impl Tnfa {
 				assert_eq!(rule_idx, RuleIdx::NIL);
 				assert_eq!(my_state.transitions.len(), 0);
 				my_state.maybe_accepts_for_rule = None;
+				my_state.maybe_encoding = None;
 				my_state.transitions = Transitions::Spontaneous(vec![NfaIdx(self.states.len())]);
 			}
 		}
@@ -403,7 +404,7 @@ impl Tnfa {
 			.iter()
 			.map(|state| state.offset_idxes(2))
 			.collect::<Vec<_>>();
-		let other_states: Vec<NfaState> = self
+		let other_states: Vec<NfaState> = other
 			.states
 			.iter()
 			.map(|state| state.offset_idxes(2 + self.states.len()))
@@ -428,17 +429,17 @@ impl Tnfa {
 			maybe_encoding: None,
 		});
 
+		new_states.extend(my_states.into_iter());
+		new_states.extend(other_states.into_iter());
+
 		for state in new_states[2..].iter_mut() {
-			if let Some(rule_idx) = state.maybe_accepts_for_rule {
-				assert_eq!(rule_idx, RuleIdx::NIL);
+			if state.is_accepting() {
 				assert_eq!(state.transitions.len(), 0);
 				state.maybe_accepts_for_rule = None;
+				state.maybe_encoding = None;
 				state.transitions = Transitions::Spontaneous(vec![end_idx]);
 			}
 		}
-
-		new_states.extend(my_states.into_iter());
-		new_states.extend(other_states.into_iter());
 
 		Self {
 			states: new_states,

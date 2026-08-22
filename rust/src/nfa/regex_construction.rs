@@ -470,7 +470,9 @@ impl Tnfa {
 			.map(|state| self.new_state(state.name.clone()))
 			.collect::<Vec<_>>();
 
+		assert_eq!(self[current].transitions.len(), 0);
 		self[current].transitions = Transitions::Spontaneous(vec![my_states[0]]);
+
 		for (i, other_state) in other.states.iter().enumerate() {
 			let idx: NfaIdx = my_states[i];
 			if other_state.is_accepting() {

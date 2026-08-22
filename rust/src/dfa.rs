@@ -268,6 +268,9 @@ impl Tdfa {
 	pub fn execute_with_captures(&self, input: &str, execution_data: &mut TdfaExecution, rule_idx: RuleIdx) -> bool {
 		let mut current_state: usize = 0;
 
+		// Err on the side of safety and clear the data here;
+		// we could require the caller do this,
+		// but it's not statically verifiable so we'd just end up panicking at runtime anyways.
 		execution_data.clear();
 
 		// Vector of prefix tree node indices.
@@ -1082,6 +1085,7 @@ impl TdfaExecution {
 		// We only need to reset the initial registers;
 		// see also: `[Tdfa::final_operations]`.
 		self.registers[0..self.num_tags].fill(None);
+		// self.registers[..].fill(None);
 	}
 }
 

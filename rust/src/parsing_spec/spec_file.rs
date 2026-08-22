@@ -165,7 +165,9 @@ impl ParsingSpecBuilder {
 		}
 
 		if let Some(cached) = maybe_cached_dfa {
-			builder.set_cached_dfa(serde_json::from_str(&cached).unwrap());
+			if let Ok(dfa) = serde_json::from_str(&cached) {
+				builder.set_cached_dfa(dfa);
+			}
 		}
 
 		Ok(builder)

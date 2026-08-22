@@ -347,6 +347,7 @@ impl SearchString {
 				let shape: &str = shape.as_ref();
 				// TODO unwrap
 				let automata: Tnfa = spec.automata_for_shape(shape).unwrap();
+				// std::fs::write("hi.dot", automata.to_dot_output()).unwrap();
 				view.interpretations_for_shape(spec, &automata)
 			})
 			.collect::<Vec<_>>()
@@ -600,6 +601,8 @@ impl<'a> SearchStringView<'a> {
 
 		interpretations.sort();
 		interpretations.dedup();
+
+		Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		interpretations
 	}
@@ -1164,14 +1167,15 @@ mod test {
 			"#
 		};
 
-		let interpretations: Vec<Interpretation> = do_full_search(&spec, "*172.31.17.135*", "hello172.31.17.135world");
+		let interpretations: Vec<Interpretation> =
+			do_full_search(&spec, "*172.31.17.135*", "hello %kv.key%: %kv.ip_value% world");
 
 		println!("=== Interpretations");
 		for interpretation in interpretations.iter() {
 			println!("- {interpretation:?}");
 		}
 
-		panic!();
+		assert_eq!(interpretations.len(), 2);
 	}
 
 	fn do_full_search(spec: &ParsingSpec, query: &str, shape: &str) -> Vec<Interpretation> {

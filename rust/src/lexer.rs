@@ -107,6 +107,12 @@ impl Lexer {
 		}) = self.execute_dfa::<{ cfg!(feature = "jit") }>(input_remaining, char_before)
 		{
 			let rule: &RootRule = &self.spec[rule_idx];
+			assert_eq!(rule.idx, rule_idx);
+
+			// Even if don't call [`Tdfa::execute_with_captures`],
+			// we need to clear any possible captures from the previous call to [`Lexer::next_token`].
+			dfa_execution.clear();
+
 			let has_captures: bool = rule.has_captures();
 			if has_captures {
 				let matched: bool = rule.dfa.execute_with_captures(lexeme, dfa_execution, rule.idx);
