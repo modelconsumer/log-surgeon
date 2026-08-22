@@ -36,6 +36,10 @@ struct CArray {
         return CArray{ptr, len};
     }
 
+    [[nodiscard]] static auto from_span(std::span<T const> span) noexcept -> CArray {
+        return CArray::from_ptr_len(span.data(), span.size());
+    }
+
     [[nodiscard]] static auto from_string_view(std::string_view view) noexcept -> CArray
     requires std::is_same_v<T, char>
     {

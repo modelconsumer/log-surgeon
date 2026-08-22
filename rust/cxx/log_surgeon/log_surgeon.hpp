@@ -129,7 +129,8 @@ public:
      * @param query
      * @param log_shapes
      */
-    [[nodiscard]] auto search_by_log_shapes(std::string_view query, CArray<CCharArray> log_shapes)
+    [[nodiscard]] auto
+    search_by_log_shapes(std::string_view query, std::span<CCharArray const> log_shapes)
             -> std::vector<std::vector<std::vector<SubQuery>>>;
 
 private:
@@ -388,15 +389,16 @@ inline auto Parser::search_by_name(std::string_view query, std::string_view name
     return interpretations;
 }
 
-inline auto Parser::search_by_log_shapes(std::string_view query, CArray<CCharArray> log_shapes)
+inline auto
+Parser::search_by_log_shapes(std::string_view query, std::span<CCharArray const> log_shapes)
         -> std::vector<std::vector<std::vector<SubQuery>>> {
     std::vector<std::vector<std::vector<SubQuery>>> interpretations_by_shapes;
-    interpretations_by_shapes.reserve(log_shapes.length);
+    interpretations_by_shapes.reserve(log_shapes.size());
 
     Box<Vec<Vec<Interpretation>>> rust_interpretations{imp::log_surgeon_search_by_log_shapes(
             m_parser,
             CCharArray::from_string_view(query),
-            log_shapes
+            CArray<CCharArray>::from_span(log_shapes)
     )};
 
     size_t i{0};
