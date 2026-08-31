@@ -319,7 +319,7 @@ impl ParsingSpec {
 			match current {
 				Kind::Text(mut buffer) => {
 					if ch == SEPARATOR {
-						// Append static text
+						// Append static text.
 						let regex: Regex = Regex::Sequence(buffer.chars().map(Regex::Literal).collect::<Vec<_>>());
 						sequence.push(Tnfa::for_regex(&regex));
 
@@ -332,6 +332,13 @@ impl ParsingSpec {
 				},
 				Kind::Rule(mut rule_name) => {
 					if ch == SEPARATOR {
+						// Check for `%%` escape.
+						if rule_name.is_empty() {
+							// Switch back to static text.
+							current = Kind::Text("%".to_owned());
+							continue;
+						}
+
 						// Append rule regexes.
 						let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(&rule_name);
 						if rules.is_empty() {
