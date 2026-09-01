@@ -194,10 +194,10 @@ impl Parser {
 		self.current_log.message.push_str(&input[pos_after_header..pos_end]);
 
 		let matches_base: *const Match = self.current_log.all_matches.as_ptr();
-		for mat in self.current_log.all_matches.iter_mut() {
-			// The "more optimizable" pointer primitive `add` is technically ok here,
-			// but is/would need to be marked `unsafe`.
-			mat.ffi_pointers.parent = if mat.parent_index > 0 {
+		for (i, mat) in self.current_log.all_matches.iter_mut().enumerate() {
+			mat.ffi_pointers.parent = if mat.parent_index > i {
+				// The "more optimizable" pointer primitive `add` is technically ok here,
+				// but is/would need to be marked `unsafe`.
 				matches_base.wrapping_add(mat.parent_index)
 			} else {
 				std::ptr::null()
