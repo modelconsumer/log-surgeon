@@ -294,8 +294,6 @@ impl Tnfa {
 
 				let description: String = format!("{} (encoding '{}')", description, enc.name.escape_default());
 
-				println!("{description} can match");
-
 				let start_outside_capture: NfaIdx = self.new_state(format!("{description} start (outside capture)"));
 				let start_inside_capture: NfaIdx = self.new_state(format!("{description} start (inside capture)"));
 				let end_inside_capture: NfaIdx = self.new_state(format!("{description} end (inside capture)"));
