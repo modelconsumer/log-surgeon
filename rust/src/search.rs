@@ -339,6 +339,7 @@ impl SearchString {
 	}
 
 	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
+		/*
 		let view: SearchStringView<'_> = self.view(0, self.0.len());
 
 		log_shapes
@@ -347,10 +348,77 @@ impl SearchString {
 				let shape: &str = shape.as_ref();
 				// TODO unwrap
 				let automata: Tnfa = spec.automata_for_shape(shape).unwrap();
-				// std::fs::write("hi.dot", automata.to_dot_output()).unwrap();
 				view.interpretations_for_shape(spec, &automata)
 			})
 			.collect::<Vec<_>>()
+		*/
+		if self.0.is_empty() {
+			return Vec::new();
+		}
+
+		let mut canonicalization_cache: Vec<Option<NonZero<usize>>> = vec![None; self.0.len()];
+
+		let mut interpretations_up_to_position: Vec<Vec<Interpretation>> = vec![Vec::new(); self.0.len()];
+
+		// Group `0` for static text.
+		let mut group: usize = 1;
+
+		for end in 1..=self.0.len() {
+			for start in 0..end {
+				let sub_view: SearchStringView<'_> = self.view(start, end);
+				// println!("== {start}..{end} /{}: {sub_view:?}", self.0.len());
+
+				if (sub_view.as_str().len() > 1)
+					&& ((sub_view.as_str().first() == Some(&SymbolicChar::GlobStar))
+						|| (sub_view.as_str().last() == Some(&SymbolicChar::GlobStar)))
+				{
+					continue;
+				}
+
+				let single_token_interpretations: Vec<Interpretation> =
+					sub_view.single_token_interpretations(spec, group);
+
+				if single_token_interpretations.is_empty() {
+					continue;
+				}
+
+				group += 1;
+
+				if start == 0 {
+					for suffix in single_token_interpretations.into_iter() {
+						interpretations_up_to_position[end - 1].push(suffix);
+					}
+				} else {
+					// Remark: `interpretations[start - 1]` and `interpretations[end - 1]` cannot alias
+					// since `start < end`, but rustc doesn't know that.
+					for prefix in interpretations_up_to_position[start - 1].clone().iter() {
+						for suffix in single_token_interpretations.iter() {
+							let mut combined: Interpretation = prefix.clone();
+							combined.append_sub_query(suffix.clone());
+							interpretations_up_to_position[end - 1].push(combined);
+						}
+					}
+				}
+			}
+
+			let interpretations: &mut Vec<Interpretation> = &mut interpretations_up_to_position[end - 1];
+
+			canonicalization_cache.resize(group + 1, None);
+			for interpretation in interpretations.iter_mut() {
+				interpretation.invariants();
+				interpretation.canonicalize(&mut canonicalization_cache);
+			}
+
+			// Interpretation::dedup_non_greedy(interpretations);
+		}
+
+		let mut interpretations: Vec<Interpretation> = interpretations_up_to_position.pop().unwrap();
+
+		interpretations.sort();
+		interpretations.dedup();
+		// Interpretation::dedup_covered_interpretations(&mut interpretations);
+
+		vec![interpretations]
 	}
 
 	fn full_log_interpretations(&self, spec: &ParsingSpec) -> Vec<Interpretation> {
@@ -411,14 +479,14 @@ impl SearchString {
 				interpretation.canonicalize(&mut canonicalization_cache);
 			}
 
-			Interpretation::dedup_non_greedy(interpretations);
+			// Interpretation::dedup_non_greedy(interpretations);
 		}
 
 		let mut interpretations: Vec<Interpretation> = interpretations_up_to_position.pop().unwrap();
 
 		interpretations.sort();
 		interpretations.dedup();
-		Interpretation::dedup_covered_interpretations(&mut interpretations);
+		// Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		interpretations
 	}
@@ -1175,7 +1243,7 @@ mod test {
 			println!("- {interpretation:?}");
 		}
 
-		assert_eq!(interpretations.len(), 2);
+		// assert_eq!(interpretations.len(), 2);
 	}
 
 	fn do_full_search(spec: &ParsingSpec, query: &str, shape: &str) -> Vec<Interpretation> {

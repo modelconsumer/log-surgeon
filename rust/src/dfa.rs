@@ -1215,6 +1215,21 @@ mod test {
 		assert!(b);
 	}
 
+	#[test]
+	fn submatch_precedence() {
+		let dfa: Tdfa = for_pattern("(?<foo>a|aa)(?<bar>a|aa)");
+		let mut data: TdfaExecution = dfa.execution_data();
+
+		let b: bool = dfa.execute_with_captures("aaa", &mut data, RuleIdx::NIL);
+		assert!(b);
+
+		assert_eq!(data.captures.len(), 2);
+		assert_eq!(data.captures[0].range.start, 0);
+		assert_eq!(data.captures[0].range.end, 1);
+		assert_eq!(data.captures[1].range.start, 1);
+		assert_eq!(data.captures[1].range.end, 3);
+	}
+
 	fn for_pattern(pattern: &str) -> Tdfa {
 		let regex: Regex = Regex::from_pattern(pattern).unwrap();
 		Tdfa::for_single_rule(RuleIdx::NIL, &regex, &[])
