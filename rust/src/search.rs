@@ -338,7 +338,7 @@ impl SearchString {
 		self.view(0, self.0.len()).interpretations_for_name(spec, &rows)
 	}
 
-	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
+	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, _log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
 		/*
 		let view: SearchStringView<'_> = self.view(0, self.0.len());
 
@@ -409,7 +409,7 @@ impl SearchString {
 				interpretation.canonicalize(&mut canonicalization_cache);
 			}
 
-			// Interpretation::dedup_non_greedy(interpretations);
+			Interpretation::dedup_non_greedy(interpretations);
 		}
 
 		let mut interpretations: Vec<Interpretation> = interpretations_up_to_position.pop().unwrap();
@@ -479,7 +479,7 @@ impl SearchString {
 				interpretation.canonicalize(&mut canonicalization_cache);
 			}
 
-			// Interpretation::dedup_non_greedy(interpretations);
+			Interpretation::dedup_non_greedy(interpretations);
 		}
 
 		let mut interpretations: Vec<Interpretation> = interpretations_up_to_position.pop().unwrap();
@@ -635,6 +635,7 @@ impl<'a> SearchStringView<'a> {
 		interpretations
 	}
 
+	#[allow(unused)]
 	fn interpretations_for_shape(&self, _spec: &ParsingSpec, shape_nfa: &Tnfa) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
 
