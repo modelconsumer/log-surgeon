@@ -107,12 +107,37 @@ impl AnchoredRegex {
 			pattern = suffix;
 		}
 
-		if let Some(prefix) = pattern.strip_suffix('$') {
-			anchor_after = true;
-			pattern = prefix;
-		}
+		// We can't strip the suffix the same way, because it may be escaped.
+		let regex: Regex = match parse_alternation(pattern) {
+			Ok((remaining, mut regex)) => {
+				if remaining == "$" {
+					anchor_after = true;
+				} else {
+					assert_eq!(remaining, "");
+				}
 
-		let mut regex: Regex = Regex::from_pattern_with_placeholders(pattern, lookup)?.ensure_not_nullable(pattern)?;
+				regex.replace_with_placeholders(lookup).map_err(|kind| RegexError {
+					consumed: pattern.to_owned(),
+					remaining: String::new(),
+					kind,
+				})?;
+
+				regex
+			},
+			Err(NomErr::Incomplete(_)) => {
+				unreachable!("we shouldn't be using anything that can return this");
+			},
+			Err(NomErr::Error(err) | NomErr::Failure(err)) => {
+				let consumed: &str = pattern.strip_suffix(err.input).unwrap();
+				return Err(RegexError {
+					consumed: consumed.to_owned(),
+					remaining: err.input.to_owned(),
+					kind: err.kind,
+				});
+			},
+		};
+
+		let mut regex: Regex = regex.ensure_not_nullable(pattern)?;
 
 		let mut total_captures: NonZero<u16> = NonZero::<u16>::MIN;
 
@@ -230,14 +255,14 @@ impl Regex {
 	fn initialize_captures(
 		&mut self,
 		next_id: &mut NonZero<u16>,
-		stack: &mut Vec<(NonZero<u16>, Arc<str>)>,
+		ancestors: &mut Vec<(NonZero<u16>, Arc<str>)>,
 	) -> Option<usize> {
-		let mut bread: usize = 0;
+		let mut total: usize = 0;
 		match self {
 			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => (),
 			Self::Capture(sub_rule) => {
 				let sub_rule: &mut SubRule = Arc::get_mut(sub_rule).unwrap();
-				let maybe_parent: Option<&(NonZero<u16>, Arc<str>)> = stack.last();
+				let maybe_parent: Option<&(NonZero<u16>, Arc<str>)> = ancestors.last();
 				sub_rule.parent_id = maybe_parent.map(|(id, _)| *id);
 				sub_rule.id = *next_id;
 				sub_rule.qualified_name = Arc::from(format!(
@@ -245,27 +270,25 @@ impl Regex {
 					maybe_parent.map_or("", |(_, name)| name),
 					sub_rule.name
 				));
-				stack.push((sub_rule.id, sub_rule.qualified_name.clone()));
-				// `id` is `u16`.
+				ancestors.push((sub_rule.id, sub_rule.qualified_name.clone()));
 				*next_id = next_id.checked_add(1)?;
-				sub_rule.descendents = sub_rule.regex.initialize_captures(next_id, stack)?;
-				// `bread` is `usize`.
-				bread = 1 + sub_rule.descendents;
-				stack.pop();
+				sub_rule.descendants = sub_rule.regex.initialize_captures(next_id, ancestors)?;
+				total = 1 + sub_rule.descendants;
+				ancestors.pop();
 			},
 			Self::KleeneClosure(item)
 			| Self::KleenePlus(item)
 			| Self::BoundedRepetition { item, .. }
 			| Self::Placeholder { item, .. } => {
-				bread += item.initialize_captures(next_id, stack)?;
+				total += item.initialize_captures(next_id, ancestors)?;
 			},
 			Self::Sequence(items) | Self::Alternation(items) => {
 				for sub_item in items.iter_mut() {
-					bread += sub_item.initialize_captures(next_id, stack)?;
+					total += sub_item.initialize_captures(next_id, ancestors)?;
 				}
 			},
 		}
-		Some(bread)
+		Some(total)
 	}
 
 	/// Returns `Ok(self)` if the pattern does not accept the empty string,
@@ -548,7 +571,7 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 				// see also its comment on why this `MAX` is a valid temporary value.
 				id: NonZero::<u16>::MAX,
 				parent_id: None,
-				descendents: 0,
+				descendants: 0,
 				qualified_name: Arc::from(""),
 				fully_qualified_name: Arc::from(""),
 			}))),

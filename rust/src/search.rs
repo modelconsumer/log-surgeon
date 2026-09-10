@@ -723,7 +723,7 @@ impl<'a> SearchStringView<'a> {
 						// TODO
 						id: NonZero::<u16>::MAX,
 						parent_id: None,
-						descendents: 0,
+						descendants: 0,
 						qualified_name: rule.name.clone(),
 						fully_qualified_name: rule.name.clone(),
 					}),

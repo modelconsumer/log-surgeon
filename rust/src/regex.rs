@@ -371,34 +371,6 @@ impl Regex {
 			},
 		}
 	}
-
-	/*
-	/// If a placeholder contains a regex capture/[`SubRule`],
-	/// each substitution of the placeholder should be a unique sub-rule.
-	/// In other words, we must deep clone the regex of the placeholder when substituting.
-	fn deep_clone(&self) -> Self {
-		match self {
-			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => self.clone(),
-			Self::Capture(sub_rule) => Self::Capture(Arc::new(SubRule {
-				regex: sub_rule.regex.deep_clone(),
-				..(**sub_rule).clone()
-			})),
-			Self::KleeneClosure(item) => Self::KleeneClosure(Box::new(item.deep_clone())),
-			Self::KleenePlus(item) => Self::KleenePlus(Box::new(item.deep_clone())),
-			Self::BoundedRepetition { min, max, item } => Self::BoundedRepetition {
-				min: *min,
-				max: *max,
-				item: Box::new(item.deep_clone()),
-			},
-			Self::Placeholder { name, item } => Self::Placeholder {
-				name: name.clone(),
-				item: Box::new(item.deep_clone()),
-			},
-			Self::Sequence(items) => Self::Sequence(items.iter().map(Self::deep_clone).collect::<Vec<_>>()),
-			Self::Alternation(items) => Self::Alternation(items.iter().map(Self::deep_clone).collect::<Vec<_>>()),
-		}
-	}
-	*/
 }
 
 impl Regex {

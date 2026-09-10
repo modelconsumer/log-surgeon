@@ -53,7 +53,7 @@ pub struct SubRule {
 	pub parent_id: Option<NonZero<u16>>,
 	/// Total number of nested captures (recursively/arbitrarily deep);
 	/// `0` iff this is a "leaf" capture.
-	pub descendents: usize,
+	pub descendants: usize,
 
 	/// Qualified name w.r.t captures including the leading dot;
 	/// a top-level capture is ".a", a second-level capture is ".a.b".
@@ -239,7 +239,7 @@ impl SubRule {
 	}
 
 	pub fn is_leaf(&self) -> bool {
-		self.descendents == 0
+		self.descendants == 0
 	}
 }
 

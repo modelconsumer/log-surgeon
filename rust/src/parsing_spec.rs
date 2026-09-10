@@ -357,7 +357,7 @@ impl ParsingSpec {
 											// TODO
 											id: NonZero::<u16>::MAX,
 											parent_id: None,
-											descendents: 0,
+											descendants: 0,
 											qualified_name: info.root_name.clone(),
 											fully_qualified_name: info.root_name.clone(),
 										})
