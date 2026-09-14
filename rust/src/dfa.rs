@@ -21,6 +21,7 @@ use std::sync::Arc;
 pub use jit::Jit;
 pub use jit::JittedDfa;
 
+use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::interval_tree::PolicyFunction;
 use crate::nfa::CaptureTag;
@@ -841,7 +842,7 @@ impl Tdfa {
 	/// should not be used with a TDFA (DFA with tagged transitions).
 	#[tracing::instrument(skip_all, level = "debug")]
 	pub fn canonicalize(&self) -> Tdfa {
-		let partitions: Vec<BTreeSet<usize>> = self.partition_states();
+		let partitions: Vec<Vec<usize>> = self.partition_states();
 
 		let mut partition_for_state: Vec<usize> = vec![usize::MAX; self.states.len()];
 		for (i, x) in partitions.iter().enumerate() {
@@ -910,87 +911,162 @@ impl Tdfa {
 
 	/// Hopcroft's DFA minimization algorithm.
 	#[tracing::instrument(skip_all, level = "debug")]
-	fn partition_states(&self) -> Vec<BTreeSet<usize>> {
+	fn partition_states(&self) -> Vec<Vec<usize>> {
 		use crate::interval_tree::PolicyNoop;
 
-		// if self.states.is_empty() {
-		// 	return Vec::new();
-		// }
+		if self.states.is_empty() {
+			return Vec::new();
+		}
 
-		// let boundaries: Vec<Interval<u32>> = {
-		// 	let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
-		// 	for state in self.states.iter() {
-		// 		for (interval, _) in state.transitions.iter() {
-		// 			all_intervals.insert(interval, (), PolicyNoop);
-		// 		}
-		// 	}
+		let all_classes: Vec<Interval<u32>> = {
+			let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
+			for state in self.states.iter() {
+				for (interval, _) in state.transitions.iter() {
+					all_intervals.insert(interval, (), PolicyNoop);
+				}
+			}
+			Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
+		};
 
-		// 	Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
-		// };
+		// Number of transitions (intervals) into each state.
+		let mut incoming_offsets: Vec<usize> = vec![0; self.states.len() + 1];
+		for state in self.states.iter() {
+			for (_interval, transition) in state.transitions.iter() {
+				incoming_offsets[transition.target + 1] += 1;
+			}
+		}
+		for i in 1..incoming_offsets.len() {
+			incoming_offsets[i] += incoming_offsets[i - 1];
+		}
 
-		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, BTreeSet<usize>> = BTreeMap::new();
-		let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
+		// Write cursor for each state.
+		let mut cursors: Vec<usize> = incoming_offsets[0..self.states.len()].to_vec();
 
+		// `Vec` of `(source, first_class, last_class)`;
+		// each interval should be exactly the (disjoint) union of consecutive classes,
+		let mut incoming_transitions: Vec<(usize, u32, u32)> = vec![(0, 0, 0); *incoming_offsets.last().unwrap()];
+		for (i, state) in self.states.iter().enumerate() {
+			for (interval, transition) in state.transitions.iter() {
+				let first: usize = all_classes.partition_point(|class| class.end() < interval.start());
+				let last: usize = all_classes.partition_point(|class| class.end() < interval.end());
+				assert_eq!(all_classes[first].start(), interval.start());
+				assert_eq!(all_classes[last].end(), interval.end());
+				// There are at most `u32::MAX` intervals,
+				// so at most `u32::MAX` classes.
+				incoming_transitions[cursors[transition.target]] = (i, first as u32, last as u32);
+				cursors[transition.target] += 1;
+			}
+		}
+
+		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, Vec<usize>> = BTreeMap::new();
 		for (i, state) in self.states.iter().enumerate() {
 			by_accepting
 				.entry(state.accepting_rule)
-				.or_insert_with(BTreeSet::new)
-				.insert(i);
-			for (interval, _) in state.transitions.iter() {
-				all_intervals.insert(interval, (), PolicyNoop);
-			}
+				.or_insert_with(Vec::new)
+				.push(i);
 		}
 
-		let all_intervals: Vec<u32> = all_intervals
-			.iter()
-			.map(|(interval, _)| interval.start())
-			.collect::<Vec<_>>();
+		// `members[starts[p]..ends[p]]` are the states in partition `p`.
+		let mut members: Vec<usize> = Vec::with_capacity(self.states.len());
+		let mut starts: Vec<usize> = Vec::new();
+		let mut ends: Vec<usize> = Vec::new();
+		// For state `i`, `position[i]` is an index into `membership`;
+		// `membership[position[i]] == i`.
+		let mut position: Vec<usize> = vec![0; self.states.len()];
+		let mut partition_for_state: Vec<usize> = vec![0; self.states.len()];
 
-		let mut p: Vec<BTreeSet<usize>> = by_accepting.into_values().collect::<Vec<_>>();
+		for initial_partition in by_accepting.into_values() {
+			let p: usize = starts.len();
+			starts.push(members.len());
+			for state in initial_partition.into_iter() {
+				position[state] = members.len();
+				members.push(state);
+				partition_for_state[state] = p;
+			}
+			ends.push(members.len());
+		}
 
-		let mut w: Vec<BTreeSet<usize>> = p.clone();
+		let mut work_list: Vec<usize> = Vec::from_iter(0..starts.len());
+		let mut is_queued: Vec<bool> = vec![true; starts.len()];
+		let mut marked: Vec<usize> = vec![0; starts.len()];
 
-		while let Some(a) = w.pop() {
-			for &c in all_intervals.iter() {
-				let mut x: BTreeSet<usize> = BTreeSet::new();
-				for (i, state) in self.states.iter().enumerate() {
-					if let Some(transition) = state.transitions.lookup(c) {
-						if a.contains(&transition.target) {
-							x.insert(i);
+		// Snapshot of states of currently-processing block.
+		let mut splitter: Vec<usize> = Vec::new();
+		let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); all_classes.len()];
+		let mut dirty_classes: Vec<usize> = Vec::new();
+		let mut dirty_partitions: Vec<usize> = Vec::new();
+
+		while let Some(splitter_block) = work_list.pop() {
+			is_queued[splitter_block] = false;
+
+			splitter.clear();
+			splitter.extend_from_slice(&members[starts[splitter_block]..ends[splitter_block]]);
+
+			for &state in splitter.iter() {
+				for &(predecessor, first, last) in
+					incoming_transitions[incoming_offsets[state]..incoming_offsets[state + 1]].iter()
+				{
+					// Were originally `usize`s.
+					let first: usize = first as usize;
+					let last: usize = last as usize;
+					for (offset, bucket) in predecessors[first..=last].iter_mut().enumerate() {
+						if bucket.is_empty() {
+							dirty_classes.push(first + offset);
 						}
+						bucket.push(predecessor);
 					}
 				}
+			}
 
-				for i in 0..p.len() {
-					let y: &BTreeSet<usize> = &p[i];
-					let intersection: BTreeSet<usize> = y & &x;
-					let difference: BTreeSet<usize> = y - &x;
+			for class in dirty_classes.drain(..) {
+				for state in predecessors[class].drain(..) {
+					let p: usize = partition_for_state[state];
+					if marked[p] == 0 {
+						dirty_partitions.push(p);
+					}
+					let from: usize = position[state];
+					let to: usize = starts[p] + marked[p];
+					members.swap(from, to);
+					position[members[from]] = from;
+					position[members[to]] = to;
+					marked[p] += 1;
+				}
 
-					if intersection.is_empty() || difference.is_empty() {
+				for p in dirty_partitions.drain(..) {
+					let count: usize = std::mem::replace(&mut marked[p], 0);
+					if count == (ends[p] - starts[p]) {
 						continue;
 					}
-
-					if let Some(j) = w.iter().position(|state| state == y) {
-						w[j] = intersection.clone();
-						w.push(difference.clone());
-					} else {
-						if intersection.len() <= difference.len() {
-							w.push(intersection.clone());
-						} else {
-							w.push(difference.clone());
-						}
+					let new_partition: usize = starts.len();
+					starts.push(starts[p]);
+					ends.push(starts[p] + count);
+					marked.push(0);
+					for i in starts[p]..(starts[p] + count) {
+						partition_for_state[members[i]] = new_partition;
 					}
+					starts[p] += count;
 
-					p[i] = intersection;
-					p.push(difference);
+					let requeue: usize = if is_queued[p] || (count <= (ends[p] - starts[p])) {
+						new_partition
+					} else {
+						p
+					};
+					is_queued.push(false);
+					if !is_queued[requeue] {
+						work_list.push(requeue);
+						is_queued[requeue] = true;
+					}
 				}
 			}
 		}
 
-		let z: usize = p.iter().position(|x| x.contains(&0)).unwrap();
-		p.swap(0, z);
+		let mut partitions: Vec<Vec<usize>> =
+			Vec::from_iter((0..starts.len()).map(|p| Vec::from_iter(members[starts[p]..ends[p]].iter().copied())));
 
-		p
+		// Entry should be first.
+		partitions.swap(0, partition_for_state[0]);
+
+		partitions
 	}
 }
 
