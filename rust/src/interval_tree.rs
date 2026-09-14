@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod test_generated;
 
 /// A naive interval "tree" implementation;
 /// only constructed when building NFAs,
