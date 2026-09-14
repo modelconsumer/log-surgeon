@@ -209,7 +209,7 @@ impl Tnfa {
 	/// in order to differentiate between literal edges that "come from"
 	/// a parsing specification pattern (i.e. "would necessarily match"),
 	/// as opposed to the search (i.e. "meaningful search value").
-	pub fn intersect<const FOR_SEARCH: bool>(&self, other: &Self) -> Self {
+	pub fn intersect<const FOR_SEARCH: bool, const TO_END: bool>(&self, other: &Self) -> Self {
 		let begin: NfaIdx = NfaIdx::BEGIN;
 
 		let mut stack: Vec<(StatePair<'_>, NfaIdx)> = vec![(StatePair::new(self, other, begin, begin), begin)];
@@ -227,7 +227,7 @@ impl Tnfa {
 		};
 
 		while let Some((pair, state)) = stack.pop() {
-			if FOR_SEARCH && pair.state2().is_accepting() {
+			if FOR_SEARCH && !TO_END && pair.state2().is_accepting() {
 				intersection[state].maybe_accepts_for_rule = Some(RuleIdx::NIL);
 				assert_eq!(intersection[state].transitions.len(), 0);
 				continue;
@@ -613,11 +613,11 @@ mod test {
 		let nfa2: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\d+", &mut ()).unwrap());
 		let nfa3: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\w+", &mut ()).unwrap());
 
-		let intersection12: Tnfa = nfa1.intersect::<false>(&nfa2);
+		let intersection12: Tnfa = nfa1.intersect::<false, true>(&nfa2);
 		let dfa: Tdfa = Tdfa::determinization::<false>(&intersection12);
 		assert!(!dfa.execute("a1b"));
 
-		let intersection13: Tnfa = nfa1.intersect::<false>(&nfa3);
+		let intersection13: Tnfa = nfa1.intersect::<false, true>(&nfa3);
 		let dfa: Tdfa = Tdfa::determinization::<false>(&intersection13);
 		assert!(dfa.execute("a1b"));
 	}

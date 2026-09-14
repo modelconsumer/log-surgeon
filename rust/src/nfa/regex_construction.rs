@@ -62,7 +62,7 @@ impl Tnfa {
 			if !rule.has_captures() {
 				for enc in encodings.iter() {
 					let leaf_nfa: Tnfa = Tnfa::for_regex(&rule.regex.regex);
-					let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
+					let intersection: Tnfa = leaf_nfa.intersect::<false, true>(&enc.nfa);
 
 					if !intersection.can_accept() {
 						continue;
@@ -286,7 +286,7 @@ impl Tnfa {
 			let leaf_nfa: Self = Self::for_regex(&sub_rule.regex);
 
 			for enc in encodings.iter() {
-				let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
+				let intersection: Tnfa = leaf_nfa.intersect::<false, true>(&enc.nfa);
 
 				if !intersection.can_accept() {
 					continue;

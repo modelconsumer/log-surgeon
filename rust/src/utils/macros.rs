@@ -3,7 +3,7 @@ macro_rules! time_this {
 		use ::std::time::Instant;
 		let start: Instant = Instant::now();
 		let result = $block;
-		println!("{}: {:?}", $label, start.elapsed());
+		::tracing::debug!("{}: {:?}", $label, start.elapsed());
 		result
 	}};
 }
@@ -15,11 +15,13 @@ macro_rules! now {
 	};
 }
 
-macro_rules! how_long {
-	($var:ident) => {{
+#[macro_export]
+macro_rules! millis {
+	($t0:ident, $t1:ident) => {{
 		use ::std::time::Instant;
-		let var: Instant = $var;
-		var.elapsed()
+		let t0: Instant = $t0;
+		let t1: Instant = $t1;
+		t1.duration_since(t0).as_millis()
 	}};
 }
 

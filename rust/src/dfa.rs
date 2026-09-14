@@ -841,71 +841,6 @@ impl Tdfa {
 	}
 }
 
-/// Not used in current implementation.
-#[allow(unused)]
-impl Tdfa {
-	/// Algorithm 4 in the [paper][tdfa].
-	fn fallback_regops(&mut self) {
-		for i in 0..self.states.len() {
-			self.states[i].registers_clobbered = self.compute_registers_clobbered(i);
-		}
-		for i in 0..self.states.len() {
-			let mut backup_ops: Vec<RegisterOperation> = Vec::new();
-			let mut transitions: IntervalTree<u32, Transition> = self.states[i].transitions.clone();
-			for (_, transition) in transitions.iter_mut() {
-				if self.states[transition.target].accepting_rule.is_some() {
-					continue;
-				}
-				for final_op in self.states[i].final_operations.iter() {
-					if self.states[transition.target]
-						.registers_clobbered
-						.contains(&final_op.action.source())
-					{
-						transition.operations.push(RegisterOperation {
-							destination: final_op.destination,
-							action: RegisterAction::CopyFrom {
-								source: final_op.action.source(),
-							},
-						});
-						if let RegisterAction::Append { source, history } = &final_op.action {
-							backup_ops.push(RegisterOperation {
-								destination: final_op.destination,
-								action: RegisterAction::Append {
-									source: *source,
-									history: history.clone(),
-								},
-							});
-						}
-					}
-				}
-			}
-			self.states[i].transitions = transitions;
-			std::mem::swap(&mut self.states[i].final_operations, &mut backup_ops);
-			self.states[i].final_operations.extend_from_slice(&backup_ops);
-		}
-	}
-
-	fn compute_registers_clobbered(&self, state: usize) -> BTreeSet<usize> {
-		let mut clobbered: BTreeSet<usize> = BTreeSet::new();
-		let mut visited: BTreeSet<usize> = BTreeSet::new();
-		let mut stack: Vec<usize> = vec![state];
-		while let Some(state) = stack.pop() {
-			for (_, transition) in self.states[state].transitions.iter() {
-				for op in transition.operations.iter() {
-					if self.states[transition.target].accepting_rule.is_some() {
-						continue;
-					}
-					clobbered.insert(op.destination);
-					if visited.insert(transition.target) {
-						stack.push(transition.target);
-					}
-				}
-			}
-		}
-		clobbered
-	}
-}
-
 impl Tdfa {
 	/// Compute the canonical (minimal) DFA;
 	/// should not be used with a TDFA (DFA with tagged transitions).
@@ -913,10 +848,10 @@ impl Tdfa {
 	pub fn canonicalize(&self) -> Tdfa {
 		let partitions: Vec<BTreeSet<usize>> = self.partition_states();
 
-		let mut map: Vec<usize> = vec![usize::MAX; self.states.len()];
+		let mut partition_for_state: Vec<usize> = vec![usize::MAX; self.states.len()];
 		for (i, x) in partitions.iter().enumerate() {
 			for &s in x.iter() {
-				map[s] = i;
+				partition_for_state[s] = i;
 			}
 		}
 
@@ -932,28 +867,28 @@ impl Tdfa {
 					for (interval, transition) in transitions.iter() {
 						assert_eq!(
 							transition.target,
-							map[state.transitions.lookup(interval.start()).unwrap().target]
+							partition_for_state[state.transitions.lookup(interval.start()).unwrap().target]
 						);
 					}
 					for (interval, transition) in state.transitions.iter() {
 						assert_eq!(
-							map[transition.target],
+							partition_for_state[transition.target],
 							transitions.lookup(interval.start()).unwrap().target
 						);
 					}
 				} else {
 					let mut transitions: IntervalTree<u32, Transition> = state.transitions.clone();
 					for (_, transition) in transitions.iter_mut() {
-						transition.target = map[transition.target];
+						transition.target = partition_for_state[transition.target];
 					}
 					maybe_transitions = Some(transitions);
 				}
 			}
-			let first: &DfaState = &self.states[*x.first().unwrap()];
+			let representative: &DfaState = &self.states[*x.first().unwrap()];
 			new_states.push(DfaState {
 				kernel,
 				transitions: maybe_transitions.unwrap(),
-				accepting_rule: first.accepting_rule,
+				accepting_rule: representative.accepting_rule,
 				final_operations: Vec::new(),
 				tag_for_register: BTreeMap::new(),
 				registers_clobbered: BTreeSet::new(),
@@ -982,34 +917,22 @@ impl Tdfa {
 	/// Hopcroft's DFA minimization algorithm.
 	#[tracing::instrument(skip_all, level = "debug")]
 	fn partition_states(&self) -> Vec<BTreeSet<usize>> {
-		// let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, usize> = BTreeMap::new();
-
-		// let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
-
-		// let mut partitions: Vec<usize> = Vec::with_capacity(self.states.len());
-
-		// for (i, state) in self.states.iter().enumerate() {
-		// 	let n: usize = by_accepting.len();
-		// 	let p: usize = *by_accepting.entry(state.accepting_rule).or_insert(n);
-		// 	partitions.push(p);
-
-		// 	for (interval, _) in state.transitions.iter() {
-		// 		all_intervals.insert(interval, (), PolicyNoop);
-		// 	}
-		// }
-
-		// let boundaries: Vec<u32> = all_intervals
-		// 	.iter()
-		// 	.map(|(interval, _)| interval.start())
-		// 	.collect::<Vec<_>>();
-
-		// loop {
-		// 	let mut new_partitions: Vec<usize> = Vec::with_capacity(self.states.len());
-
-		// }
-
-		// partitions
 		use crate::interval_tree::PolicyNoop;
+
+		// if self.states.is_empty() {
+		// 	return Vec::new();
+		// }
+
+		// let boundaries: Vec<Interval<u32>> = {
+		// 	let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
+		// 	for state in self.states.iter() {
+		// 		for (interval, _) in state.transitions.iter() {
+		// 			all_intervals.insert(interval, (), PolicyNoop);
+		// 		}
+		// 	}
+
+		// 	Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
+		// };
 
 		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, BTreeSet<usize>> = BTreeMap::new();
 		let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
@@ -1175,16 +1098,6 @@ impl Transition {
 
 	fn is_valid(&self) -> bool {
 		self.target != usize::MAX
-	}
-}
-
-impl RegisterAction {
-	/// Get the source register for this action.
-	fn source(&self) -> usize {
-		match self {
-			&Self::CopyFrom { source } => source,
-			Self::Append { source, .. } => *source,
-		}
 	}
 }
 

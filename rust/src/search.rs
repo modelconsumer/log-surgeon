@@ -196,71 +196,9 @@ impl Interpretation {
 		}
 	}
 
-	fn dedup_non_greedy(interpretations: &mut Vec<Self>) {
-		let mut i: usize = 0;
-		while i < interpretations.len() {
-			debug!("== {i} / {}", interpretations.len());
-			let mut j: usize = i + 1;
-			'outer: while j < interpretations.len() {
-				let interpretation1: &Interpretation = &interpretations[i];
-				let interpretation2: &Interpretation = &interpretations[j];
-				'inner: for (query1, query2) in
-					std::iter::zip(interpretation1.sub_queries.iter(), interpretation2.sub_queries.iter())
-				{
-					if query1.is_static_text() && query2.is_static_text() {
-						if query1.symbolic_value == query2.symbolic_value {
-							// Prefix same so far.
-							continue 'inner;
-						} else {
-							// Different interpretations.
-							break 'inner;
-						}
-					}
-					if query1.rule_idx != query2.rule_idx {
-						// Different interpretations.
-						break 'inner;
-					}
-					if query1.group != query2.group {
-						// Different interpretations.
-						break 'inner;
-					}
-					if query1.symbolic_value == query2.symbolic_value {
-						// Prefix same so far.
-						continue 'inner;
-					}
-					if query1.symbolic_value.starts_with(&query2.symbolic_value)
-						&& query2.symbolic_value != [SymbolicChar::GlobStar]
-					{
-						assert!(query1.symbolic_value.len() > query2.symbolic_value.len());
-						debug!("\t- removing j < i:");
-						debug!("\t\t- {interpretation1:?}");
-						debug!("\t\t- {interpretation2:?} GONE");
-						interpretations.remove(j);
-						continue 'outer;
-					}
-					if query2.symbolic_value.starts_with(&query1.symbolic_value)
-						&& query1.symbolic_value != [SymbolicChar::GlobStar]
-					{
-						assert!(query2.symbolic_value.len() > query1.symbolic_value.len());
-						debug!("\t- removing i < j:");
-						debug!("\t\t- {interpretation1:?} GONE");
-						debug!("\t\t- {interpretation2:?}");
-						interpretations.swap(i, j);
-						interpretations.remove(j);
-						j = i + 1;
-						continue 'outer;
-					}
-					// Different interpretations.
-					break 'inner;
-				}
-				j += 1;
-			}
-			i += 1;
-		}
-	}
-
 	/// Re-numbers groups consecutively starting from `1`
 	/// (static text always has group `0`).
+	#[allow(unused)]
 	fn canonicalize(&mut self, cache: &mut [Option<NonZero<usize>>]) {
 		cache.fill(None);
 
@@ -330,9 +268,8 @@ impl SearchString {
 	pub fn search_by_name(&self, spec: &ParsingSpec, name: &str) -> Vec<Interpretation> {
 		let rows: Vec<(&RuleInfo, &Regex)> = spec.rules_for_name(name);
 
-		// TODO remove
 		if name.is_empty() {
-			return self.full_log_interpretations(spec);
+			return Vec::new();
 		}
 
 		self.view(0, self.0.len()).interpretations_for_name(spec, &rows)
@@ -350,145 +287,6 @@ impl SearchString {
 				view.interpretations_for_shape(spec, &automata)
 			})
 			.collect::<Vec<_>>()
-		/*
-		if self.0.is_empty() {
-			return Vec::new();
-		}
-
-		let mut canonicalization_cache: Vec<Option<NonZero<usize>>> = vec![None; self.0.len()];
-
-		let mut interpretations_up_to_position: Vec<Vec<Interpretation>> = vec![Vec::new(); self.0.len()];
-
-		// Group `0` for static text.
-		let mut group: usize = 1;
-
-		for end in 1..=self.0.len() {
-			for start in 0..end {
-				let sub_view: SearchStringView<'_> = self.view(start, end);
-				// println!("== {start}..{end} /{}: {sub_view:?}", self.0.len());
-
-				if (sub_view.as_str().len() > 1)
-					&& ((sub_view.as_str().first() == Some(&SymbolicChar::GlobStar))
-						|| (sub_view.as_str().last() == Some(&SymbolicChar::GlobStar)))
-				{
-					continue;
-				}
-
-				let single_token_interpretations: Vec<Interpretation> =
-					sub_view.single_token_interpretations(spec, group);
-
-				if single_token_interpretations.is_empty() {
-					continue;
-				}
-
-				group += 1;
-
-				if start == 0 {
-					for suffix in single_token_interpretations.into_iter() {
-						interpretations_up_to_position[end - 1].push(suffix);
-					}
-				} else {
-					// Remark: `interpretations[start - 1]` and `interpretations[end - 1]` cannot alias
-					// since `start < end`, but rustc doesn't know that.
-					for prefix in interpretations_up_to_position[start - 1].clone().iter() {
-						for suffix in single_token_interpretations.iter() {
-							let mut combined: Interpretation = prefix.clone();
-							combined.append_sub_query(suffix.clone());
-							interpretations_up_to_position[end - 1].push(combined);
-						}
-					}
-				}
-			}
-
-			let interpretations: &mut Vec<Interpretation> = &mut interpretations_up_to_position[end - 1];
-
-			canonicalization_cache.resize(group + 1, None);
-			for interpretation in interpretations.iter_mut() {
-				interpretation.invariants();
-				interpretation.canonicalize(&mut canonicalization_cache);
-			}
-
-			Interpretation::dedup_non_greedy(interpretations);
-		}
-
-		let mut interpretations: Vec<Interpretation> = interpretations_up_to_position.pop().unwrap();
-
-		interpretations.sort();
-		interpretations.dedup();
-		// Interpretation::dedup_covered_interpretations(&mut interpretations);
-
-		vec![interpretations]
-		*/
-	}
-
-	fn full_log_interpretations(&self, spec: &ParsingSpec) -> Vec<Interpretation> {
-		if self.0.is_empty() {
-			return Vec::new();
-		}
-
-		let mut canonicalization_cache: Vec<Option<NonZero<usize>>> = vec![None; self.0.len()];
-
-		let mut interpretations_up_to_position: Vec<Vec<Interpretation>> = vec![Vec::new(); self.0.len()];
-
-		// Group `0` for static text.
-		let mut group: usize = 1;
-
-		for end in 1..=self.0.len() {
-			for start in 0..end {
-				let sub_view: SearchStringView<'_> = self.view(start, end);
-				// println!("== {start}..{end} /{}: {sub_view:?}", self.0.len());
-
-				if (sub_view.as_str().len() > 1)
-					&& ((sub_view.as_str().first() == Some(&SymbolicChar::GlobStar))
-						|| (sub_view.as_str().last() == Some(&SymbolicChar::GlobStar)))
-				{
-					continue;
-				}
-
-				let single_token_interpretations: Vec<Interpretation> =
-					sub_view.single_token_interpretations(spec, group);
-
-				if single_token_interpretations.is_empty() {
-					continue;
-				}
-
-				group += 1;
-
-				if start == 0 {
-					for suffix in single_token_interpretations.into_iter() {
-						interpretations_up_to_position[end - 1].push(suffix);
-					}
-				} else {
-					// Remark: `interpretations[start - 1]` and `interpretations[end - 1]` cannot alias
-					// since `start < end`, but rustc doesn't know that.
-					for prefix in interpretations_up_to_position[start - 1].clone().iter() {
-						for suffix in single_token_interpretations.iter() {
-							let mut combined: Interpretation = prefix.clone();
-							combined.append_sub_query(suffix.clone());
-							interpretations_up_to_position[end - 1].push(combined);
-						}
-					}
-				}
-			}
-
-			let interpretations: &mut Vec<Interpretation> = &mut interpretations_up_to_position[end - 1];
-
-			canonicalization_cache.resize(group + 1, None);
-			for interpretation in interpretations.iter_mut() {
-				interpretation.invariants();
-				interpretation.canonicalize(&mut canonicalization_cache);
-			}
-
-			Interpretation::dedup_non_greedy(interpretations);
-		}
-
-		let mut interpretations: Vec<Interpretation> = interpretations_up_to_position.pop().unwrap();
-
-		interpretations.sort();
-		interpretations.dedup();
-		Interpretation::dedup_covered_interpretations(&mut interpretations);
-
-		interpretations
 	}
 
 	fn view(&self, start: usize, end: usize) -> SearchStringView<'_> {
@@ -501,120 +299,12 @@ impl SearchString {
 }
 
 impl<'a> SearchStringView<'a> {
-	#[allow(unused)]
-	fn single_token_interpretations(&self, spec: &ParsingSpec, group: usize) -> Vec<Interpretation> {
-		assert!(!self.is_empty());
-
-		let extended: Self = self.extend_to_greedy_wildcards();
-
-		let mut interpretations: Vec<Interpretation> = Vec::new();
-
-		if self.as_str() == [SymbolicChar::GlobStar] {
-			interpretations.push(Interpretation {
-				sub_queries: vec![SubQuery::new_static_text(vec![SymbolicChar::GlobStar])],
-			});
-			return interpretations;
-		}
-
-		let has_wildcard: bool = extended.as_str().iter().any(SymbolicChar::is_wildcard);
-
-		let potential_interpretations: Vec<Interpretation> = extended.interpretations_for_nfa(
-			spec,
-			&spec.nfa_for_search,
-			group,
-			None,
-			Some((extended.before(), extended.after())),
-		);
-
-		if has_wildcard || potential_interpretations.is_empty() {
-			if extended.ends_with_delimiter(spec) {
-				interpretations.push(Interpretation {
-					sub_queries: vec![SubQuery::new_static_text(extended.as_str().to_owned())],
-				});
-			}
-		}
-
-		for interpretation in potential_interpretations.into_iter() {
-			// TODO more careful?
-			// Ignore interpretations that have "useless" captures.
-			if true
-				|| interpretation.sub_queries.iter().any(|sub_query| {
-					sub_query.rule_idx.is_some() && (sub_query.symbolic_value != [SymbolicChar::GlobStar])
-				}) {
-				interpretations.push(interpretation);
-			}
-		}
-
-		interpretations
-	}
-
-	fn before(&self) -> char {
-		if self.start == 0 {
-			return '\n';
-		}
-		match self.full_string.0[self.start - 1] {
-			SymbolicChar::Literal(ch) => ch,
-			SymbolicChar::GlobStar | SymbolicChar::GlobOne => '\n',
-		}
-	}
-
-	fn after(&self) -> char {
-		if self.end == self.full_string.0.len() {
-			return '\n';
-		}
-		match self.full_string.0[self.end] {
-			SymbolicChar::Literal(ch) => ch,
-			SymbolicChar::GlobStar | SymbolicChar::GlobOne => '\n',
-		}
-	}
-
-	fn extend_to_greedy_wildcards(&self) -> Self {
-		let mut new_start: usize = self.start;
-		let mut new_end: usize = self.end;
-
-		for i in (0..self.start).rev() {
-			if self.full_string.0[i] == SymbolicChar::GlobStar {
-				new_start = i;
-			} else {
-				break;
-			}
-		}
-		for i in self.end..self.full_string.0.len() {
-			if self.full_string.0[i] == SymbolicChar::GlobStar {
-				new_end = i + 1;
-			} else {
-				break;
-			}
-		}
-		Self {
-			full_string: self.full_string,
-			start: new_start,
-			end: new_end,
-		}
-	}
-
 	fn as_str(&self) -> &[SymbolicChar] {
 		&self.full_string.0[self.start..self.end]
 	}
 
-	fn to_regex(&self, maybe_delimiters: Option<(char, char)>) -> Regex {
-		Regex::Sequence(
-			maybe_delimiters
-				.map(|(before, _)| before)
-				.map(SymbolicChar::Literal)
-				.as_ref()
-				.into_iter()
-				.chain(self.as_str().iter())
-				.chain(
-					maybe_delimiters
-						.map(|(_, after)| after)
-						.map(SymbolicChar::Literal)
-						.as_ref()
-						.into_iter(),
-				)
-				.map(SymbolicChar::to_regex)
-				.collect::<Vec<_>>(),
-		)
+	fn to_regex(&self) -> Regex {
+		Regex::Sequence(Vec::from_iter(self.as_str().iter().map(SymbolicChar::to_regex)))
 	}
 
 	fn interpretations_for_name(&self, spec: &ParsingSpec, rows: &[(&RuleInfo, &Regex)]) -> Vec<Interpretation> {
@@ -624,7 +314,7 @@ impl<'a> SearchStringView<'a> {
 			let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_info.root_idx, regex, &[]);
 
 			let potential_interpretations: Vec<Interpretation> =
-				self.interpretations_for_nfa(spec, &rule_nfa, 0, Some(rule_info), None);
+				self.interpretations_for_nfa(spec, &rule_nfa, 0, Some(rule_info));
 
 			interpretations.extend(potential_interpretations.into_iter());
 		}
@@ -635,16 +325,15 @@ impl<'a> SearchStringView<'a> {
 		interpretations
 	}
 
-	#[allow(unused)]
 	fn interpretations_for_shape(&self, _spec: &ParsingSpec, shape_nfa: &Tnfa) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
-		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(None));
+		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());
 
 		now!(t0);
-		let intersection: Tnfa = shape_nfa.intersect::<true>(&search_nfa);
+		let intersection: Tnfa = shape_nfa.intersect::<true, false>(&search_nfa);
 		now!(t1);
 		debug!(
 			"intersecting {} states with {} states took {}",
@@ -656,7 +345,7 @@ impl<'a> SearchStringView<'a> {
 			return Vec::new();
 		}
 
-		let paths: Vec<Path> = intersection.compute_paths::<false>();
+		let paths: Vec<Path> = intersection.compute_paths();
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -693,21 +382,16 @@ impl<'a> SearchStringView<'a> {
 		nfa: &Tnfa,
 		group: usize,
 		maybe_rule_info: Option<&RuleInfo>,
-		maybe_delimiters: Option<(char, char)>,
 	) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
-		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(maybe_delimiters));
+		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());
 
-		let intersection: Tnfa = nfa.intersect::<true>(&search_nfa);
+		let intersection: Tnfa = nfa.intersect::<true, true>(&search_nfa);
 
-		let paths: Vec<Path> = if maybe_delimiters.is_some() {
-			intersection.compute_paths::<true>()
-		} else {
-			intersection.compute_paths::<false>()
-		};
+		let paths: Vec<Path> = intersection.compute_paths();
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -784,13 +468,6 @@ impl<'a> SearchStringView<'a> {
 
 		interpretations
 	}
-
-	fn ends_with_delimiter(&self, spec: &ParsingSpec) -> bool {
-		let SymbolicChar::Literal(ch): SymbolicChar = *self.as_str().last().unwrap() else {
-			return true;
-		};
-		spec.delimiters.contains(ch)
-	}
 }
 
 impl std::ops::Deref for SearchStringView<'_> {
@@ -820,30 +497,6 @@ impl SymbolicChar {
 }
 
 impl Interpretation {
-	fn append_sub_query(&mut self, mut suffix: Interpretation) {
-		let Some(me_last): Option<&mut SubQuery> = self.sub_queries.last_mut() else {
-			*self = suffix;
-			return;
-		};
-		let Some(suffix_first): Option<&mut SubQuery> = suffix.sub_queries.first_mut() else {
-			return;
-		};
-
-		if me_last.is_static_text() && suffix_first.is_static_text() {
-			if (*me_last.symbolic_value.last().unwrap() == SymbolicChar::GlobStar)
-				&& (*suffix_first.symbolic_value.first().unwrap() == SymbolicChar::GlobStar)
-			{
-				me_last.symbolic_value.pop().unwrap();
-				me_last.string_value.pop().unwrap();
-			}
-			me_last.symbolic_value.extend(suffix_first.symbolic_value.drain(..));
-			me_last.string_value.extend(suffix_first.string_value.drain(..));
-			self.sub_queries.extend(suffix.sub_queries.drain(1..));
-		} else {
-			self.sub_queries.extend(suffix.sub_queries.into_iter());
-		}
-	}
-
 	fn invariants(&self) {
 		let mut last_was_static_text: bool = false;
 		for sub_query in self.sub_queries.iter() {
@@ -1057,16 +710,16 @@ mod test {
 				&*interpretations[0].sub_queries[1].fully_qualified_name,
 				"block_id.blockNum"
 			);
-			assert_eq!(interpretations[1].sub_queries[0].string_value, "blk*");
-			assert_eq!(interpretations[1].sub_queries[1].string_value, "*");
+			assert_eq!(interpretations[1].sub_queries[0].string_value, "blk*_");
+			// assert_eq!(interpretations[1].sub_queries[1].string_value, "*");
+			// assert_eq!(
+			// 	&*interpretations[1].sub_queries[1].fully_qualified_name,
+			// 	"block_id.blockNum"
+			// );
+			// assert_eq!(interpretations[0].sub_queries[2].string_value, "_");
+			assert_eq!(interpretations[1].sub_queries[1].string_value, "566*");
 			assert_eq!(
 				&*interpretations[1].sub_queries[1].fully_qualified_name,
-				"block_id.blockNum"
-			);
-			assert_eq!(interpretations[1].sub_queries[2].string_value, "_");
-			assert_eq!(interpretations[1].sub_queries[3].string_value, "566*");
-			assert_eq!(
-				&*interpretations[1].sub_queries[3].fully_qualified_name,
 				"block_id.genStamp"
 			);
 		}
@@ -1211,26 +864,6 @@ mod test {
 	}
 
 	#[test]
-	fn search_single_token_interpretation() {
-		let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
-		builder
-			.add_rule("email", r"(?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+)")
-			.unwrap();
-
-		let spec: ParsingSpec = builder.build();
-
-		{
-			let interpretations: Vec<Interpretation> = search_single_token(&spec, "a@com*");
-
-			println!("=== Interpretations");
-			for i in interpretations.iter() {
-				println!("- {i:?}");
-			}
-			println!("=== Done");
-		}
-	}
-
-	#[test]
 	fn kv_ip_pattern() {
 		let spec: ParsingSpec = spec! {
 			r#"
@@ -1261,14 +894,6 @@ mod test {
 		let query: SearchString = SearchString::parse(query).unwrap();
 
 		let interpretations: Vec<Interpretation> = query.search_by_name(&spec, name);
-
-		interpretations
-	}
-
-	fn search_single_token(spec: &ParsingSpec, query: &str) -> Vec<Interpretation> {
-		let query: SearchString = SearchString::parse(query).unwrap();
-
-		let interpretations: Vec<Interpretation> = query.view(0, query.0.len()).single_token_interpretations(&spec, 0);
 
 		interpretations
 	}

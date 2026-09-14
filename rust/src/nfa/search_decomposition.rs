@@ -331,7 +331,7 @@ impl PathEdge {
 }
 
 impl Tnfa {
-	pub fn compute_paths<const WITH_ANCHORS: bool>(&self) -> Vec<Path> {
+	pub fn compute_paths(&self) -> Vec<Path> {
 		let tarjan: TarjanSccs = self.sccs();
 
 		debug!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
@@ -629,7 +629,7 @@ mod test {
 		// let search = nfa_for("(ab)*");
 		// println!("{}", nfa.intersect(&search).to_dot_output());
 		// return;
-		let paths = nfa.intersect::<true>(&search).compute_paths::<false>();
+		let paths = nfa.intersect::<true, true>(&search).compute_paths();
 		let mut paths = paths.iter().map(ToString::to_string).collect::<Vec<_>>();
 		paths.sort();
 		paths.dedup();
