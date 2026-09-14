@@ -1,3 +1,4 @@
+mod derivative_decomposition;
 mod pattern_parsing;
 
 use std::num::NonZero;
@@ -192,6 +193,8 @@ impl Regex {
 	/// where the actual placeholder value will be filled in later.
 	pub const NIL: Self = Self::Alternation(Vec::new());
 
+	pub const EPSILON: Self = Self::Sequence(Vec::new());
+
 	/// String representation/"to pattern" conversion of this regex,
 	/// replacing any leading or trailing space literal with `[ ]` for explicitness.
 	pub fn to_pattern(&self) -> String {
@@ -342,7 +345,7 @@ impl Regex {
 	/// ```
 	pub fn is_nullable(&self) -> Option<&Self> {
 		match self {
-			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => None,
+			Self::AnyChar | Self::Literal(_) | Self::BracketedRanges { .. } => None,
 			Self::Capture(sub_rule) => sub_rule.regex.is_nullable(),
 			Self::KleeneClosure(item) => Some(item.is_nullable().unwrap_or(self)),
 			Self::KleenePlus(item) => item.is_nullable(),

@@ -338,8 +338,7 @@ impl SearchString {
 		self.view(0, self.0.len()).interpretations_for_name(spec, &rows)
 	}
 
-	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, _log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
-		/*
+	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
 		let view: SearchStringView<'_> = self.view(0, self.0.len());
 
 		log_shapes
@@ -351,7 +350,7 @@ impl SearchString {
 				view.interpretations_for_shape(spec, &automata)
 			})
 			.collect::<Vec<_>>()
-		*/
+		/*
 		if self.0.is_empty() {
 			return Vec::new();
 		}
@@ -419,6 +418,7 @@ impl SearchString {
 		// Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		vec![interpretations]
+		*/
 	}
 
 	fn full_log_interpretations(&self, spec: &ParsingSpec) -> Vec<Interpretation> {
@@ -486,7 +486,7 @@ impl SearchString {
 
 		interpretations.sort();
 		interpretations.dedup();
-		// Interpretation::dedup_covered_interpretations(&mut interpretations);
+		Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		interpretations
 	}
@@ -644,6 +644,9 @@ impl<'a> SearchStringView<'a> {
 		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(None));
 
 		let intersection: Tnfa = shape_nfa.intersect::<true>(&search_nfa);
+		if intersection.definitely_cannot_accept() {
+			return Vec::new();
+		}
 
 		let paths: Vec<Path> = intersection.compute_paths::<false>();
 
@@ -1059,15 +1062,6 @@ mod test {
 				"block_id.genStamp"
 			);
 		}
-
-		{
-			let interpretations: Vec<Interpretation> = do_search(&spec, "*blk*_566*", "");
-			println!("===");
-
-			for i in interpretations.iter() {
-				println!("- {i:?}");
-			}
-		}
 	}
 
 	#[test]
@@ -1200,7 +1194,7 @@ mod test {
 
 		let spec: ParsingSpec = builder.build();
 
-		let interpretations: Vec<Interpretation> = do_search(&spec, "a@com*", "");
+		let interpretations: Vec<Interpretation> = do_full_search(&spec, "a@com*", "hello a@com.example");
 
 		println!("=== Interpretations");
 		for interpretation in interpretations.iter() {

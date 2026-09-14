@@ -16,6 +16,8 @@ struct Match;
 }  // namespace log_surgeon::imp
 
 namespace log_surgeon::imp {
+struct DfsIndex;
+
 struct Interpretation;
 
 /// Newtype wrapper around a `usize` index.

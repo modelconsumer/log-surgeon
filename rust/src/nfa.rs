@@ -142,6 +142,11 @@ impl Tnfa {
 		}
 	}
 
+	// TODO
+	pub fn definitely_cannot_accept(&self) -> bool {
+		self.states.len() <= 1
+	}
+
 	pub fn tags(&self) -> &BTreeSet<CaptureTag> {
 		&self.tags
 	}
@@ -282,32 +287,15 @@ impl Tnfa {
 					let mut combined: IntervalTree<u32, NfaIdx> = IntervalTree::new();
 					for (interval1, &target1) in transitions1.iter() {
 						for (interval2, &target2) in transitions2.iter() {
-							let Some(overlap): Option<Interval<u32>> = interval1.overlap(&interval2) else {
+							let Some(mut overlap): Option<Interval<u32>> = interval1.overlap(&interval2) else {
 								continue;
 							};
-							if interval2.start() != interval2.end() {
-								// Query wildcard.
-								// TODO not true for arbitrary intersections - e.g. encodings
-								// assert_eq!((interval2.start(), interval2.end()), (0, u32::from(char::MAX)));
-								let next: NfaIdx =
-									lookup_state(StatePair::new(self, other, target1, target2), &mut intersection);
-								combined.insert(
-									if FOR_SEARCH {
-										Interval::new(0, u32::MAX)
-									} else {
-										overlap
-									},
-									next,
-									PolicyUnique,
-								);
-							} else {
-								// Query literal character.
-								assert_eq!(interval2.start(), interval2.end());
-								assert_eq!(overlap, interval2);
-								let next: NfaIdx =
-									lookup_state(StatePair::new(self, other, target1, target2), &mut intersection);
-								combined.insert(overlap, next, PolicyUnique);
+							let next: NfaIdx =
+								lookup_state(StatePair::new(self, other, target1, target2), &mut intersection);
+							if FOR_SEARCH && (interval2.start() != interval2.end()) {
+								overlap = Interval::new(0, u32::MAX);
 							}
+							combined.insert(overlap, next, PolicyUnique);
 						}
 					}
 					intersection[state].transitions = Transitions::Interval(combined);
@@ -315,19 +303,64 @@ impl Tnfa {
 			}
 		}
 
+		// now!(t0);
 		let can_accept: Vec<bool> = intersection.compute_live_states();
-		for state in intersection.states.iter_mut() {
+		// now!(t1);
+		// println!(
+		// 	"computing live states for {} states took {:?}",
+		// 	intersection.states.len(),
+		// 	t1.duration_since(t0)
+		// );
+		if !can_accept[0] {
+			return Self::new();
+		}
+		let mut reachable_states: usize = 0;
+		let new_state_indices: Vec<usize> = Vec::from_iter(can_accept.iter().map(|&b| {
+			if b {
+				let n: usize = reachable_states;
+				reachable_states += 1;
+				n
+			} else {
+				usize::MAX
+			}
+		}));
+		for (old_index, state) in intersection.states.iter_mut().enumerate() {
+			let new_index: usize = new_state_indices[old_index];
+
+			state.idx = NfaIdx(new_index);
+
+			if new_index == usize::MAX {
+				continue;
+			}
+
 			match &mut state.transitions {
 				Transitions::Interval(transitions) => {
 					transitions.retain(|&(_interval, target)| can_accept[target.0]);
+					for (_interval, target) in transitions.iter_mut() {
+						*target = NfaIdx(new_state_indices[target.0]);
+					}
 				},
 				Transitions::Spontaneous(transitions) => {
 					transitions.retain(|&target| can_accept[target.0]);
+					for target in transitions.iter_mut() {
+						*target = NfaIdx(new_state_indices[target.0]);
+					}
 				},
 				Transitions::Tagged { target, .. } => {
-					assert_eq!(can_accept[state.idx.0], can_accept[target.0]);
+					assert_eq!(can_accept[old_index], can_accept[target.0]);
+					*target = NfaIdx(new_state_indices[target.0]);
 				},
 			}
+		}
+		intersection.states.retain(|state| state.idx != NfaIdx(usize::MAX));
+
+		if cfg!(debug_assertions) {
+			assert!(
+				intersection
+					.compute_live_states()
+					.into_iter()
+					.all(|reachable| reachable)
+			);
 		}
 
 		intersection
@@ -339,11 +372,11 @@ impl Tnfa {
 
 	/// States that can reach an accepting state.
 	fn compute_live_states(&self) -> Vec<bool> {
-		let mut acceptable: Vec<bool> = vec![false; self.states.len()];
+		let mut can_accept: Vec<bool> = vec![false; self.states.len()];
 
 		for state in self.states.iter() {
 			if state.is_accepting() {
-				acceptable[state.idx.0] = true;
+				can_accept[state.idx.0] = true;
 			}
 		}
 
@@ -352,8 +385,8 @@ impl Tnfa {
 			changed = false;
 			for state in self.states.iter() {
 				for target_idx in state.transitions.successors() {
-					if acceptable[target_idx.0] {
-						let old_can_accept: bool = std::mem::replace(&mut acceptable[state.idx.0], true);
+					if can_accept[target_idx.0] {
+						let old_can_accept: bool = std::mem::replace(&mut can_accept[state.idx.0], true);
 						if !old_can_accept {
 							changed = true;
 						}
@@ -362,7 +395,7 @@ impl Tnfa {
 			}
 		}
 
-		acceptable
+		can_accept
 	}
 }
 
@@ -410,7 +443,7 @@ impl Tnfa {
 			.map(|state| state.offset_idxes(2 + self.states.len()))
 			.collect::<Vec<_>>();
 
-		let mut new_states: Vec<NfaState> = Vec::with_capacity(2 + self.states.len());
+		let mut new_states: Vec<NfaState> = Vec::with_capacity(2 + self.states.len() + other_states.len());
 		let end_idx: NfaIdx = NfaIdx(1);
 
 		new_states.push(NfaState {
@@ -521,11 +554,22 @@ impl Transitions {
 	/// The elided `'_` lifetime in the return type refers to the lifetime of `&self`,
 	/// and means that the returned `dyn Iterator` will/must be valid for at least the lifetime of `&self`.
 	fn successors(&self) -> Box<dyn Iterator<Item = NfaIdx> + '_> {
+		/*
 		match self {
 			Self::Interval(transitions) => Box::new(transitions.iter().map(|(_interval, target)| *target)),
 			Self::Spontaneous(transitions) => Box::new(transitions.iter().copied()),
 			Self::Tagged { target, .. } => Box::new(std::iter::once(*target)),
 		}
+		*/
+		let iter: &mut dyn Iterator<Item = NfaIdx> = match self {
+			Self::Interval(transitions) => &mut transitions.iter().map(|(_interval, target)| *target),
+			Self::Spontaneous(transitions) => &mut transitions.iter().copied(),
+			Self::Tagged { target, .. } => &mut std::iter::once(*target),
+		};
+		let mut successors: Vec<NfaIdx> = Vec::from_iter(iter);
+		successors.sort();
+		successors.dedup();
+		Box::new(successors.into_iter())
 	}
 }
 

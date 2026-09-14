@@ -980,7 +980,35 @@ impl Tdfa {
 	}
 
 	/// Hopcroft's DFA minimization algorithm.
+	#[tracing::instrument(skip_all, level = "debug")]
 	fn partition_states(&self) -> Vec<BTreeSet<usize>> {
+		// let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, usize> = BTreeMap::new();
+
+		// let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
+
+		// let mut partitions: Vec<usize> = Vec::with_capacity(self.states.len());
+
+		// for (i, state) in self.states.iter().enumerate() {
+		// 	let n: usize = by_accepting.len();
+		// 	let p: usize = *by_accepting.entry(state.accepting_rule).or_insert(n);
+		// 	partitions.push(p);
+
+		// 	for (interval, _) in state.transitions.iter() {
+		// 		all_intervals.insert(interval, (), PolicyNoop);
+		// 	}
+		// }
+
+		// let boundaries: Vec<u32> = all_intervals
+		// 	.iter()
+		// 	.map(|(interval, _)| interval.start())
+		// 	.collect::<Vec<_>>();
+
+		// loop {
+		// 	let mut new_partitions: Vec<usize> = Vec::with_capacity(self.states.len());
+
+		// }
+
+		// partitions
 		use crate::interval_tree::PolicyNoop;
 
 		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, BTreeSet<usize>> = BTreeMap::new();

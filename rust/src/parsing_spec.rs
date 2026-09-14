@@ -218,6 +218,7 @@ impl ParsingSpecBuilder {
 			now!(t0);
 			let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
 			now!(t1);
+			debug!("[minimizing dfa] canonicalizing dfa...");
 			let minimized: Tdfa = main_dfa.canonicalize();
 			now!(t2);
 			debug!(
