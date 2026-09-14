@@ -13,9 +13,8 @@ impl Tnfa {
 		lines.push_str("\tnode [shape=circle];\n");
 		lines.push('\n');
 
-		let tarjan: TarjanSccs = TarjanSccs::tarjan_scc(&self.states, std::iter::once(0), |state| {
-			state.transitions.successors().map(|idx| idx.0)
-		});
+		let tarjan: TarjanSccs = self.sccs();
+
 		for scc in tarjan.sccs.iter() {
 			for &state in scc.iter() {
 				let state: &NfaState = &self.states[state];

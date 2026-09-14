@@ -6,6 +6,8 @@
 
 // mod compressed;
 mod jit;
+#[cfg(test)]
+mod test;
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -93,12 +95,6 @@ struct DfaState {
 	/// Present for debugging.
 	#[serde(skip)]
 	tag_for_register: BTreeMap<usize, CaptureTag>,
-	/// Registers that may be clobbered after leaving this state.
-	/// See [`Tdfa::compute_registers_clobbered`].
-	#[serde(skip)]
-	/// Not used in current implementation.
-	#[allow(unused)]
-	registers_clobbered: BTreeSet<usize>,
 	/// We cache the outgoing transitions for the first so many "common" characters;
 	/// ASCII is most common and happens to be the first 0x80 unicode code points.
 	/// However, the cache size can be changed here without touching the rest of the code.
@@ -558,7 +554,6 @@ impl Tdfa {
 			accepting_rule,
 			final_operations,
 			tag_for_register,
-			registers_clobbered: BTreeSet::new(),
 			ascii_cache: DfaState::default_ascii_cache(),
 		});
 		self.kernels.insert(kernel, idx);
@@ -891,7 +886,6 @@ impl Tdfa {
 				accepting_rule: representative.accepting_rule,
 				final_operations: Vec::new(),
 				tag_for_register: BTreeMap::new(),
-				registers_clobbered: BTreeSet::new(),
 				ascii_cache: DfaState::default_ascii_cache(),
 			});
 		}
@@ -1135,44 +1129,5 @@ impl std::ops::Index<NonZero<usize>> for PrefixTree {
 
 	fn index(&self, i: NonZero<usize>) -> &Self::Output {
 		&self.nodes[i.get()]
-	}
-}
-
-#[cfg(test)]
-mod test {
-	use super::*;
-
-	#[test]
-	fn big_pattern() {
-		let dfa: Tdfa = for_pattern("0((?<foobar>1(2[a-zA-Z])*)*|(?<baz>xyz))*world");
-		let b: bool = dfa.execute("012a2b2c12z12zxyzxyzxyzworld");
-		assert!(b);
-	}
-
-	#[test]
-	fn bracketed_expression_with_overlapping_range() {
-		let dfa: Tdfa = for_pattern("[aa]");
-		let b: bool = dfa.execute("a");
-		assert!(b);
-	}
-
-	#[test]
-	fn submatch_precedence() {
-		let dfa: Tdfa = for_pattern("(?<foo>a|aa)(?<bar>a|aa)");
-		let mut data: TdfaExecution = dfa.execution_data();
-
-		let b: bool = dfa.execute_with_captures("aaa", &mut data, RuleIdx::NIL);
-		assert!(b);
-
-		assert_eq!(data.captures.len(), 2);
-		assert_eq!(data.captures[0].range.start, 0);
-		assert_eq!(data.captures[0].range.end, 1);
-		assert_eq!(data.captures[1].range.start, 1);
-		assert_eq!(data.captures[1].range.end, 3);
-	}
-
-	fn for_pattern(pattern: &str) -> Tdfa {
-		let regex: Regex = Regex::from_pattern(pattern).unwrap();
-		Tdfa::for_single_rule(RuleIdx::NIL, &regex, &[])
 	}
 }

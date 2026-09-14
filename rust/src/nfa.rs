@@ -6,6 +6,8 @@
 mod graph_dot_output;
 mod regex_construction;
 mod search_decomposition;
+#[cfg(test)]
+mod test;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -373,7 +375,7 @@ impl Tnfa {
 	}
 
 	pub fn sccs(&self) -> TarjanSccs {
-		TarjanSccs::tarjan_scc(&self.states, 0..=0, |state| {
+		TarjanSccs::tarjan_scc(&self.states, std::iter::once(0), |state| {
 			state.transitions.successors().map(|idx| idx.0)
 		})
 	}
@@ -598,27 +600,5 @@ impl Transitions {
 		successors.sort();
 		successors.dedup();
 		Box::new(successors.into_iter())
-	}
-}
-
-#[cfg(test)]
-mod test {
-	use super::*;
-	use crate::dfa::Tdfa;
-	use crate::regex::Regex;
-
-	#[test]
-	fn intersect_match() {
-		let nfa1: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\w*\d\w*", &mut ()).unwrap());
-		let nfa2: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\d+", &mut ()).unwrap());
-		let nfa3: Tnfa = Tnfa::for_regex(&Regex::from_pattern_with_placeholders(r"\w+", &mut ()).unwrap());
-
-		let intersection12: Tnfa = nfa1.intersect::<false, true>(&nfa2);
-		let dfa: Tdfa = Tdfa::determinization::<false>(&intersection12);
-		assert!(!dfa.execute("a1b"));
-
-		let intersection13: Tnfa = nfa1.intersect::<false, true>(&nfa3);
-		let dfa: Tdfa = Tdfa::determinization::<false>(&intersection13);
-		assert!(dfa.execute("a1b"));
 	}
 }
