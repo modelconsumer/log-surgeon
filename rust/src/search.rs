@@ -276,7 +276,11 @@ impl SearchString {
 	}
 
 	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
-		let view: SearchStringView<'_> = self.view(0, self.0.len());
+		let view: SearchStringView<'_> = if self.0.last().unwrap() == &SymbolicChar::GlobStar {
+			self.view(0, self.0.len() - 1)
+		} else {
+			self.view(0, self.0.len())
+		};
 
 		log_shapes
 			.iter()
@@ -345,7 +349,7 @@ impl<'a> SearchStringView<'a> {
 			return Vec::new();
 		}
 
-		let paths: Vec<Path> = intersection.compute_paths();
+		let paths: Vec<Path> = intersection.compute_paths::<true>();
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -391,7 +395,7 @@ impl<'a> SearchStringView<'a> {
 
 		let intersection: Tnfa = nfa.intersect::<true, true>(&search_nfa);
 
-		let paths: Vec<Path> = intersection.compute_paths();
+		let paths: Vec<Path> = intersection.compute_paths::<false>();
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
