@@ -32,7 +32,6 @@ struct PyParser {
 	maybe_parser: Option<Parser>,
 	buffer: String,
 	pos: usize,
-	#[allow(unused)]
 	debug: bool,
 }
 
@@ -84,9 +83,9 @@ struct PyMatch {
 impl PyParser {
 	#[new]
 	#[pyo3(signature = (*, debug = false))]
-	fn new(debug: bool) -> Self {
+	fn new(debug: bool, py: Python<'_>) -> Self {
 		Self {
-			input: Python::attach(|py| py.None()),
+			input: py.None(),
 			spec_builder: ParsingSpecBuilder::new(),
 			maybe_parser: None,
 			buffer: String::new(),
