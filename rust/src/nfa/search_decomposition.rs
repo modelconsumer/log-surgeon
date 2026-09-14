@@ -109,6 +109,40 @@ impl PartialPath {
 		}
 	}
 
+	fn condense_captures(&mut self) {
+		let mut i: usize = 2;
+		while i < self.edges.len() {
+			let PathEdge::Capture {
+				sub_rule: close_sub_rule,
+				is_open,
+			} = &self.edges[i]
+			else {
+				i += 1;
+				continue;
+			};
+			if *is_open {
+				i += 1;
+				continue;
+			}
+			if !self.edges[i - 1].is_wildcard() {
+				i += 1;
+				continue;
+			}
+			let PathEdge::Capture {
+				sub_rule: open_sub_rule,
+				is_open,
+			} = &self.edges[i - 2]
+			else {
+				i += 1;
+				continue;
+			};
+			assert!(*is_open);
+			assert_eq!(open_sub_rule, close_sub_rule);
+			self.edges.drain((i - 2)..=i);
+			i = i - 2;
+		}
+	}
+
 	fn finish(self, rule_idx: RuleIdx) -> Path {
 		let mut components: Vec<PathComponent> = Vec::new();
 		let mut maybe_active_capture: Option<Arc<SubRule>> = None;
@@ -158,24 +192,33 @@ impl PartialPath {
 				},
 			}
 		}
-		assert_eq!(maybe_active_capture, None);
-
-		if let Some(symbols_first) = symbols.first().copied() {
-			if let Some(last) = components.last_mut() {
-				match last {
-					PathComponent::Literal(last) => {
-						if symbols_first == SymbolicChar::GlobStar {
-							assert_ne!(*last.last().unwrap(), SymbolicChar::GlobStar);
-						}
-						last.extend(symbols.into_iter());
-					},
-					PathComponent::Capture { .. } => {
-						components.push(PathComponent::Literal(symbols));
-					},
+		// assert_eq!(maybe_active_capture, None);
+		if let Some(active_rule) = maybe_active_capture {
+			if symbols.last() != Some(&SymbolicChar::GlobStar) {
+				symbols.push(SymbolicChar::GlobStar);
+			}
+			components.push(PathComponent::Capture {
+				sub_rule: active_rule,
+				contents: symbols,
+			});
+		} else {
+			if let Some(symbols_first) = symbols.first().copied() {
+				if let Some(last) = components.last_mut() {
+					match last {
+						PathComponent::Literal(last) => {
+							if symbols_first == SymbolicChar::GlobStar {
+								assert_ne!(*last.last().unwrap(), SymbolicChar::GlobStar);
+							}
+							last.extend(symbols.into_iter());
+						},
+						PathComponent::Capture { .. } => {
+							components.push(PathComponent::Literal(symbols));
+						},
+					}
+				} else {
+					assert_eq!(components, []);
+					components.push(PathComponent::Literal(symbols));
 				}
-			} else {
-				assert_eq!(components, []);
-				components.push(PathComponent::Literal(symbols));
 			}
 		}
 
@@ -289,10 +332,11 @@ impl PathEdge {
 
 impl Tnfa {
 	pub fn compute_paths<const WITH_ANCHORS: bool>(&self) -> Vec<Path> {
-		let tarjan: TarjanSccs = TarjanSccs::tarjan_scc(&self.states, 0..=0, |state| {
-			state.transitions.successors().map(|idx| idx.0)
-		});
+		let tarjan: TarjanSccs = self.sccs();
 
+		debug!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
+
+		/*
 		let live_states: Vec<bool> = self.compute_live_states();
 		let mut acceptable_sccs: BTreeSet<usize> = BTreeSet::new();
 		assert!(live_states[0]);
@@ -327,6 +371,7 @@ impl Tnfa {
 				}
 			}
 		}
+		*/
 
 		// println!(
 		// 	"have {} states, tarjan has {} sccs, have {} reachable sccs, simple sccs {}, paths {}",
@@ -341,6 +386,7 @@ impl Tnfa {
 			return Vec::new();
 		}
 
+		now!(t0);
 		debug!("paths for each state...");
 		let mut cache: BTreeMap<NfaIdx, Vec<(PartialPath, NfaIdx)>> = BTreeMap::new();
 		{
@@ -355,7 +401,8 @@ impl Tnfa {
 				}
 			}
 		}
-		debug!("done paths for each state.");
+		now!(t1);
+		debug!("done paths for each state {}.", t1.duration_since(t0).as_millis());
 
 		now!(t2);
 		debug!("paths...");
@@ -373,6 +420,8 @@ impl Tnfa {
 						prefix_path.iter().cloned().chain(next_path.iter().cloned()),
 					));
 					path.condense();
+					path.condense_captures();
+					path.condense();
 					if seen_prefixes.insert((path.clone(), *next_idx)) {
 						stack.push((path, &self[*next_idx]));
 					}
@@ -380,7 +429,7 @@ impl Tnfa {
 			}
 		}
 		now!(t3);
-		debug!("done {:?}.", t3.duration_since(t2));
+		debug!("done {}.", t3.duration_since(t2).as_millis());
 
 		finished.iter().for_each(Path::invariants);
 

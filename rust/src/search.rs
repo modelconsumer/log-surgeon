@@ -643,7 +643,15 @@ impl<'a> SearchStringView<'a> {
 
 		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex(None));
 
+		now!(t0);
 		let intersection: Tnfa = shape_nfa.intersect::<true>(&search_nfa);
+		now!(t1);
+		debug!(
+			"intersecting {} states with {} states took {}",
+			shape_nfa.states.len(),
+			search_nfa.states.len(),
+			t1.duration_since(t0).as_millis()
+		);
 		if intersection.definitely_cannot_accept() {
 			return Vec::new();
 		}

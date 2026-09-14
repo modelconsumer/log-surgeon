@@ -21,10 +21,11 @@ use crate::interval_tree::PolicyUnique;
 use crate::parsing_spec::Encoding;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
+use crate::utils::TarjanSccs;
 
 #[derive(Debug, Clone)]
 pub struct Tnfa {
-	states: Vec<NfaState>,
+	pub states: Vec<NfaState>,
 	tags: BTreeSet<CaptureTag>,
 }
 
@@ -226,6 +227,11 @@ impl Tnfa {
 		};
 
 		while let Some((pair, state)) = stack.pop() {
+			if FOR_SEARCH && pair.state2().is_accepting() {
+				intersection[state].maybe_accepts_for_rule = Some(RuleIdx::NIL);
+				assert_eq!(intersection[state].transitions.len(), 0);
+				continue;
+			}
 			if let Some(rule) = pair.state1().maybe_accepts_for_rule
 				&& pair.state2().is_accepting()
 			{
@@ -303,14 +309,14 @@ impl Tnfa {
 			}
 		}
 
-		// now!(t0);
+		now!(t0);
 		let can_accept: Vec<bool> = intersection.compute_live_states();
-		// now!(t1);
-		// println!(
-		// 	"computing live states for {} states took {:?}",
-		// 	intersection.states.len(),
-		// 	t1.duration_since(t0)
-		// );
+		now!(t1);
+		debug!(
+			"- computing live states for {} states took {}",
+			intersection.states.len(),
+			t1.duration_since(t0).as_millis(),
+		);
 		if !can_accept[0] {
 			return Self::new();
 		}
@@ -366,31 +372,53 @@ impl Tnfa {
 		intersection
 	}
 
+	pub fn sccs(&self) -> TarjanSccs {
+		TarjanSccs::tarjan_scc(&self.states, 0..=0, |state| {
+			state.transitions.successors().map(|idx| idx.0)
+		})
+	}
+
 	pub fn can_accept(&self) -> bool {
 		self.compute_live_states()[0]
 	}
 
 	/// States that can reach an accepting state.
 	fn compute_live_states(&self) -> Vec<bool> {
-		let mut can_accept: Vec<bool> = vec![false; self.states.len()];
+		let tarjan: TarjanSccs = self.sccs();
 
+		let mut can_accept_by_scc: Vec<bool> = vec![false; tarjan.sccs.len()];
+
+		let mut changed: Vec<usize> = Vec::new();
 		for state in self.states.iter() {
 			if state.is_accepting() {
-				can_accept[state.idx.0] = true;
+				let scc: usize = tarjan.vertices[state.idx.0].scc;
+				can_accept_by_scc[scc] = true;
+				changed.push(scc);
 			}
 		}
+		changed.sort();
+		changed.dedup();
 
-		let mut changed: bool = true;
-		while changed {
-			changed = false;
-			for state in self.states.iter() {
-				for target_idx in state.transitions.successors() {
-					if can_accept[target_idx.0] {
-						let old_can_accept: bool = std::mem::replace(&mut can_accept[state.idx.0], true);
-						if !old_can_accept {
-							changed = true;
-						}
+		let mut new_changed: Vec<usize> = Vec::new();
+
+		while !changed.is_empty() {
+			for scc in changed.drain(..) {
+				for &parent in tarjan.scc_predecessors[scc].iter() {
+					assert!(parent <= scc);
+					if can_accept_by_scc[scc] && !can_accept_by_scc[parent] {
+						can_accept_by_scc[parent] = true;
+						new_changed.push(parent);
 					}
+				}
+			}
+			std::mem::swap(&mut changed, &mut new_changed);
+		}
+
+		let mut can_accept: Vec<bool> = vec![false; self.states.len()];
+		for scc in 0..tarjan.sccs.len() {
+			if can_accept_by_scc[scc] {
+				for &i in tarjan.sccs[scc].iter() {
+					can_accept[i] = true;
 				}
 			}
 		}

@@ -8,6 +8,7 @@ macro_rules! time_this {
 	}};
 }
 
+#[macro_export]
 macro_rules! now {
 	($var:ident) => {
 		let $var: ::std::time::Instant = ::std::time::Instant::now();
