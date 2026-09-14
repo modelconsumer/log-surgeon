@@ -74,6 +74,7 @@ impl Parser {
 
 	/// Return the next log event;
 	/// update `*pos` to the position after the returned event.
+	/// Returns `None` iff `*pos == input.len()`.
 	pub fn next_event(&mut self, input: &str, pos: &mut usize) -> Option<LogEvent<'_>> {
 		if *pos == input.len() {
 			return None;

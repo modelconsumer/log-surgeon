@@ -5,7 +5,8 @@ use pyo3::buffer::PyBuffer;
 // use pyo3::exceptions::PyIndexError;
 // use pyo3::exceptions::PyKeyError;
 use pyo3::exceptions::PyRuntimeError;
-use pyo3::exceptions::PyUnicodeEncodeError;
+use pyo3::exceptions::PyUnicodeDecodeError;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::types::PyInt;
@@ -22,7 +23,6 @@ use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleInfo;
 
 pyo3::create_exception!(log_surgeon, LogSurgeonException, PyRuntimeError);
-pyo3::create_exception!(log_surgeon, LogSurgeonInvalidRegexPattern, LogSurgeonException);
 
 #[pyclass(name = "Parser")]
 #[derive(Debug)]
@@ -38,8 +38,6 @@ struct PyParser {
 #[pyclass(name = "LogEvent", frozen)]
 #[derive(Debug)]
 struct PyLogEvent {
-	#[pyo3(get)]
-	log_type: Py<PyString>,
 	#[pyo3(get)]
 	message: Py<PyString>,
 	#[pyo3(get)]
@@ -98,16 +96,19 @@ impl PyParser {
 	/// (see [`ParsingSpecBuilder::add_rule_with_priority`]).
 	#[pyo3(signature = (name, pattern, *, priority=0))]
 	fn add_rule(&mut self, name: &str, pattern: &str, priority: i32) -> PyResult<()> {
+		if name.is_empty() || (name == "delimiters") {
+			return Err(PyValueError::new_err(format!("invalid name: '{name:?}'")));
+		}
 		self.spec_builder
 			.add_rule_with_priority(priority, name, pattern)
-			.map_err(|err| LogSurgeonInvalidRegexPattern::new_err(format!("invalid pattern: {err:?}")))?;
+			.map_err(|err| PyValueError::new_err(format!("invalid pattern: {err:?}")))?;
 		Ok(())
 	}
 
 	/// Raises an exception if `delimiters` is empty.
 	fn set_delimiters(&mut self, delimiters: &str) -> PyResult<()> {
 		if delimiters.is_empty() {
-			return Err(LogSurgeonException::new_err("delimiters cannot be empty"));
+			return Err(PyValueError::new_err("delimiters cannot be empty"));
 		}
 		self.spec_builder.set_delimiters(delimiters);
 		Ok(())
@@ -186,10 +187,8 @@ impl PyParser {
 			all_matches.push(py_mat);
 		}
 		let all_matches: Bound<'_, PyList> = PyList::new(py, all_matches)?;
-		let log_type: String = log_type::stringify(spec, event.message.as_str(), event.all_matches.as_slice());
 
 		Ok(Some(PyLogEvent {
-			log_type: PyString::new(py, &log_type).unbind(),
 			message: PyString::new(py, event.message.as_str()).unbind(),
 			leaf_matches: leaf_matches.unbind(),
 			non_leaf_matches: non_leaf_matches.unbind(),
@@ -339,96 +338,24 @@ fn python_unicode_or_bytes_as_str<'a>(input: &'a Bound<'_, PyAny>) -> PyResult<O
 	} else if let Ok(bytes) = input.cast::<PyBytes>() {
 		match str::from_utf8(bytes.as_bytes()) {
 			Ok(utf8) => Ok(Some(utf8)),
-			Err(err) => Err(PyUnicodeEncodeError::new_err(err)),
+			Err(err) => Err(PyUnicodeDecodeError::new_err(err)),
 		}
 	} else {
 		Ok(None)
 	}
 }
 
-// Legacy/testing.
-mod log_type {
-	use std::num::NonZero;
-
-	use crate::log_event::Match;
-	use crate::parsing_spec::ParsingSpec;
-
-	/// A `LogType` is a "template string" for a [`LogEvent`](crate::log_event::LogEvent).
-	/// The string representation of a `LogType` (e.g. given by [`LogType::as_str`])
-	/// consists of:
-	///
-	/// - `'%'` characters escaped by doubling them,
-	/// - capture placeholders surrounded by a single `'%'` on each side;
-	///   a capture `bar` with capture id `2` in a variable `foo` with rule id `1`
-	///   shows up at `%1.2:foo.bar%` in the string representation.
-	pub fn stringify<'a>(
-		spec: &ParsingSpec,
-		log_message: &str,
-		matches: impl IntoIterator<Item = &'a Match>,
-	) -> String {
-		use std::fmt::Write;
-
-		let mut buf: String = String::new();
-		let mut last_pos: usize = 0;
-		for mat in matches {
-			if !mat.is_leaf {
-				continue;
-			}
-			let pos: usize = mat.range.start;
-			for s in escape::<'%'>(&log_message[last_pos..pos]) {
-				buf.push_str(s);
-			}
-			let root_rule_name: &str = &spec[mat.rule_idx].name;
-			let sub_rule_name: &str = spec[mat.rule_idx][mat.sub_rule_id].sub_rule_name();
-			write!(
-				&mut buf,
-				"%{}.{}:{}.{}%",
-				mat.rule_idx,
-				mat.sub_rule_id.map_or(0, NonZero::get),
-				root_rule_name,
-				sub_rule_name,
-			)
-			.unwrap();
-			last_pos = mat.range.end;
-		}
-		for s in escape::<'%'>(&log_message[last_pos..]) {
-			buf.push_str(s);
-		}
-		buf
-	}
-
-	/// Escapes static text by duplicating each occurence of `CHAR`;
-	/// returns an iterator over escaped substrings;
-	/// concatenate the substrings for the final result.
-	fn escape<'a, const CHAR: char>(mut remaining: &'a str) -> impl Iterator<Item = &'a str> {
-		std::iter::from_fn(move || {
-			if remaining.is_empty() {
-				return None;
-			}
-			Some(match remaining.find(CHAR) {
-				Some(0) => {
-					remaining = &remaining[CHAR.len_utf8()..];
-					"%%"
-				},
-				Some(i) => {
-					let (before, after): (&str, &str) = remaining.split_at(i);
-					remaining = after;
-					before
-				},
-				None => std::mem::replace(&mut remaining, ""),
-			})
-		})
-	}
-}
-
 #[pymodule]
 mod log_surgeon_ffi {
+	#[pymodule_export]
+	use super::LogSurgeonException;
 	#[pymodule_export]
 	use super::PyLogEvent;
 	#[pymodule_export]
 	use super::PyMatch;
 	#[pymodule_export]
 	use super::PyParser;
+	// This looks weird but is correct per PyO3 usage.
 	use super::*;
 
 	#[pyfunction]
