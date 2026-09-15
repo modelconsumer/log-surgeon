@@ -208,6 +208,15 @@ impl PartialPath {
 				});
 				symbols = vec![SymbolicChar::GlobStar];
 			}
+			// if symbols.last() != Some(&SymbolicChar::GlobStar) {
+			// 	symbols.push(SymbolicChar::GlobStar);
+			// }
+			// components.push(PathComponent::Capture {
+			// 	sub_rule: active_rule,
+			// 	contents: symbols,
+			// });
+			// components.push(PathComponent::Literal(vec![SymbolicChar::GlobStar]));
+			// symbols = Vec::new();
 		}
 		if !symbols.is_empty() {
 			if let Some(last) = components.last_mut() {
@@ -316,9 +325,6 @@ impl std::fmt::Display for PathComponent {
 						},
 						SymbolicChar::GlobStar => {
 							'*'.fmt(fmt)?;
-						},
-						SymbolicChar::GlobOne => {
-							unreachable!();
 						},
 					}
 				}

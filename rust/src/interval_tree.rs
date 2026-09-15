@@ -191,7 +191,7 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 	}
 
 	/// Checks that intervals are non-overlapping.
-	#[cfg_attr(feature = "debug_assertions", allow(unused))]
+	#[cfg_attr(debug_assertions, allow(unused))]
 	fn check_invariants(&self) {
 		let mut maybe_previous: Option<T> = None;
 		for (interval, _) in self.intervals.iter() {

@@ -36,7 +36,6 @@ pub enum SearchStringError<'input> {
 pub enum SymbolicChar {
 	Literal(char),
 	GlobStar,
-	GlobOne,
 }
 
 impl std::fmt::Debug for SymbolicChar {
@@ -49,16 +48,12 @@ impl std::fmt::Display for SymbolicChar {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Self::Literal(ch) => {
-				match ch {
-					'*' | '?' | '\\' => {
-						fmt.write_str("\\")?;
-					},
-					_ => (),
+				if matches!(ch, '*' | '\\') {
+					fmt.write_str("\\")?;
 				}
 				ch.fmt(fmt)
 			},
 			Self::GlobStar => fmt.write_str("*"),
-			Self::GlobOne => fmt.write_str("?"),
 		}
 	}
 }
@@ -129,11 +124,6 @@ impl PartialEq for SubQuery {
 	fn eq(&self, other: &Self) -> bool {
 		self.cmp(other).is_eq()
 	}
-}
-
-#[derive(Debug, Clone)]
-pub struct InterpretationPrefix {
-	successors: BTreeMap<SubQuery, Self>,
 }
 
 #[derive(Clone, Copy)]
@@ -227,13 +217,12 @@ impl SearchString {
 		let mut last_was_escape: bool = false;
 		for (i, ch) in input.char_indices() {
 			match ch {
-				'*' | '?' | '\\' => {
-					chars.push(if last_was_escape {
+				'*' | '\\' => {
+					symbols.push(if last_was_escape {
 						SymbolicChar::Literal(ch)
 					} else {
 						match ch {
 							'*' => SymbolicChar::GlobStar,
-							'?' => SymbolicChar::GlobOne,
 							'\\' => {
 								last_was_escape = true;
 								continue;
@@ -487,18 +476,13 @@ impl std::ops::Deref for SearchStringView<'_> {
 
 impl SymbolicChar {
 	pub fn is_wildcard(&self) -> bool {
-		matches!(self, Self::GlobStar | Self::GlobOne)
+		*self == Self::GlobStar
 	}
 
 	fn to_regex(&self) -> Regex {
 		match *self {
 			SymbolicChar::Literal(ch) => Regex::Literal(ch),
 			SymbolicChar::GlobStar => Regex::KleeneClosure(Box::new(Regex::AnyChar)),
-			SymbolicChar::GlobOne => Regex::BoundedRepetition {
-				min: 0,
-				max: 1,
-				item: Box::new(Regex::AnyChar),
-			},
 		}
 	}
 }
@@ -614,57 +598,6 @@ impl SubQuery {
 		if *self.symbolic_value.last().unwrap() != SymbolicChar::GlobStar {
 			self.symbolic_value.push(SymbolicChar::GlobStar);
 			self.string_value.push('*');
-		}
-	}
-}
-
-impl InterpretationPrefix {
-	pub fn from_interpretations(interpretations: &[Interpretation]) -> Self {
-		let mut this: Self = Self::new();
-		for interpretation in interpretations.iter() {
-			this.add_interpretation(&interpretation.sub_queries);
-		}
-		this
-	}
-
-	pub fn len(&self) -> usize {
-		self.successors.len()
-	}
-
-	pub fn total_len(&self) -> usize {
-		if self.successors.is_empty() {
-			return 1;
-		}
-		self.successors
-			.values()
-			.fold(0, |accum, successor| accum + successor.total_len())
-	}
-
-	fn new() -> Self {
-		Self {
-			successors: BTreeMap::new(),
-		}
-	}
-
-	fn add_interpretation(&mut self, sub_queries: &[SubQuery]) {
-		let Some(first): Option<&SubQuery> = sub_queries.first() else {
-			return;
-		};
-		self.successors
-			.entry(first.clone())
-			.or_insert_with(Self::new)
-			.add_interpretation(&sub_queries[1..]);
-	}
-
-	pub fn print(&self, indent: usize) {
-		for (sub_query, successors) in self.successors.iter() {
-			println!(
-				"{:\t>indent$}- {sub_query:?} ({} -> {})",
-				"",
-				successors.len(),
-				successors.total_len()
-			);
-			successors.print(indent + 1);
 		}
 	}
 }

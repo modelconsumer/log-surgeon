@@ -74,7 +74,7 @@ impl Regex {
 				SymbolicChar::Literal(ch) => {
 					vec![(vec![SymbolicOutput::Literal(ch)], Vec::new())]
 				},
-				SymbolicChar::GlobOne | SymbolicChar::GlobStar => {
+				SymbolicChar::GlobStar => {
 					vec![(vec![SymbolicOutput::Wildcard], Vec::new())]
 				},
 			},
@@ -83,7 +83,7 @@ impl Regex {
 					vec![(vec![SymbolicOutput::Literal(ch)], Vec::new())]
 				},
 				SymbolicChar::Literal(_) => Vec::new(),
-				SymbolicChar::GlobOne | SymbolicChar::GlobStar => {
+				SymbolicChar::GlobStar => {
 					vec![(vec![SymbolicOutput::Literal(ch)], Vec::new())]
 				},
 			},
@@ -95,7 +95,7 @@ impl Regex {
 						Vec::new()
 					}
 				},
-				SymbolicChar::GlobOne | SymbolicChar::GlobStar => {
+				SymbolicChar::GlobStar => {
 					vec![(vec![SymbolicOutput::Wildcard], Vec::new())]
 				},
 			},
@@ -113,9 +113,6 @@ impl Regex {
 				},
 				SymbolicChar::GlobStar => {
 					vec![(vec![SymbolicOutput::Wildcard], Vec::new())]
-				},
-				SymbolicChar::GlobOne => {
-					todo!();
 				},
 			},
 			Self::KleenePlus(item) => item.wrap_as_desugared_kleene_plus().derivative_step(input),
@@ -142,7 +139,7 @@ impl Regex {
 				SymbolicChar::Literal(_) => {
 					return Vec::new();
 				},
-				SymbolicChar::GlobOne | SymbolicChar::GlobStar => {
+				SymbolicChar::GlobStar => {
 					return vec![(Vec::new(), Vec::new())];
 				},
 			}
