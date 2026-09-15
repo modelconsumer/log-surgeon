@@ -109,40 +109,6 @@ impl PartialPath {
 		}
 	}
 
-	fn condense_captures(&mut self) {
-		let mut i: usize = 2;
-		while i < self.edges.len() {
-			let PathEdge::Capture {
-				sub_rule: close_sub_rule,
-				is_open,
-			} = &self.edges[i]
-			else {
-				i += 1;
-				continue;
-			};
-			if *is_open {
-				i += 1;
-				continue;
-			}
-			if !self.edges[i - 1].is_wildcard() {
-				i += 1;
-				continue;
-			}
-			let PathEdge::Capture {
-				sub_rule: open_sub_rule,
-				is_open,
-			} = &self.edges[i - 2]
-			else {
-				i += 1;
-				continue;
-			};
-			assert!(*is_open);
-			assert_eq!(open_sub_rule, close_sub_rule);
-			self.edges.drain((i - 2)..=i);
-			i = i - 2;
-		}
-	}
-
 	fn finish<const WILDCARD_END: bool>(mut self, rule_idx: RuleIdx) -> Path {
 		let mut components: Vec<PathComponent> = Vec::new();
 		let mut maybe_active_capture: Option<Arc<SubRule>> = None;
@@ -177,17 +143,8 @@ impl PartialPath {
 						assert!(is_open);
 
 						if !symbols.is_empty() {
-							if let Some(PathComponent::Literal(last)) = components.last_mut() {
-								if (last.last() == Some(&SymbolicChar::GlobStar))
-									&& (symbols.first() == Some(&SymbolicChar::GlobStar))
-								{
-									last.extend(symbols.drain(1..));
-								} else {
-									last.extend(symbols.into_iter());
-								}
-							} else {
-								components.push(PathComponent::Literal(symbols));
-							}
+							assert!(!matches!(components.last(), Some(PathComponent::Literal(_))));
+							components.push(PathComponent::Literal(symbols));
 						}
 						symbols = Vec::new();
 						maybe_active_capture = Some(sub_rule.clone());
@@ -198,43 +155,19 @@ impl PartialPath {
 				},
 			}
 		}
-		// assert_eq!(maybe_active_capture, None);
 		if let Some(active_rule) = maybe_active_capture {
 			assert!(WILDCARD_END);
-			if symbols != [SymbolicChar::GlobStar] {
-				components.push(PathComponent::Capture {
-					sub_rule: active_rule,
-					contents: symbols,
-				});
-				symbols = vec![SymbolicChar::GlobStar];
+			if symbols.last() != Some(&SymbolicChar::GlobStar) {
+				symbols.push(SymbolicChar::GlobStar);
 			}
-			// if symbols.last() != Some(&SymbolicChar::GlobStar) {
-			// 	symbols.push(SymbolicChar::GlobStar);
-			// }
-			// components.push(PathComponent::Capture {
-			// 	sub_rule: active_rule,
-			// 	contents: symbols,
-			// });
-			// components.push(PathComponent::Literal(vec![SymbolicChar::GlobStar]));
-			// symbols = Vec::new();
-		}
-		if !symbols.is_empty() {
-			if let Some(last) = components.last_mut() {
-				match last {
-					PathComponent::Literal(last) => {
-						if (last.last() == Some(&SymbolicChar::GlobStar))
-							&& (symbols.first() == Some(&SymbolicChar::GlobStar))
-						{
-							last.extend(symbols.drain(1..));
-						} else {
-							last.extend(symbols.into_iter());
-						}
-					},
-					PathComponent::Capture { .. } => {
-						components.push(PathComponent::Literal(symbols));
-					},
-				}
-			} else {
+			components.push(PathComponent::Capture {
+				sub_rule: active_rule,
+				contents: symbols,
+			});
+			components.push(PathComponent::Literal(vec![SymbolicChar::GlobStar]));
+		} else {
+			if !symbols.is_empty() {
+				assert!(!matches!(components.last(), Some(PathComponent::Literal(_))));
 				components.push(PathComponent::Literal(symbols));
 			}
 		}
@@ -387,8 +320,6 @@ impl Tnfa {
 					let mut path: PartialPath = PartialPath::new(Vec::from_iter(
 						prefix_path.iter().cloned().chain(next_path.iter().cloned()),
 					));
-					path.condense();
-					path.condense_captures();
 					path.condense();
 					if seen_prefixes.insert((path.clone(), *next_idx)) {
 						stack.push((path, &self[*next_idx]));

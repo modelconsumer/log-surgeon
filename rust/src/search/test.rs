@@ -44,16 +44,23 @@ fn search_block_id() {
 			&*interpretations[0].sub_queries[1].fully_qualified_name,
 			"block_id.blockNum"
 		);
-		assert_eq!(interpretations[1].sub_queries[0].string_value, "blk*_");
-		// assert_eq!(interpretations[1].sub_queries[1].string_value, "*");
-		// assert_eq!(
-		// 	&*interpretations[1].sub_queries[1].fully_qualified_name,
-		// 	"block_id.blockNum"
-		// );
-		// assert_eq!(interpretations[0].sub_queries[2].string_value, "_");
-		assert_eq!(interpretations[1].sub_queries[1].string_value, "566*");
+		assert_eq!(interpretations[0].sub_queries[2].string_value, "*");
+		assert_eq!(interpretations[0].sub_queries[3].string_value, "*");
+		assert_eq!(
+			&*interpretations[0].sub_queries[3].fully_qualified_name,
+			"block_id.genStamp"
+		);
+
+		assert_eq!(interpretations[1].sub_queries[0].string_value, "blk*");
+		assert_eq!(interpretations[1].sub_queries[1].string_value, "*");
 		assert_eq!(
 			&*interpretations[1].sub_queries[1].fully_qualified_name,
+			"block_id.blockNum"
+		);
+		assert_eq!(interpretations[1].sub_queries[2].string_value, "_");
+		assert_eq!(interpretations[1].sub_queries[3].string_value, "566*");
+		assert_eq!(
+			&*interpretations[1].sub_queries[3].fully_qualified_name,
 			"block_id.genStamp"
 		);
 	}
@@ -63,8 +70,8 @@ fn search_block_id() {
 fn search_nested_name_without_leaf_capture() {
 	let spec: ParsingSpec = spec! {
 		r#"
-			foo: "_(?<bar>[a-z]+|(?<baz>[0-9]+))_"
-			"#
+		foo: "_(?<bar>[a-z]+|(?<baz>[0-9]+))_"
+		"#
 	};
 
 	{
