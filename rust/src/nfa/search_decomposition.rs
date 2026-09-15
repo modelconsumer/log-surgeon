@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use rustc_hash::FxHashSet;
+
 use crate::nfa::NfaIdx;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
@@ -32,7 +34,23 @@ enum PathEdge {
 	Wildcard,
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+impl std::hash::Hash for PathEdge {
+	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+		std::mem::discriminant(self).hash(state);
+		match self {
+			Self::Literal(ch) => {
+				ch.hash(state);
+			},
+			Self::Capture { sub_rule, is_open } => {
+				sub_rule.name.hash(state);
+				is_open.hash(state);
+			},
+			Self::Wildcard => (),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
 struct PartialPath {
 	edges: Vec<PathEdge>,
 }
@@ -290,12 +308,14 @@ impl Tnfa {
 		trace!("paths for each state...");
 		let mut cache: Vec<Option<Vec<(PartialPath, NfaIdx)>>> = vec![None; self.states.len()];
 		{
-			let mut seen: BTreeSet<NfaIdx> = BTreeSet::from([NfaIdx::BEGIN]);
+			let mut seen: Vec<bool> = vec![false; self.states.len()];
+			seen[NfaIdx::BEGIN.0] = true;
 			let mut stack: Vec<&NfaState> = vec![&self[NfaIdx::BEGIN]];
 			while let Some(state) = stack.pop() {
 				let paths: &[(PartialPath, NfaIdx)] = self.compute_path_for_vertex(state, &tarjan, &mut cache);
 				for (_path, next) in paths.iter() {
-					if seen.insert(*next) {
+					if !seen[next.0] {
+						seen[next.0] = true;
 						stack.push(&self[*next]);
 					}
 				}
@@ -307,7 +327,8 @@ impl Tnfa {
 		now!(t2);
 		trace!("paths...");
 		let mut finished: Vec<Path> = Vec::new();
-		let mut seen_prefixes: BTreeSet<(PartialPath, NfaIdx)> = BTreeSet::new();
+		// TODO no ::new?
+		let mut seen_prefixes: FxHashSet<(PartialPath, NfaIdx)> = FxHashSet::default();
 		{
 			let mut stack: Vec<(PartialPath, &NfaState)> = vec![(PartialPath::new(Vec::new()), &self[NfaIdx::BEGIN])];
 			while let Some((prefix_path, current)) = stack.pop() {
@@ -411,6 +432,7 @@ impl Tnfa {
 	}
 
 	fn compute_scc_path(&self, entry: &NfaState, tarjan: &TarjanSccs, finished: &mut Vec<(PartialPath, NfaIdx)>) {
+		// 2026-09-15: no noticeable improvement replacing `BTreeSet` with `FxHashSet` here.
 		let mut stack: Vec<(&NfaState, PartialPath, BTreeSet<NfaIdx>)> = vec![(
 			entry,
 			PartialPath::new(vec![PathEdge::Wildcard]),

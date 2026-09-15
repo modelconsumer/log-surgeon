@@ -43,7 +43,7 @@ pub struct NfaState {
 }
 
 /// Newtype wrapper around a `usize` index.
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NfaIdx(usize);
 

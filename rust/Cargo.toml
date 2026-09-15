@@ -46,6 +46,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["tracing-log", "env-filter"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+rustc-hash = "2.1"
 
 # Note: We do want to always include to JIT,
 # the compile-time feature flag is just the current way to test with/without it,
