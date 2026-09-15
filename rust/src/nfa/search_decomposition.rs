@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -289,7 +288,7 @@ impl Tnfa {
 
 		now!(t0);
 		trace!("paths for each state...");
-		let mut cache: BTreeMap<NfaIdx, Vec<(PartialPath, NfaIdx)>> = BTreeMap::new();
+		let mut cache: Vec<Option<Vec<(PartialPath, NfaIdx)>>> = vec![None; self.states.len()];
 		{
 			let mut seen: BTreeSet<NfaIdx> = BTreeSet::from([NfaIdx::BEGIN]);
 			let mut stack: Vec<&NfaState> = vec![&self[NfaIdx::BEGIN]];
@@ -316,7 +315,7 @@ impl Tnfa {
 					finished.push(prefix_path.finish::<WILDCARD_END>(rule_idx));
 					continue;
 				}
-				for (next_path, next_idx) in cache[&current.idx].iter() {
+				for (next_path, next_idx) in cache[current.idx.0].as_ref().unwrap().iter() {
 					let mut path: PartialPath = PartialPath::new(Vec::from_iter(
 						prefix_path.iter().cloned().chain(next_path.iter().cloned()),
 					));
@@ -339,16 +338,14 @@ impl Tnfa {
 		&self,
 		entry: &NfaState,
 		tarjan: &TarjanSccs,
-		cache: &'a mut BTreeMap<NfaIdx, Vec<(PartialPath, NfaIdx)>>,
+		cache: &'a mut Vec<Option<Vec<(PartialPath, NfaIdx)>>>,
 	) -> &'a [(PartialPath, NfaIdx)] {
-		use std::collections::btree_map::Entry;
+		// Borrow checker chokes if we do `if let` here...
+		if cache[entry.idx.0].is_some() {
+			return cache[entry.idx.0].as_ref().unwrap();
+		}
 
-		let paths: &mut Vec<(PartialPath, NfaIdx)> = match cache.entry(entry.idx) {
-			Entry::Occupied(e) => {
-				return e.into_mut();
-			},
-			Entry::Vacant(e) => e.insert(Vec::new()),
-		};
+		let paths: &mut Vec<(PartialPath, NfaIdx)> = cache[entry.idx.0].insert(Vec::new());
 
 		let scc: &[usize] = &tarjan.sccs[tarjan.vertices[entry.idx.0].scc];
 		assert!(!scc.is_empty());
