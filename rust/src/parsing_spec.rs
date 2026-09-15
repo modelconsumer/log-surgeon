@@ -69,6 +69,12 @@ impl PartialEq for ParsingSpec {
 	}
 }
 
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub enum LogShapeFragment {
+	Text(String),
+	Rule(String),
+}
+
 impl ParsingSpecBuilder {
 	pub fn new() -> Self {
 		Self {
@@ -301,6 +307,53 @@ impl ParsingSpec {
 	/// References to rules (by name) should be enclosed with percent symbols as `%foo.bar%`.
 	/// Returns `Err(name)` if a name is not found.
 	pub fn automata_for_shape(&self, shape: &str) -> Result<Tnfa, String> {
+		let mut sequence: Vec<Tnfa> = Vec::new();
+
+		for fragment in self.split_log_shape(shape) {
+			match fragment {
+				LogShapeFragment::Text(text) => {
+					let regex: Regex = Regex::Sequence(text.chars().map(Regex::Literal).collect::<Vec<_>>());
+					sequence.push(Tnfa::for_regex(&regex));
+				},
+				LogShapeFragment::Rule(rule_name) => {
+					let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(&rule_name);
+					if rules.is_empty() {
+						return Err(rule_name);
+					}
+
+					let branches: Tnfa = rules
+						.iter()
+						.map(|&(info, regex)| {
+							let regex: &Regex = if info.is_root() && !self[info.root_idx].has_captures() {
+								&Regex::Capture(
+									Arc::new(SubRule {
+										name: info.root_name.clone(),
+										regex: regex.clone(),
+										root_rule_idx: info.root_idx,
+										// TODO
+										id: NonZero::<u16>::MAX,
+										parent_id: None,
+										descendants: 0,
+										qualified_name: info.root_name.clone(),
+										fully_qualified_name: info.root_name.clone(),
+									})
+									.into(),
+								)
+							} else {
+								regex
+							};
+							Tnfa::for_single_rule(info.root_idx, regex, &[])
+						})
+						.fold(Tnfa::BLANK, |accum, x| accum.or(&x));
+					sequence.push(branches);
+				},
+			}
+		}
+
+		Ok(sequence.into_iter().fold(Tnfa::BLANK, |accum, x| accum.concat(&x)))
+	}
+
+	pub fn split_log_shape(&self, shape: &str) -> Vec<LogShapeFragment> {
 		const SEPARATOR: char = '%';
 
 		enum Kind {
@@ -308,7 +361,7 @@ impl ParsingSpec {
 			Rule(String),
 		}
 
-		let mut sequence: Vec<Tnfa> = Vec::new();
+		let mut sequence: Vec<LogShapeFragment> = Vec::new();
 
 		let mut current: Kind = Kind::Text(String::new());
 
@@ -317,8 +370,9 @@ impl ParsingSpec {
 				Kind::Text(mut buffer) => {
 					if ch == SEPARATOR {
 						// Append static text.
-						let regex: Regex = Regex::Sequence(buffer.chars().map(Regex::Literal).collect::<Vec<_>>());
-						sequence.push(Tnfa::for_regex(&regex));
+						if !buffer.is_empty() {
+							sequence.push(LogShapeFragment::Text(buffer));
+						}
 
 						// Switch to parsing rule name.
 						current = Kind::Rule(String::new());
@@ -337,36 +391,7 @@ impl ParsingSpec {
 						}
 
 						// Append rule regexes.
-						let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(&rule_name);
-						if rules.is_empty() {
-							return Err(rule_name);
-						}
-
-						let branches: Tnfa = rules
-							.iter()
-							.map(|&(info, regex)| {
-								let regex: &Regex = if info.is_root() && !self[info.root_idx].has_captures() {
-									&Regex::Capture(
-										Arc::new(SubRule {
-											name: info.root_name.clone(),
-											regex: regex.clone(),
-											root_rule_idx: info.root_idx,
-											// TODO
-											id: NonZero::<u16>::MAX,
-											parent_id: None,
-											descendants: 0,
-											qualified_name: info.root_name.clone(),
-											fully_qualified_name: info.root_name.clone(),
-										})
-										.into(),
-									)
-								} else {
-									regex
-								};
-								Tnfa::for_single_rule(info.root_idx, regex, &[])
-							})
-							.fold(Tnfa::BLANK, |accum, x| accum.or(&x));
-						sequence.push(branches);
+						sequence.push(LogShapeFragment::Rule(rule_name));
 
 						// Switch to static text.
 						current = Kind::Text(String::new());
@@ -381,11 +406,11 @@ impl ParsingSpec {
 		let Kind::Text(buffer): Kind = current else {
 			panic!("malformed log shape '{}'", shape.escape_default());
 		};
+		if !buffer.is_empty() {
+			sequence.push(LogShapeFragment::Text(buffer));
+		}
 
-		let regex: Regex = Regex::Sequence(buffer.chars().map(Regex::Literal).collect::<Vec<_>>());
-		sequence.push(Tnfa::for_regex(&regex));
-
-		Ok(sequence.into_iter().fold(Tnfa::BLANK, |accum, x| accum.concat(&x)))
+		sequence
 	}
 }
 
