@@ -1,4 +1,4 @@
-#[macro_use(debug)]
+#[macro_use(trace, debug)]
 extern crate tracing;
 
 #[macro_use(Serialize, Deserialize)]

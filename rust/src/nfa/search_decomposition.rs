@@ -348,60 +348,14 @@ impl Tnfa {
 	pub fn compute_paths<const WILDCARD_END: bool>(&self) -> Vec<Path> {
 		let tarjan: TarjanSccs = self.sccs();
 
-		debug!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
-
-		/*
-		let live_states: Vec<bool> = self.compute_live_states();
-		let mut acceptable_sccs: BTreeSet<usize> = BTreeSet::new();
-		assert!(live_states[0]);
-		for (i, &b) in live_states.iter().enumerate() {
-			if b {
-				acceptable_sccs.insert(tarjan.vertices[i].scc);
-			}
-		}
-
-		let simple_sccs: Vec<usize> = acceptable_sccs
-			.iter()
-			.copied()
-			.filter(|&i| tarjan.sccs[i].len() == 1)
-			.collect::<Vec<_>>();
-
-		let start: usize = tarjan.vertices[0].scc;
-		assert_eq!(start, 0);
-		assert_eq!(tarjan.sccs[start], [0]);
-		let mut paths: Vec<usize> = vec![0; tarjan.sccs.len()];
-		paths[start] = 1;
-		for (i, scc) in tarjan.sccs[start..].iter().enumerate() {
-			if !acceptable_sccs.contains(&(start + i)) {
-				continue;
-			}
-			for &v in scc.iter() {
-				let mut successors: Vec<NfaIdx> = self.states[v].transitions.successors().collect::<Vec<_>>();
-				successors.sort();
-				successors.dedup();
-				for &jdx in successors.iter() {
-					assert!(live_states[jdx.0]);
-					paths[tarjan.vertices[jdx.0].scc] += paths[start + i];
-				}
-			}
-		}
-		*/
-
-		// println!(
-		// 	"have {} states, tarjan has {} sccs, have {} reachable sccs, simple sccs {}, paths {}",
-		// 	self.states.len(),
-		// 	tarjan.sccs.len(),
-		// 	acceptable_sccs.len(),
-		// 	simple_sccs.len(),
-		// 	paths.iter().max().unwrap(),
-		// );
+		trace!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
 
 		if self[NfaIdx::BEGIN].transitions.len() == 0 {
 			return Vec::new();
 		}
 
 		now!(t0);
-		debug!("paths for each state...");
+		trace!("paths for each state...");
 		let mut cache: BTreeMap<NfaIdx, Vec<(PartialPath, NfaIdx)>> = BTreeMap::new();
 		{
 			let mut seen: BTreeSet<NfaIdx> = BTreeSet::from([NfaIdx::BEGIN]);
@@ -416,10 +370,10 @@ impl Tnfa {
 			}
 		}
 		now!(t1);
-		debug!("done paths for each state {}.", t1.duration_since(t0).as_millis());
+		trace!("done paths for each state {}.", t1.duration_since(t0).as_millis());
 
 		now!(t2);
-		debug!("paths...");
+		trace!("paths...");
 		let mut finished: Vec<Path> = Vec::new();
 		let mut seen_prefixes: BTreeSet<(PartialPath, NfaIdx)> = BTreeSet::new();
 		{
@@ -443,7 +397,7 @@ impl Tnfa {
 			}
 		}
 		now!(t3);
-		debug!("done {}.", t3.duration_since(t2).as_millis());
+		trace!("done {}.", t3.duration_since(t2).as_millis());
 
 		finished.iter().for_each(Path::invariants);
 

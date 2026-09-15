@@ -354,7 +354,7 @@ impl SearchString {
 			}
 			if must_be_in_rule {
 				now!(t0);
-				tracing::info!("must be in rule: {shape}");
+				trace!("must be in rule: {shape:.1024}");
 				let mut fragment_interpretations_matrix: Vec<Vec<Interpretation>> =
 					vec![Vec::new(); shape_fragments.len() * self.fragments.len()];
 
@@ -387,7 +387,7 @@ impl SearchString {
 											sub_search.search_by_name(spec, rule_name);
 
 										// if !interpretations.is_empty() {
-										// 	tracing::info!(
+										// 	trace!(
 										// 		"interpretations for {search_fragment} and {rule_name} can match"
 										// 	);
 										// 	for interp in interpretations.iter() {
@@ -487,7 +487,7 @@ impl SearchString {
 				}
 
 				now!(t1);
-				tracing::info!("have {} interpretations, took {} ms", finished.len(), millis!(t0, t1));
+				debug!("have {} interpretations, took {} ms", finished.len(), millis!(t0, t1));
 				// for interp in finished.iter() {
 				// 	println!("- {interp:?}");
 				// }
@@ -548,7 +548,7 @@ impl<'a> SearchStringView<'a> {
 		now!(t0);
 		let intersection: Tnfa = shape_nfa.intersect::<true, false>(&search_nfa);
 		now!(t1);
-		debug!(
+		trace!(
 			"intersecting {} states with {} states took {}",
 			shape_nfa.states.len(),
 			search_nfa.states.len(),

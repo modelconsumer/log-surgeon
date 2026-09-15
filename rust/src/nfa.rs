@@ -314,7 +314,7 @@ impl Tnfa {
 		now!(t0);
 		let can_accept: Vec<bool> = intersection.compute_live_states();
 		now!(t1);
-		debug!(
+		trace!(
 			"- computing live states for {} states took {}",
 			intersection.states.len(),
 			t1.duration_since(t0).as_millis(),
