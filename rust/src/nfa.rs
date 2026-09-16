@@ -17,6 +17,7 @@ use std::sync::Arc;
 pub use search_decomposition::Path;
 pub use search_decomposition::PathComponent;
 
+use crate::graph::Csr;
 use crate::graph::TarjanSccs;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
@@ -39,6 +40,9 @@ pub struct NfaState {
 	pub maybe_accepts_for_rule: Option<RuleIdx>,
 	pub maybe_encoding: Option<Arc<Encoding>>,
 	/// Not strictly needed, but useful for debugging (including DOT output).
+	///
+	/// Note 2026-09-16 (0d98b9b9a09fa072fc676a069e55a3a07bdf5c74):
+	/// No major performance impact of formatting all the detailed state names.
 	pub name: Cow<'static, str>,
 }
 
@@ -390,25 +394,32 @@ impl Tnfa {
 
 	/// States that can reach an accepting state.
 	fn compute_live_states(&self) -> Vec<bool> {
-		let tarjan: TarjanSccs = self.sccs();
+		// CSR for reversed edges (predecessors).
+		let csr: Csr<()> = Csr::build(
+			self.states.len(),
+			self.states.iter().flat_map(|state| {
+				state
+					.transitions
+					.successors()
+					.map(move |target| (target.0, state.idx.0, ()))
+			}),
+		);
 
-		let mut can_accept_by_scc: Vec<bool> = vec![false; tarjan.sccs.len()];
 		let mut can_accept: Vec<bool> = vec![false; self.states.len()];
-
-		for state in self.states.iter() {
+		let mut stack: Vec<usize> = Vec::new();
+		for (i, state) in self.states.iter().enumerate() {
 			if state.is_accepting() {
-				let scc: usize = tarjan.vertices[state.idx.0].scc;
-				can_accept_by_scc[scc] = true;
+				can_accept[i] = true;
+				stack.push(i);
 			}
 		}
 
-		for scc in (0..tarjan.sccs.len()).rev() {
-			if can_accept_by_scc[scc] {
-				for &i in tarjan.sccs[scc].iter() {
-					can_accept[i] = true;
-				}
-				for &parent in tarjan.scc_predecessors[scc].iter() {
-					can_accept_by_scc[parent] = true;
+		while let Some(i) = stack.pop() {
+			for edge in csr[i].iter() {
+				let predecessor: usize = edge.target;
+				if !can_accept[predecessor] {
+					can_accept[predecessor] = true;
+					stack.push(predecessor);
 				}
 			}
 		}

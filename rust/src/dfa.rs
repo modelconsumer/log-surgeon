@@ -888,7 +888,7 @@ impl Tdfa {
 			Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
 		};
 
-		// Note: we feed the edges in reverse, as we need the predecessors.
+		// CSR for reversed edges (predecessors).
 		let csr: Csr<(u32, u32)> = Csr::build(
 			self.states.len(),
 			self.states.iter().enumerate().flat_map(|(source, state)| {
@@ -934,7 +934,7 @@ impl Tdfa {
 			ends.push(members.len());
 		}
 
-		let mut work_list: Vec<usize> = Vec::from_iter(0..starts.len());
+		let mut stack: Vec<usize> = Vec::from_iter(0..starts.len());
 		let mut is_queued: Vec<bool> = vec![true; starts.len()];
 		let mut marked: Vec<usize> = vec![0; starts.len()];
 
@@ -944,7 +944,7 @@ impl Tdfa {
 		let mut dirty_classes: Vec<usize> = Vec::new();
 		let mut dirty_partitions: Vec<usize> = Vec::new();
 
-		while let Some(splitter_block) = work_list.pop() {
+		while let Some(splitter_block) = stack.pop() {
 			is_queued[splitter_block] = false;
 
 			splitter.clear();
@@ -999,7 +999,7 @@ impl Tdfa {
 					};
 					is_queued.push(false);
 					if !is_queued[requeue] {
-						work_list.push(requeue);
+						stack.push(requeue);
 						is_queued[requeue] = true;
 					}
 				}
