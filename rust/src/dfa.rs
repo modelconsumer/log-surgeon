@@ -1127,14 +1127,13 @@ impl Kernel {
 			return None;
 		}
 
+		let mut rhs_states: Vec<usize> = vec![usize::MAX; lhs.len()];
+
 		// Do they contain the same NFA states with the same lookahead tags?
-		for x in lhs.iter() {
-			rhs.iter()
-				.find(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
-		}
-		for x in rhs.iter() {
-			lhs.iter()
-				.find(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
+		for (i, x) in lhs.iter().enumerate() {
+			rhs_states[i] = rhs
+				.iter()
+				.position(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
 		}
 
 		// `m1`: register in `lhs` -> register in `rhs`.
@@ -1142,31 +1141,30 @@ impl Kernel {
 		let mut m1: BTreeMap<usize, usize> = BTreeMap::new();
 		let mut m2: BTreeMap<usize, usize> = BTreeMap::new();
 
-		for x in lhs.iter() {
-			for y in rhs.iter() {
-				if x.nfa_state != y.nfa_state {
-					continue;
-				}
-				for tag_idx in 0..self.tags.len() {
-					let i: usize = x.register_for_tag[tag_idx];
-					let j: usize = y.register_for_tag[tag_idx];
-					match (m1.entry(i), m2.entry(j)) {
-						(Entry::Vacant(e1), Entry::Vacant(e2)) => {
-							// Associate `i` (in `lhs`) with `j` (in `rhs`).
-							e1.insert(j);
-							e2.insert(i);
-						},
-						(Entry::Occupied(e1), Entry::Occupied(e2)) => {
-							// Unless `m1[i] == m2[j]`, the bijection breaks.
-							if (*e1.get() != j) || (*e2.get() != i) {
-								return None;
-							}
-						},
-						_ => {
-							// Something doesn't match - not a bijection.
+		for (i, &j) in rhs_states.iter().enumerate() {
+			let x: &Configuration = &lhs[i];
+			let y: &Configuration = &rhs[j];
+			assert_eq!(x.nfa_state, y.nfa_state);
+			assert_eq!(x.register_for_tag.len(), y.register_for_tag.len());
+			for tag_idx in 0..x.register_for_tag.len() {
+				let i: usize = x.register_for_tag[tag_idx];
+				let j: usize = y.register_for_tag[tag_idx];
+				match (m1.entry(i), m2.entry(j)) {
+					(Entry::Vacant(e1), Entry::Vacant(e2)) => {
+						// Associate `i` (in `lhs`) with `j` (in `rhs`).
+						e1.insert(j);
+						e2.insert(i);
+					},
+					(Entry::Occupied(e1), Entry::Occupied(e2)) => {
+						// Unless `m1[i] == m2[j]`, the bijection breaks.
+						if (*e1.get() != j) || (*e2.get() != i) {
 							return None;
-						},
-					}
+						}
+					},
+					_ => {
+						// Something doesn't match - not a bijection.
+						return None;
+					},
 				}
 			}
 		}
