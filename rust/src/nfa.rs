@@ -17,13 +17,13 @@ use std::sync::Arc;
 pub use search_decomposition::Path;
 pub use search_decomposition::PathComponent;
 
+use crate::graph::TarjanSccs;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::interval_tree::PolicyUnique;
 use crate::parsing_spec::Encoding;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
-use crate::utils::TarjanSccs;
 
 #[derive(Debug, Clone)]
 pub struct Tnfa {
@@ -215,6 +215,8 @@ impl Tnfa {
 		let begin: NfaIdx = NfaIdx::BEGIN;
 
 		let mut stack: Vec<(StatePair<'_>, NfaIdx)> = vec![(StatePair::new(self, other, begin, begin), begin)];
+		// Note 2026-09-16 (de50fcd316304679841d0687cfac883d5e09287e):
+		// No noticeable performance improvement by using `rustc::FxHashMap`.
 		let mut seen: BTreeMap<StatePair<'_>, NfaIdx> = BTreeMap::from_iter(stack.iter().copied());
 
 		let mut intersection: Self = Self {
@@ -244,7 +246,9 @@ impl Tnfa {
 
 			let mut lookup_state = |target, combined: &mut Self| {
 				*seen.entry(target).or_insert_with(|| {
-					let next: NfaIdx = combined.new_state(format!("({}, {})", target.states.0, target.states.1));
+					// Note 2026-09-16 (de50fcd316304679841d0687cfac883d5e09287e):
+					// ~5% improvement not giving formatted (allocating) name.
+					let next: NfaIdx = combined.new_state("intersection state");
 					stack.push((target, next));
 					next
 				})
@@ -389,38 +393,22 @@ impl Tnfa {
 		let tarjan: TarjanSccs = self.sccs();
 
 		let mut can_accept_by_scc: Vec<bool> = vec![false; tarjan.sccs.len()];
+		let mut can_accept: Vec<bool> = vec![false; self.states.len()];
 
-		let mut changed: Vec<usize> = Vec::new();
 		for state in self.states.iter() {
 			if state.is_accepting() {
 				let scc: usize = tarjan.vertices[state.idx.0].scc;
 				can_accept_by_scc[scc] = true;
-				changed.push(scc);
 			}
 		}
-		changed.sort();
-		changed.dedup();
 
-		let mut new_changed: Vec<usize> = Vec::new();
-
-		while !changed.is_empty() {
-			for scc in changed.drain(..) {
-				for &parent in tarjan.scc_predecessors[scc].iter() {
-					assert!(parent <= scc);
-					if can_accept_by_scc[scc] && !can_accept_by_scc[parent] {
-						can_accept_by_scc[parent] = true;
-						new_changed.push(parent);
-					}
-				}
-			}
-			std::mem::swap(&mut changed, &mut new_changed);
-		}
-
-		let mut can_accept: Vec<bool> = vec![false; self.states.len()];
-		for scc in 0..tarjan.sccs.len() {
+		for scc in (0..tarjan.sccs.len()).rev() {
 			if can_accept_by_scc[scc] {
 				for &i in tarjan.sccs[scc].iter() {
 					can_accept[i] = true;
+				}
+				for &parent in tarjan.scc_predecessors[scc].iter() {
+					can_accept_by_scc[parent] = true;
 				}
 			}
 		}

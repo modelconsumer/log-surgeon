@@ -1,7 +1,7 @@
 //! Implementation of dominator algorithm by Lengauer and Tarjan:
 //! <https://dl.acm.org/doi/10.1145/357062.357071>.
 
-use super::DfsIndex;
+use crate::graph::DfsIndex;
 
 #[derive(Debug, Clone)]
 pub struct Dominators {

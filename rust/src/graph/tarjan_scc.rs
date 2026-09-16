@@ -1,8 +1,7 @@
 //! Tarjan's SCC algorithm.
 //! See <https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm>.
 
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-pub struct DfsIndex(pub usize);
+use crate::graph::DfsIndex;
 
 /// Results of Tarjan's SCC algorithm.
 /// See [`TarjanSccs::tarjan_scc`].
@@ -46,10 +45,6 @@ pub struct TarjanVertex {
 struct Frame<I> {
 	index: usize,
 	successors: I,
-}
-
-impl DfsIndex {
-	pub const INVALID: Self = Self(usize::MAX);
 }
 
 impl TarjanSccs {

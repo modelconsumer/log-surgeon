@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
 
+use crate::graph::TarjanSccs;
 use crate::nfa::NfaIdx;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
@@ -10,7 +11,6 @@ use crate::nfa::Transitions;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
 use crate::search::SymbolicChar;
-use crate::utils::TarjanSccs;
 
 #[derive(Debug, Clone)]
 pub struct Path {

@@ -1,7 +1,7 @@
+use crate::graph::TarjanSccs;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
 use crate::nfa::Transitions;
-use crate::utils::TarjanSccs;
 
 impl Tnfa {
 	pub fn to_dot_output(&self) -> String {

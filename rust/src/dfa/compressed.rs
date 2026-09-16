@@ -5,11 +5,11 @@ use std::num::NonZero;
 use crate::dfa::BackupState;
 use crate::dfa::MatchedRule;
 use crate::dfa::Tdfa;
+use crate::graph::TarjanSccs;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::parsing_spec::RuleIdx;
 use crate::utils::SerdeArray;
-use crate::utils::TarjanSccs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressedDfa {

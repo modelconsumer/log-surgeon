@@ -9,6 +9,7 @@ pub mod utils;
 
 pub mod dfa;
 pub mod ffi;
+pub mod graph;
 pub mod interval_tree;
 pub mod lexer;
 pub mod log_event;
