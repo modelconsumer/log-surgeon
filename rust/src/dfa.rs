@@ -461,7 +461,7 @@ impl Tdfa {
 		let initial: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> =
 			Self::epsilon_closure::<WITH_TAGS>(nfa, &vec![initial]);
 
-		dfa.add_state(nfa, initial, &mut Vec::new());
+		dfa.lookup_or_add_state(nfa, initial, &mut Vec::new());
 
 		// Note: New states may be created and appended to `dfa.states` inside the loop;
 		// `dfa.states.len()` is not constant.
@@ -482,7 +482,7 @@ impl Tdfa {
 					Vec<RegisterOperation>,
 				) = dfa.transition_operations(next, &mut register_action_tag);
 
-				let next: usize = dfa.add_state(nfa, next, &mut operations);
+				let next: usize = dfa.lookup_or_add_state(nfa, next, &mut operations);
 				dfa.states[i].transitions.insert(
 					interval,
 					Transition {
@@ -507,44 +507,49 @@ impl Tdfa {
 	}
 
 	/// Algorithm 3 in the [paper][tdfa].
-	fn add_state(
+	///
+	/// Returns the index of the DFA state for the given kernel
+	/// (the set of NFA configurations landed on after a transition),
+	/// reusing an existing state when possible;
+	/// kernels may be equal up to register (re)naming.
+	fn lookup_or_add_state(
 		&mut self,
 		nfa: &Tnfa,
 		configurations: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
 		ops: &mut Vec<RegisterOperation>,
 	) -> usize {
-		let mut accepting_rule: Option<(RuleIdx, Option<EncodingIdx>)> = None;
-		let mut final_operations: Vec<RegisterOperation> = Vec::new();
-		let mut tag_for_register: BTreeMap<usize, CaptureTag> = BTreeMap::new();
-		let configurations: Vec<Configuration> = configurations
-			.into_iter()
-			.map(|(config, _)| {
-				if let Some(rule) = nfa[config.nfa_state].maybe_accepts_for_rule {
-					if accepting_rule.is_none() {
-						accepting_rule = Some((rule, nfa[config.nfa_state].maybe_encoding.as_ref().map(|e| e.idx)));
-					}
-					final_operations = self.final_operations(&config.register_for_tag, &config.tag_path_in_closure);
-				}
-				config
-			})
-			.collect::<Vec<_>>();
-		let kernel: Kernel = Kernel(configurations);
+		let kernel: Kernel = Kernel(Vec::from_iter(configurations.into_iter().map(|(config, _)| config)));
 
 		if let Some(&idx) = self.kernels.get(&kernel) {
 			return idx;
 		}
 
 		for (other, &idx) in self.kernels.iter() {
-			if let Some(new_ops) = self.try_find_bijection(&kernel.0, &other.0, ops.clone()) {
+			let Some(bijection) = kernel.try_register_bijection(&other) else {
+				continue;
+			};
+			if let Some(new_ops) = Self::map_operations_through_bijection(ops.clone(), bijection) {
 				*ops = new_ops;
 				return idx;
 			}
 		}
 
+		// No existing state matches; create a new one.
+		// The first accepting configuration has priority.
+		let mut accepting_rule: Option<(RuleIdx, Option<EncodingIdx>)> = None;
+		let mut final_operations: Vec<RegisterOperation> = Vec::new();
+		let mut tag_for_register: BTreeMap<usize, CaptureTag> = BTreeMap::new();
 		for config in kernel.0.iter() {
-			for (i, &r) in config.register_for_tag.iter().enumerate() {
-				let old: Option<CaptureTag> = tag_for_register.insert(r, self.tags[i].clone());
-				assert!(old.is_none() || (old.as_ref() == Some(&self.tags[i])));
+			let nfa_state: &NfaState = &nfa[config.nfa_state];
+			if accepting_rule.is_none()
+				&& let Some(rule) = nfa_state.maybe_accepts_for_rule
+			{
+				accepting_rule = Some((rule, nfa_state.maybe_encoding.as_ref().map(|e| e.idx)));
+				final_operations = self.final_operations(&config.register_for_tag, &config.tag_path_in_closure);
+			}
+			for (tag_idx, &register) in config.register_for_tag.iter().enumerate() {
+				let old: Option<CaptureTag> = tag_for_register.insert(register, self.tags[tag_idx].clone());
+				assert!(old.is_none() || (old.as_ref() == Some(&self.tags[tag_idx])));
 			}
 		}
 
@@ -562,69 +567,23 @@ impl Tdfa {
 	}
 
 	/// Algorithm 3 in the [paper][tdfa].
-	fn try_find_bijection(
-		&self,
-		lhs: &[Configuration],
-		rhs: &[Configuration],
+	///
+	/// Rewrites `ops` (whose destinations are registers of the new kernel)
+	/// to target the corresponding registers of the existing kernel, per `bijection`,
+	/// and appends the copy operations needed to reconcile the remaining registers.
+	/// Returns `None` if reconciling would require breaking a nontrivial cycle of copies.
+	fn map_operations_through_bijection(
 		mut ops: Vec<RegisterOperation>,
+		mut bijection: BTreeMap<usize, usize>,
 	) -> Option<Vec<RegisterOperation>> {
-		// Do they contain the same NFA states with the same lookahead tags?
-		for x in lhs.iter() {
-			rhs.iter()
-				.find(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
-		}
-		for x in rhs.iter() {
-			lhs.iter()
-				.find(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
-		}
-
-		// `m1`: register in `lhs` -> register in `rhs`.
-		// `m2`: register in `rhs` -> register in `lhs`.
-		let mut m1: BTreeMap<usize, usize> = BTreeMap::new();
-		let mut m2: BTreeMap<usize, usize> = BTreeMap::new();
-
-		for x in lhs.iter() {
-			for y in rhs.iter() {
-				if x.nfa_state != y.nfa_state {
-					continue;
-				}
-				for tag_idx in 0..self.tags.len() {
-					let i: usize = x.register_for_tag[tag_idx];
-					let j: usize = y.register_for_tag[tag_idx];
-					match (m1.entry(i), m2.entry(j)) {
-						(Entry::Vacant(e1), Entry::Vacant(e2)) => {
-							// Associate `i` (in `lhs`) with `j` (in `rhs`).
-							e1.insert(j);
-							e2.insert(i);
-						},
-						(Entry::Occupied(e1), Entry::Occupied(e2)) => {
-							// Unless `m1[i] == m2[j]`, the bijection breaks.
-							if (*e1.get() != j) || (*e2.get() != i) {
-								return None;
-							}
-						},
-						_ => {
-							// Something doesn't match - not a bijection.
-							return None;
-						},
-					}
-				}
-			}
-		}
-
+		// Destinations already written by `ops` need no copy; remove them from the bijection.
 		for o in ops.iter_mut() {
-			o.destination = m1.remove(&o.destination).unwrap();
+			o.destination = bijection.remove(&o.destination).unwrap();
 		}
-		let mut copies: Vec<RegisterOperation> = Vec::new();
-		for (&j, &i) in m1.iter() {
-			copies.push(RegisterOperation {
-				destination: i,
-				action: RegisterAction::CopyFrom { source: j },
-			});
-		}
-
-		ops.extend_from_slice(&copies[..]);
-
+		ops.extend(bijection.iter().map(|(&source, &destination)| RegisterOperation {
+			destination,
+			action: RegisterAction::CopyFrom { source },
+		}));
 		Self::topological_sort(ops)
 	}
 
@@ -1155,6 +1114,64 @@ impl Kernel {
 		}
 
 		combined
+	}
+
+	/// Algorithm 3 in the [paper][tdfa].
+	///
+	/// Returns a map from register in `self` to register in `other`.
+	fn try_register_bijection(&self, other: &Self) -> Option<BTreeMap<usize, usize>> {
+		let lhs: &[Configuration] = &self.0;
+		let rhs: &[Configuration] = &other.0;
+
+		if lhs.len() != rhs.len() {
+			return None;
+		}
+
+		// Do they contain the same NFA states with the same lookahead tags?
+		for x in lhs.iter() {
+			rhs.iter()
+				.find(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
+		}
+		for x in rhs.iter() {
+			lhs.iter()
+				.find(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
+		}
+
+		// `m1`: register in `lhs` -> register in `rhs`.
+		// `m2`: register in `rhs` -> register in `lhs`.
+		let mut m1: BTreeMap<usize, usize> = BTreeMap::new();
+		let mut m2: BTreeMap<usize, usize> = BTreeMap::new();
+
+		for x in lhs.iter() {
+			for y in rhs.iter() {
+				if x.nfa_state != y.nfa_state {
+					continue;
+				}
+				for tag_idx in 0..self.tags.len() {
+					let i: usize = x.register_for_tag[tag_idx];
+					let j: usize = y.register_for_tag[tag_idx];
+					match (m1.entry(i), m2.entry(j)) {
+						(Entry::Vacant(e1), Entry::Vacant(e2)) => {
+							// Associate `i` (in `lhs`) with `j` (in `rhs`).
+							e1.insert(j);
+							e2.insert(i);
+						},
+						(Entry::Occupied(e1), Entry::Occupied(e2)) => {
+							// Unless `m1[i] == m2[j]`, the bijection breaks.
+							if (*e1.get() != j) || (*e2.get() != i) {
+								return None;
+							}
+						},
+						_ => {
+							// Something doesn't match - not a bijection.
+							return None;
+						},
+					}
+				}
+			}
+		}
+
+		Some(m1)
 	}
 }
 
