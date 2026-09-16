@@ -21,6 +21,7 @@ use std::sync::Arc;
 pub use jit::Jit;
 pub use jit::JittedDfa;
 
+use crate::graph::Csr;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::interval_tree::PolicyFunction;
@@ -887,35 +888,23 @@ impl Tdfa {
 			Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
 		};
 
-		// Number of transitions (intervals) into each state.
-		let mut incoming_offsets: Vec<usize> = vec![0; self.states.len() + 1];
-		for state in self.states.iter() {
-			for (_interval, transition) in state.transitions.iter() {
-				incoming_offsets[transition.target + 1] += 1;
-			}
-		}
-		for i in 1..incoming_offsets.len() {
-			incoming_offsets[i] += incoming_offsets[i - 1];
-		}
-
-		// Write cursor for each state.
-		let mut cursors: Vec<usize> = incoming_offsets[0..self.states.len()].to_vec();
-
-		// `Vec` of `(source, first_class, last_class)`;
-		// each interval should be exactly the (disjoint) union of consecutive classes,
-		let mut incoming_transitions: Vec<(usize, u32, u32)> = vec![(0, 0, 0); *incoming_offsets.last().unwrap()];
-		for (i, state) in self.states.iter().enumerate() {
-			for (interval, transition) in state.transitions.iter() {
-				let first: usize = all_classes.partition_point(|class| class.end() < interval.start());
-				let last: usize = all_classes.partition_point(|class| class.end() < interval.end());
-				assert_eq!(all_classes[first].start(), interval.start());
-				assert_eq!(all_classes[last].end(), interval.end());
-				// There are at most `u32::MAX` intervals,
-				// so at most `u32::MAX` classes.
-				incoming_transitions[cursors[transition.target]] = (i, first as u32, last as u32);
-				cursors[transition.target] += 1;
-			}
-		}
+		// Note: we feed the edges in reverse, as we need the predecessors.
+		let csr: Csr<(u32, u32)> = Csr::build(
+			self.states.len(),
+			self.states.iter().enumerate().flat_map(|(source, state)| {
+				// We need `move` for `source`, but not `all_classes`.
+				let all_classes: &[Interval<u32>] = &all_classes;
+				state.transitions.iter().map(move |(interval, transition)| {
+					let first: usize = all_classes.partition_point(|class| class.end() < interval.start());
+					let last: usize = all_classes.partition_point(|class| class.end() < interval.end());
+					assert_eq!(all_classes[first].start(), interval.start());
+					assert_eq!(all_classes[last].end(), interval.end());
+					// There are at most `u32::MAX` intervals,
+					// so at most `u32::MAX` classes.
+					(transition.target, source, (first as u32, last as u32))
+				})
+			}),
+		);
 
 		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, Vec<usize>> = BTreeMap::new();
 		for (i, state) in self.states.iter().enumerate() {
@@ -962,17 +951,15 @@ impl Tdfa {
 			splitter.extend_from_slice(&members[starts[splitter_block]..ends[splitter_block]]);
 
 			for &state in splitter.iter() {
-				for &(predecessor, first, last) in
-					incoming_transitions[incoming_offsets[state]..incoming_offsets[state + 1]].iter()
-				{
+				for edge in csr[state].iter() {
 					// Were originally `usize`s.
-					let first: usize = first as usize;
-					let last: usize = last as usize;
+					let first: usize = edge.value.0 as usize;
+					let last: usize = edge.value.1 as usize;
 					for (offset, bucket) in predecessors[first..=last].iter_mut().enumerate() {
 						if bucket.is_empty() {
 							dirty_classes.push(first + offset);
 						}
-						bucket.push(predecessor);
+						bucket.push(edge.target);
 					}
 				}
 			}
