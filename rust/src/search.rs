@@ -1,25 +1,30 @@
 #[cfg(test)]
 mod test;
 
-// use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::nfa::Path;
 use crate::nfa::PathComponent;
 use crate::nfa::Tnfa;
-use crate::parsing_spec::LogShapeFragment;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::RuleInfo;
 use crate::parsing_spec::SubRule;
+use crate::prefilter;
+use crate::prefilter::ComposeBudget;
+use crate::prefilter::Composed;
+use crate::prefilter::PlacementTable;
+use crate::prefilter::Run;
+use crate::prefilter::RunFitCache;
+use crate::prefilter::ShapeModel;
+use crate::prefilter::ShapeModelCache;
 use crate::regex::Regex;
 
 #[derive(Debug)]
 pub struct SearchString {
 	symbols: Vec<SymbolicChar>,
-	fragments: Vec<String>,
 }
 
 impl std::fmt::Display for SearchString {
@@ -78,8 +83,6 @@ impl std::fmt::Debug for Interpretation {
 
 #[derive(Clone)]
 pub struct SubQuery {
-	/// Used to associate leaf queries of the same root match together.
-	pub group: usize,
 	pub rule_idx: Option<RuleIdx>,
 	pub fully_qualified_name: Arc<str>,
 	pub symbolic_value: Vec<SymbolicChar>,
@@ -90,8 +93,8 @@ impl std::fmt::Debug for SubQuery {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if let Some(rule_idx) = self.rule_idx {
 			fmt.write_fmt(format_args!(
-				"({}:?<{}:{}>{})",
-				self.group, rule_idx, self.fully_qualified_name, self.string_value,
+				"(?<{}:{}>{})",
+				rule_idx, self.fully_qualified_name, self.string_value,
 			))
 		} else {
 			fmt.write_str(&self.string_value)
@@ -103,18 +106,11 @@ impl Eq for SubQuery {}
 
 impl Ord for SubQuery {
 	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-		(
-			&self.group,
-			&self.rule_idx,
-			&self.fully_qualified_name,
-			&self.symbolic_value,
-		)
-			.cmp(&(
-				&other.group,
-				&other.rule_idx,
-				&other.fully_qualified_name,
-				&other.symbolic_value,
-			))
+		(&self.rule_idx, &self.fully_qualified_name, &self.symbolic_value).cmp(&(
+			&other.rule_idx,
+			&other.fully_qualified_name,
+			&other.symbolic_value,
+		))
 	}
 }
 
@@ -192,47 +188,20 @@ impl Interpretation {
 			i += 1;
 		}
 	}
-
-	/// Re-numbers groups consecutively starting from `1`
-	/// (static text always has group `0`).
-	#[allow(unused)]
-	fn canonicalize(&mut self, cache: &mut [Option<NonZero<usize>>]) {
-		cache.fill(None);
-
-		let mut n: NonZero<usize> = NonZero::<usize>::MIN;
-
-		for sub_query in self.sub_queries.iter_mut() {
-			if sub_query.group == 0 {
-				continue;
-			}
-			sub_query.group = cache[sub_query.group]
-				.get_or_insert_with(|| {
-					let x: NonZero<usize> = n.checked_add(1).unwrap();
-					std::mem::replace(&mut n, x)
-				})
-				.get();
-		}
-	}
 }
 
 impl SearchString {
 	pub fn parse(input: &str) -> Result<Self, SearchStringError<'_>> {
 		let mut symbols: Vec<SymbolicChar> = Vec::new();
-		let mut fragments: Vec<String> = Vec::new();
-		let mut current_fragment: String = String::new();
 		let mut last_was_escape: bool = false;
 		for (i, ch) in input.char_indices() {
 			match ch {
 				'*' | '\\' => {
 					symbols.push(if last_was_escape {
-						current_fragment.push('*');
 						SymbolicChar::Literal(ch)
 					} else {
 						match ch {
-							'*' => {
-								fragments.push(std::mem::replace(&mut current_fragment, String::new()));
-								SymbolicChar::GlobStar
-							},
+							'*' => SymbolicChar::GlobStar,
 							'\\' => {
 								last_was_escape = true;
 								continue;
@@ -248,7 +217,6 @@ impl SearchString {
 						let (before, after): (&str, &str) = input.split_at(i);
 						return Err(SearchStringError::InvalidEscape { before, after });
 					} else {
-						current_fragment.push(ch);
 						symbols.push(SymbolicChar::Literal(ch));
 					}
 				},
@@ -261,8 +229,7 @@ impl SearchString {
 				after: "",
 			});
 		}
-		fragments.push(current_fragment);
-		Ok(Self { symbols, fragments })
+		Ok(Self { symbols })
 	}
 
 	pub fn as_slice(&self) -> &[SymbolicChar] {
@@ -280,226 +247,70 @@ impl SearchString {
 	}
 
 	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
+		self.search_by_log_shapes_with(spec, Some(&ShapeModelCache::new()), log_shapes)
+	}
+
+	/// As [`Self::search_by_log_shapes`], reusing `cache`'s prefilter models.
+	///
+	/// Prefer this when searching the same shapes more than once, e.g. via
+	/// [`crate::parser::Parser::shape_models`]: building a shape's prefilter model is otherwise repeated
+	/// for every query.
+	pub fn search_by_log_shapes_cached(
+		&self,
+		spec: &ParsingSpec,
+		cache: &ShapeModelCache,
+		log_shapes: &[&str],
+	) -> Vec<Vec<Interpretation>> {
+		self.search_by_log_shapes_with(spec, Some(cache), log_shapes)
+	}
+
+	fn search_by_log_shapes_with(
+		&self,
+		spec: &ParsingSpec,
+		cache: Option<&ShapeModelCache>,
+		log_shapes: &[&str],
+	) -> Vec<Vec<Interpretation>> {
+		// The engine matches the query against a *prefix* of a message, so a single trailing wildcard is
+		// redundant. Note this makes `foo` and `foo*` equivalent; anchoring `foo` at the end of the shape
+		// is a separate (deliberate) change.
 		let view: SearchStringView<'_> = if self.symbols.last().unwrap() == &SymbolicChar::GlobStar {
 			self.view(0, self.symbols.len() - 1)
 		} else {
 			self.view(0, self.symbols.len())
 		};
 
-		/*
-		let mut boundary_chars: Vec<char> = Vec::new();
-		for (i, search_fragment) in self.fragments.iter().enumerate() {
-			if (i > 0)
-				&& let Some(ch) = search_fragment.chars().next()
-			{
-				boundary_chars.push(ch);
-			}
-			if ((i + 1) < self.fragments.len())
-				&& let Some(ch) = search_fragment.chars().next_back()
-			{
-				boundary_chars.push(ch);
-			}
-		}
-		boundary_chars.sort();
-		boundary_chars.dedup();
-		*/
-		let mut search_characters: Vec<char> =
-			Vec::from_iter(self.fragments.iter().flat_map(|fragment| fragment.chars()));
-		search_characters.sort();
-		search_characters.dedup();
-		// println!("search characters is {:?}", search_characters);
-
-		let mut interpretations_by_shape: Vec<Vec<Interpretation>> = Vec::with_capacity(log_shapes.len());
-		for &shape in log_shapes.iter() {
-			let shape_fragments: Vec<LogShapeFragment> = spec.split_log_shape(shape);
-			let mut must_be_in_rule: bool = true;
-			for (i, fragment) in shape_fragments.iter().enumerate() {
-				let LogShapeFragment::Rule(_rule_name): &LogShapeFragment = fragment else {
-					continue;
-				};
-				if i > 0 {
-					let fragment_before: &LogShapeFragment = &shape_fragments[i - 1];
-					match fragment_before {
-						LogShapeFragment::Text(text) => {
-							assert!(!text.is_empty());
-							let boundary: char = text.chars().next_back().unwrap();
-							if search_characters.binary_search(&boundary).is_ok() {
-								must_be_in_rule = false;
-								break;
-							}
-						},
-						LogShapeFragment::Rule(_rule_name) => {
-							must_be_in_rule = false;
-							break;
-						},
-					}
-				}
-				if i + 1 < shape_fragments.len() {
-					let fragment_after: &LogShapeFragment = &shape_fragments[i + 1];
-					match fragment_after {
-						LogShapeFragment::Text(text) => {
-							assert!(!text.is_empty());
-							let boundary: char = text.chars().next().unwrap();
-							if search_characters.binary_search(&boundary).is_ok() {
-								must_be_in_rule = false;
-								break;
-							}
-						},
-						LogShapeFragment::Rule(_rule_name) => {
-							must_be_in_rule = false;
-							break;
-						},
-					}
-				}
-			}
-			if must_be_in_rule {
-				now!(t0);
-				trace!("must be in rule: {shape:.1024}");
-				let mut fragment_interpretations_matrix: Vec<Vec<Interpretation>> =
-					vec![Vec::new(); shape_fragments.len() * self.fragments.len()];
-
-				let mut text_interpretations: Vec<Interpretation> = vec![
-					Interpretation {
-						sub_queries: Vec::new()
-					};
-					shape_fragments.len()
-				];
-
-				let mut rule_indices: Vec<usize> = Vec::new();
-
-				for (i, fragment) in shape_fragments.iter().enumerate() {
-					match fragment {
-						LogShapeFragment::Text(text) => {
-							text_interpretations[i] = Interpretation {
-								sub_queries: vec![SubQuery::new_static_text(Vec::from_iter(
-									text.chars().map(SymbolicChar::Literal),
-								))],
-							};
-						},
-						LogShapeFragment::Rule(rule_name) => {
-							rule_indices.push(i);
-							for (j, search_fragment) in self.fragments.iter().enumerate() {
-								fragment_interpretations_matrix[(i * self.fragments.len()) + j] =
-									if !search_fragment.is_empty() {
-										let sub_search: SearchString =
-											SearchString::parse(&format!("*{search_fragment}*")).unwrap();
-										let interpretations: Vec<Interpretation> =
-											sub_search.search_by_name(spec, rule_name);
-
-										// if !interpretations.is_empty() {
-										// 	trace!(
-										// 		"interpretations for {search_fragment} and {rule_name} can match"
-										// 	);
-										// 	for interp in interpretations.iter() {
-										// 		println!("- {interp:?}");
-										// 	}
-										// }
-
-										interpretations
-									} else {
-										/*
-										Vec::from_iter(spec.rules_for_name(rule_name).into_iter().map(
-											|(rule_info, _regex)| {
-												let sub_rule: Arc<SubRule> =
-													if let Some(sub_rule) = rule_info.maybe_sub_rule.clone() {
-														sub_rule
-													} else {
-														Arc::new(SubRule {
-															name: rule_info.root_name.clone(),
-															regex: Regex::NIL,
-															root_rule_idx: rule_info.root_idx,
-															// TODO
-															id: NonZero::<u16>::MAX,
-															parent_id: None,
-															descendants: 0,
-															qualified_name: rule_info.root_name.clone(),
-															fully_qualified_name: rule_info.root_name.clone(),
-														})
-													};
-												Interpretation {
-													sub_queries: vec![SubQuery::new(
-														0,
-														&sub_rule,
-														vec![SymbolicChar::GlobStar],
-													)],
-												}
-											},
-										))
-										*/
-										Vec::new()
-									};
-							}
-						},
-					}
-				}
-
-				if rule_indices.is_empty() {
-					interpretations_by_shape.push(Vec::new());
-					continue;
-				}
-
-				let mut finished: Vec<Interpretation> = Vec::new();
-
-				let mut stack: Vec<(Interpretation, usize, usize)> = Vec::new();
-
-				for i in 0..self.fragments.len() {
-					// let mut no_match: bool = true;
-					for interpretation in
-						fragment_interpretations_matrix[(rule_indices[0] * self.fragments.len()) + i].iter()
-					{
-						stack.push((interpretation.clone(), 1, i + 1));
-						// no_match = false;
-					}
-					// if no_match {
-					// 	println!(
-					// 		"fragment {:?} no matches among {:?}",
-					// 		&shape_fragments[rule_indices[0]],
-					// 		&self.fragments[..]
-					// 	);
-					// }
-				}
-
-				while let Some((interpretation, shape_fragment, search_fragment)) = stack.pop() {
-					if shape_fragment == rule_indices.len() {
-						finished.push(interpretation);
-						continue;
-					}
-					if search_fragment == self.fragments.len() {
-						continue;
-					}
-					let row: usize = rule_indices[shape_fragment];
-					let search_fragment: usize = search_fragment.max(row + 1);
-					for col in search_fragment..self.fragments.len() {
-						// let mut no_match: bool = true;
-						for interpretation in fragment_interpretations_matrix[(row * self.fragments.len()) + col].iter()
-						{
-							stack.push((interpretation.clone(), shape_fragment + 1, col + 1));
-							// no_match = false;
-						}
-						// if no_match {
-						// 	println!(
-						// 		"fragment {:?} no matches among {:?}",
-						// 		&shape_fragments[rule_indices[shape_fragment]],
-						// 		&self.fragments[..]
-						// 	);
-						// }
-					}
-				}
-
-				now!(t1);
-				debug!("have {} interpretations, took {} ms", finished.len(), millis!(t0, t1));
-				// for interp in finished.iter() {
-				// 	println!("- {interp:?}");
-				// }
-				interpretations_by_shape.push(finished);
-			} else {
-				// TODO unwrap
-				let automata: Tnfa = spec.automata_for_shape(shape).unwrap();
-				interpretations_by_shape.push(view.interpretations_for_shape(spec, &automata));
-			}
+		// Prefix matching again: a query not ending in a wildcard still matches a longer message, so the
+		// wildcard is made explicit and no run is reported as anchored to the end. Without this a capture
+		// would lose the trailing `*` a rule needs in order to emit text of its own.
+		let mut symbols: Vec<SymbolicChar> = self.symbols.clone();
+		if Some(&SymbolicChar::GlobStar) != symbols.last() {
+			symbols.push(SymbolicChar::GlobStar);
 		}
 
-		interpretations_by_shape
+		// The query's runs and their fits are shared across every shape: this is where the composition
+		// path gets its leverage, since a corpus mentions the same few rules over and over, and a rule's
+		// behaviour on a run does not depend on the shape referencing it.
+		let runs: Vec<Run> = prefilter::runs_of(&symbols);
+		let fits: RunFitCache = RunFitCache::new();
+
+		log_shapes
+			.iter()
+			.map(|&shape| view.interpretations_for_log_shape(spec, cache, shape, &runs, &fits))
+			.collect::<Vec<_>>()
+	}
+
+	/// Interpretations for `log_shape`, always via the automata, bypassing [`crate::prefilter`].
+	///
+	/// Exposed so that tests can pin the prefilter against the engine it is meant to agree with.
+	pub fn interpretations_for_log_shape_via_engine(&self, spec: &ParsingSpec, log_shape: &str) -> Vec<Interpretation> {
+		let view: SearchStringView<'_> = if self.symbols.last().unwrap() == &SymbolicChar::GlobStar {
+			self.view(0, self.symbols.len() - 1)
+		} else {
+			self.view(0, self.symbols.len())
+		};
+		// TODO unwrap
+		let automata: Tnfa = spec.automata_for_shape(log_shape).unwrap();
+		view.interpretations_for_shape(spec, &automata)
 	}
 
 	fn view(&self, start: usize, end: usize) -> SearchStringView<'_> {
@@ -520,6 +331,106 @@ impl<'a> SearchStringView<'a> {
 		Regex::Sequence(Vec::from_iter(self.as_str().iter().map(SymbolicChar::to_regex)))
 	}
 
+	/// Interpretations of this query for a single log shape.
+	///
+	/// Three paths, cheapest first:
+	///
+	/// 1. [`crate::prefilter::can_match`] on the coarse charset model. When it proves the shape cannot
+	///    match, the shape's TNFA is never built and never intersected with the query.
+	/// 2. [`crate::prefilter::compose`], which decomposes the query against the shape directly, reusing
+	///    per-rule simulations across shapes. This answers the real question — which rule instance holds
+	///    what text — without building any automata for the shape.
+	/// 3. The engine, when composition declines to conclude (an unreasonable rule, or an exhausted
+	///    budget). This is the slow path that the other two exist to avoid.
+	///
+	/// Note the [`crate::prefilter::align`] decompositions are *not* usable as a result: placeholders
+	/// there are over-approximated (notably they may match the empty string, which a rule like `[a-z]+`
+	/// cannot), so they form a superset of the engine's interpretations. Composition is exact because it
+	/// simulates the rules themselves rather than their charsets.
+	fn interpretations_for_log_shape(
+		&self,
+		spec: &ParsingSpec,
+		cache: Option<&ShapeModelCache>,
+		shape: &str,
+		runs: &[Run],
+		fits: &RunFitCache,
+	) -> Vec<Interpretation> {
+		now!(t0);
+		// `None` means a placeholder named an undefined rule; leave that to the engine, which reports it.
+		let maybe_model: Option<Arc<ShapeModel>> = match cache {
+			Some(cache) => cache.get(spec, shape),
+			None => ShapeModel::new(spec, shape).map(Arc::new),
+		};
+
+		if let Some(model) = maybe_model {
+			// The prefilter models the engine's current prefix matching, so it must not anchor the end.
+			if !prefilter::can_match(&model, self.as_str(), false) {
+				trace!("prefilter rejected shape {shape:.256}");
+				return Vec::new();
+			}
+
+			if let Some(interpretations) = Self::composed_interpretations(spec, &model, runs, fits) {
+				now!(t1);
+				trace!("composed shape in {} ms {shape:.256}", millis!(t0, t1));
+				return interpretations;
+			}
+		}
+
+		// TODO unwrap
+		let automata: Tnfa = spec.automata_for_shape(shape).unwrap();
+		let interpretations: Vec<Interpretation> = self.interpretations_for_shape(spec, &automata);
+		now!(t1);
+		debug!("- took {} ms", millis!(t0, t1));
+		interpretations
+	}
+
+	/// Interpretations for `model` via [`crate::prefilter::compose`].
+	///
+	/// `None` means composition declined to conclude and the caller must fall back to the engine. An
+	/// empty vector is a real answer — the shape cannot match — and is not the same thing.
+	fn composed_interpretations(
+		spec: &ParsingSpec,
+		model: &ShapeModel,
+		runs: &[Run],
+		fits: &RunFitCache,
+	) -> Option<Vec<Interpretation>> {
+		// A shape of pure static text has nowhere to attribute the query's characters, and a non-leaf
+		// placeholder is reported as the whole rule rather than its nested captures, so its capture names
+		// would not match the engine's. Both belong to the engine.
+		if !model.can_decompose() {
+			return None;
+		}
+
+		// `None` here means some rule could not be reasoned about.
+		let table: PlacementTable = PlacementTable::compute(spec, model, runs, fits)?;
+
+		match prefilter::compose(model, &table, ComposeBudget::default()) {
+			Composed::Impossible => Some(Vec::new()),
+			Composed::Unknown => None,
+			Composed::Compositions(compositions) => {
+				let mut interpretations: Vec<Interpretation> = Vec::from_iter(
+					compositions
+						.iter()
+						// Placement validates one run at a time, so a rule holding pieces of *several* runs
+						// still has to be checked against all of them together: `INFO|WARN` admits either
+						// run alone but never both.
+						.filter(|composition| {
+							composition
+								.captures_to_verify(model, runs)
+								.iter()
+								.all(|(name, value)| fits.can_produce_all_text(spec, name, value))
+						})
+						.map(|composition| composition.to_interpretation(model, runs)),
+				);
+				// The engine's callers expect a canonical, duplicate-free set; distinct compositions can
+				// render identically once positions collapse to the same sub-queries.
+				interpretations.sort();
+				interpretations.dedup();
+				Some(interpretations)
+			},
+		}
+	}
+
 	fn interpretations_for_name(&self, spec: &ParsingSpec, rows: &[(&RuleInfo, &Regex)]) -> Vec<Interpretation> {
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
@@ -527,7 +438,7 @@ impl<'a> SearchStringView<'a> {
 			let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_info.root_idx, regex, &[]);
 
 			let potential_interpretations: Vec<Interpretation> =
-				self.interpretations_for_nfa(spec, &rule_nfa, 0, Some(rule_info));
+				self.interpretations_for_nfa(spec, &rule_nfa, Some(rule_info));
 
 			interpretations.extend(potential_interpretations.into_iter());
 		}
@@ -571,7 +482,7 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						sub_queries.push(SubQuery::new(1, sub_rule, contents.clone()));
+						sub_queries.push(SubQuery::new(sub_rule, contents.clone()));
 					},
 				}
 			}
@@ -593,7 +504,6 @@ impl<'a> SearchStringView<'a> {
 		&self,
 		spec: &ParsingSpec,
 		nfa: &Tnfa,
-		group: usize,
 		maybe_rule_info: Option<&RuleInfo>,
 	) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
@@ -623,7 +533,6 @@ impl<'a> SearchStringView<'a> {
 				};
 
 				let mut implicit_capture: SubQuery = SubQuery::new(
-					group,
 					&Arc::new(SubRule {
 						name: rule.name.clone(),
 						regex: rule.regex.regex.clone(),
@@ -667,7 +576,7 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						sub_queries.push(SubQuery::new(group, sub_rule, contents.clone()));
+						sub_queries.push(SubQuery::new(sub_rule, contents.clone()));
 					},
 				}
 			}
@@ -719,13 +628,12 @@ impl Interpretation {
 }
 
 impl SubQuery {
-	fn new_static_text(symbolic_value: Vec<SymbolicChar>) -> Self {
+	pub(crate) fn new_static_text(symbolic_value: Vec<SymbolicChar>) -> Self {
 		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
 			accum.push_str(&ch.to_string());
 			accum
 		});
 		Self {
-			group: 0,
 			rule_idx: None,
 			fully_qualified_name: Arc::from(""),
 			symbolic_value,
@@ -733,7 +641,7 @@ impl SubQuery {
 		}
 	}
 
-	fn new(group: usize, sub_rule: &SubRule, symbolic_value: Vec<SymbolicChar>) -> Self {
+	pub(crate) fn new(sub_rule: &SubRule, symbolic_value: Vec<SymbolicChar>) -> Self {
 		// TODO duplicated above
 		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
 			accum.push_str(&ch.to_string());
@@ -744,7 +652,6 @@ impl SubQuery {
 		}
 		assert!(!sub_rule.fully_qualified_name.is_empty());
 		Self {
-			group,
 			rule_idx: Some(sub_rule.root_rule_idx),
 			fully_qualified_name: sub_rule.fully_qualified_name.clone(),
 			symbolic_value,
@@ -759,9 +666,7 @@ impl SubQuery {
 	/// Returns `true` iff `self` is a "refinement" of `other`,
 	/// or `self` is exactly a single wildcard (star).
 	fn subsumes(&self, other: &Self) -> bool {
-		if (self.group, self.rule_idx, &self.fully_qualified_name)
-			!= (other.group, other.rule_idx, &other.fully_qualified_name)
-		{
+		if (self.rule_idx, &self.fully_qualified_name) != (other.rule_idx, &other.fully_qualified_name) {
 			return false;
 		}
 		if self.symbolic_value == [SymbolicChar::GlobStar] {

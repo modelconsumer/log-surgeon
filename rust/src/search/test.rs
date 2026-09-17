@@ -119,42 +119,36 @@ fn search_nested_name_without_leaf_capture() {
 #[test]
 fn test_subsumes() {
 	let a: SubQuery = SubQuery {
-		group: 0,
 		rule_idx: None,
 		fully_qualified_name: Arc::from(""),
 		symbolic_value: vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar],
 		string_value: String::new(),
 	};
 	let b: SubQuery = SubQuery {
-		group: 0,
 		rule_idx: None,
 		fully_qualified_name: Arc::from(""),
 		symbolic_value: vec![SymbolicChar::Literal('a')],
 		string_value: String::new(),
 	};
 	let c: SubQuery = SubQuery {
-		group: 0,
 		rule_idx: None,
 		fully_qualified_name: Arc::from(""),
 		symbolic_value: vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')],
 		string_value: String::new(),
 	};
 	let d: SubQuery = SubQuery {
-		group: 0,
 		rule_idx: None,
 		fully_qualified_name: Arc::from(""),
 		symbolic_value: vec![SymbolicChar::Literal('a')],
 		string_value: String::new(),
 	};
 	let e: SubQuery = SubQuery {
-		group: 0,
 		rule_idx: None,
 		fully_qualified_name: Arc::from(""),
 		symbolic_value: vec![SymbolicChar::GlobStar],
 		string_value: String::new(),
 	};
 	let f: SubQuery = SubQuery {
-		group: 0,
 		rule_idx: None,
 		fully_qualified_name: Arc::from(""),
 		symbolic_value: vec![

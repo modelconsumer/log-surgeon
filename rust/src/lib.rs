@@ -16,6 +16,7 @@ pub mod log_event;
 pub mod nfa;
 pub mod parser;
 pub mod parsing_spec;
+pub mod prefilter;
 pub mod regex;
 pub mod search;
 
