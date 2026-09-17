@@ -16,6 +16,7 @@ use crate::log_event::Match;
 use crate::log_event::MatchFfiPointers;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleInfo;
+use crate::prefilter::ShapeModelCache;
 
 /// A parser is almost stateless aside from 2/3 fields:
 ///
@@ -36,6 +37,11 @@ pub struct Parser {
 	current_log: WorkingLogEvent,
 	maybe_pending_header: Option<WorkingLogEvent>,
 	dfa_execution: TdfaExecution,
+	/// Prefilter models for log-shape search, built on demand.
+	///
+	/// A parser is long-lived and typically searched repeatedly against the same set of shapes, so this
+	/// turns a per-query cost into a per-shape one. See [`ShapeModelCache`].
+	shape_models: ShapeModelCache,
 }
 
 /// Owned data for a [`LogEvent`].
@@ -69,7 +75,13 @@ impl Parser {
 			current_log: WorkingLogEvent::new(),
 			maybe_pending_header: None,
 			dfa_execution,
+			shape_models: ShapeModelCache::new(),
 		}
+	}
+
+	/// The prefilter model cache, for [`crate::search::SearchString::search_by_log_shapes_cached`].
+	pub fn shape_models(&self) -> &ShapeModelCache {
+		&self.shape_models
 	}
 
 	/// Return the next log event;

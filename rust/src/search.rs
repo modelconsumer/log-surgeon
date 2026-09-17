@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod test;
 
-// use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::Arc;
 
@@ -14,12 +13,19 @@ use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::RuleInfo;
 use crate::parsing_spec::SubRule;
+use crate::prefilter;
+use crate::prefilter::ComposeBudget;
+use crate::prefilter::Composed;
+use crate::prefilter::PlacementTable;
+use crate::prefilter::Run;
+use crate::prefilter::RunFitCache;
+use crate::prefilter::ShapeModel;
+use crate::prefilter::ShapeModelCache;
 use crate::regex::Regex;
 
 #[derive(Debug)]
 pub struct SearchString {
 	symbols: Vec<SymbolicChar>,
-	fragments: Vec<String>,
 }
 
 impl std::fmt::Display for SearchString {
@@ -78,8 +84,6 @@ impl std::fmt::Debug for Interpretation {
 
 #[derive(Clone)]
 pub struct SubQuery {
-	/// Used to associate leaf queries of the same root match together.
-	pub group: usize,
 	pub rule_idx: Option<RuleIdx>,
 	pub fully_qualified_name: Arc<str>,
 	pub symbolic_value: Vec<SymbolicChar>,
@@ -90,8 +94,8 @@ impl std::fmt::Debug for SubQuery {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if let Some(rule_idx) = self.rule_idx {
 			fmt.write_fmt(format_args!(
-				"({}:?<{}:{}>{})",
-				self.group, rule_idx, self.fully_qualified_name, self.string_value,
+				"(?<{}:{}>{})",
+				rule_idx, self.fully_qualified_name, self.string_value,
 			))
 		} else {
 			fmt.write_str(&self.string_value)
@@ -103,18 +107,11 @@ impl Eq for SubQuery {}
 
 impl Ord for SubQuery {
 	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-		(
-			&self.group,
-			&self.rule_idx,
-			&self.fully_qualified_name,
-			&self.symbolic_value,
-		)
-			.cmp(&(
-				&other.group,
-				&other.rule_idx,
-				&other.fully_qualified_name,
-				&other.symbolic_value,
-			))
+		(&self.rule_idx, &self.fully_qualified_name, &self.symbolic_value).cmp(&(
+			&other.rule_idx,
+			&other.fully_qualified_name,
+			&other.symbolic_value,
+		))
 	}
 }
 
@@ -135,6 +132,18 @@ struct SearchStringView<'a> {
 	full_string: &'a SearchString,
 	start: usize,
 	end: usize,
+}
+
+/// A query as the engine sees it, with its end-anchoring made explicit.
+///
+/// See [`SearchString::anchored`], which is the only place these two are derived, so that every caller
+/// agrees about what `*foo` means.
+#[derive(Clone, Copy)]
+struct AnchoredQuery<'a> {
+	/// The query with a single trailing wildcard removed, if it had one.
+	view: SearchStringView<'a>,
+	/// Whether a match must run to the end of the message.
+	anchored_end: bool,
 }
 
 impl std::fmt::Debug for SearchStringView<'_> {
@@ -192,47 +201,20 @@ impl Interpretation {
 			i += 1;
 		}
 	}
-
-	/// Re-numbers groups consecutively starting from `1`
-	/// (static text always has group `0`).
-	#[allow(unused)]
-	fn canonicalize(&mut self, cache: &mut [Option<NonZero<usize>>]) {
-		cache.fill(None);
-
-		let mut n: NonZero<usize> = NonZero::<usize>::MIN;
-
-		for sub_query in self.sub_queries.iter_mut() {
-			if sub_query.group == 0 {
-				continue;
-			}
-			sub_query.group = cache[sub_query.group]
-				.get_or_insert_with(|| {
-					let x: NonZero<usize> = n.checked_add(1).unwrap();
-					std::mem::replace(&mut n, x)
-				})
-				.get();
-		}
-	}
 }
 
 impl SearchString {
 	pub fn parse(input: &str) -> Result<Self, SearchStringError<'_>> {
 		let mut symbols: Vec<SymbolicChar> = Vec::new();
-		let mut fragments: Vec<String> = Vec::new();
-		let mut current_fragment: String = String::new();
 		let mut last_was_escape: bool = false;
 		for (i, ch) in input.char_indices() {
 			match ch {
 				'*' | '\\' => {
 					symbols.push(if last_was_escape {
-						current_fragment.push('*');
 						SymbolicChar::Literal(ch)
 					} else {
 						match ch {
-							'*' => {
-								fragments.push(std::mem::replace(&mut current_fragment, String::new()));
-								SymbolicChar::GlobStar
-							},
+							'*' => SymbolicChar::GlobStar,
 							'\\' => {
 								last_was_escape = true;
 								continue;
@@ -248,7 +230,6 @@ impl SearchString {
 						let (before, after): (&str, &str) = input.split_at(i);
 						return Err(SearchStringError::InvalidEscape { before, after });
 					} else {
-						current_fragment.push(ch);
 						symbols.push(SymbolicChar::Literal(ch));
 					}
 				},
@@ -261,8 +242,7 @@ impl SearchString {
 				after: "",
 			});
 		}
-		fragments.push(current_fragment);
-		Ok(Self { symbols, fragments })
+		Ok(Self { symbols })
 	}
 
 	pub fn as_slice(&self) -> &[SymbolicChar] {
@@ -280,226 +260,102 @@ impl SearchString {
 	}
 
 	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
-		let view: SearchStringView<'_> = if self.symbols.last().unwrap() == &SymbolicChar::GlobStar {
-			self.view(0, self.symbols.len() - 1)
-		} else {
-			self.view(0, self.symbols.len())
-		};
+		self.search_by_log_shapes_with(spec, Some(&ShapeModelCache::new()), log_shapes)
+	}
 
-		/*
-		let mut boundary_chars: Vec<char> = Vec::new();
-		for (i, search_fragment) in self.fragments.iter().enumerate() {
-			if (i > 0)
-				&& let Some(ch) = search_fragment.chars().next()
-			{
-				boundary_chars.push(ch);
-			}
-			if ((i + 1) < self.fragments.len())
-				&& let Some(ch) = search_fragment.chars().next_back()
-			{
-				boundary_chars.push(ch);
-			}
+	/// As [`Self::search_by_log_shapes`], reusing `cache`'s prefilter models.
+	///
+	/// Prefer this when searching the same shapes more than once, e.g. via
+	/// [`crate::parser::Parser::shape_models`]: building a shape's prefilter model is otherwise repeated
+	/// for every query.
+	pub fn search_by_log_shapes_cached(
+		&self,
+		spec: &ParsingSpec,
+		cache: &ShapeModelCache,
+		log_shapes: &[&str],
+	) -> Vec<Vec<Interpretation>> {
+		self.search_by_log_shapes_with(spec, Some(cache), log_shapes)
+	}
+
+	fn search_by_log_shapes_with(
+		&self,
+		spec: &ParsingSpec,
+		cache: Option<&ShapeModelCache>,
+		log_shapes: &[&str],
+	) -> Vec<Vec<Interpretation>> {
+		let anchored: AnchoredQuery<'_> = self.anchored();
+
+		// The query's runs and their fits are shared across every shape: this is where the composition
+		// path gets its leverage, since a corpus mentions the same few rules over and over, and a rule's
+		// behaviour on a run does not depend on the shape referencing it.
+		//
+		// Note the runs come from the *raw* symbols, not the engine's view: dropping the trailing
+		// wildcard is what tells [`prefilter::runs_of`] the last run is anchored, and re-adding one would
+		// erase exactly the information anchoring depends on.
+		let runs: Vec<Run> = prefilter::runs_of(&self.symbols);
+		let fits: RunFitCache = RunFitCache::new();
+
+		// Resolve every shape before searching any, so an unsupported shape fails the call outright
+		// rather than after some shapes have already been processed. See [`ShapeModel::new`].
+		let models: Vec<Arc<ShapeModel>> = Vec::from_iter(log_shapes.iter().map(|&shape| match cache {
+			Some(cache) => cache.get(spec, shape),
+			None => Arc::new(ShapeModel::new(spec, shape)),
+		}));
+
+		std::iter::zip(&models, log_shapes)
+			.map(|(model, &shape)| {
+				anchored
+					.view
+					.interpretations_for_log_shape(spec, model, shape, &runs, &fits, anchored.anchored_end)
+			})
+			.collect::<Vec<_>>()
+	}
+
+	/// This query split into the engine's view of it, plus whether it is anchored at the end.
+	///
+	/// Anchoring is one uniform rule, read off both ends the same way: a query is anchored at a boundary
+	/// exactly when it does not have a wildcard there. So `foo*` is anchored at the start, `*foo` at the
+	/// end, `foo` at both (an exact match), and `*foo*` at neither.
+	///
+	/// Start anchoring needs no flag because it is already *structural*: an unanchored query literally
+	/// begins with a [`SymbolicChar::GlobStar`], so the automaton built from it begins with `.*`. End
+	/// anchoring cannot be structural in the same way — a trailing `.*` would have to be simulated
+	/// through the whole rest of the shape — so it is carried as a flag, the wildcard is dropped from
+	/// the view, and the automata are instead told not to require reaching the shape's end. That keeps
+	/// the unanchored case exactly as cheap as it was: acceptance is decided the moment the query's own
+	/// automaton accepts.
+	fn anchored(&self) -> AnchoredQuery<'_> {
+		match self.symbols.last() {
+			Some(&SymbolicChar::GlobStar) => AnchoredQuery {
+				view: self.view(0, self.symbols.len() - 1),
+				anchored_end: false,
+			},
+			// Also covers the empty query, which anchors vacuously.
+			_ => AnchoredQuery {
+				view: self.view(0, self.symbols.len()),
+				anchored_end: true,
+			},
 		}
-		boundary_chars.sort();
-		boundary_chars.dedup();
-		*/
-		let mut search_characters: Vec<char> =
-			Vec::from_iter(self.fragments.iter().flat_map(|fragment| fragment.chars()));
-		search_characters.sort();
-		search_characters.dedup();
-		// println!("search characters is {:?}", search_characters);
+	}
 
-		let mut interpretations_by_shape: Vec<Vec<Interpretation>> = Vec::with_capacity(log_shapes.len());
-		for &shape in log_shapes.iter() {
-			let shape_fragments: Vec<LogShapeFragment> = spec.split_log_shape(shape);
-			let mut must_be_in_rule: bool = true;
-			for (i, fragment) in shape_fragments.iter().enumerate() {
-				let LogShapeFragment::Rule(_rule_name): &LogShapeFragment = fragment else {
-					continue;
-				};
-				if i > 0 {
-					let fragment_before: &LogShapeFragment = &shape_fragments[i - 1];
-					match fragment_before {
-						LogShapeFragment::Text(text) => {
-							assert!(!text.is_empty());
-							let boundary: char = text.chars().next_back().unwrap();
-							if search_characters.binary_search(&boundary).is_ok() {
-								must_be_in_rule = false;
-								break;
-							}
-						},
-						LogShapeFragment::Rule(_rule_name) => {
-							must_be_in_rule = false;
-							break;
-						},
-					}
-				}
-				if i + 1 < shape_fragments.len() {
-					let fragment_after: &LogShapeFragment = &shape_fragments[i + 1];
-					match fragment_after {
-						LogShapeFragment::Text(text) => {
-							assert!(!text.is_empty());
-							let boundary: char = text.chars().next().unwrap();
-							if search_characters.binary_search(&boundary).is_ok() {
-								must_be_in_rule = false;
-								break;
-							}
-						},
-						LogShapeFragment::Rule(_rule_name) => {
-							must_be_in_rule = false;
-							break;
-						},
-					}
-				}
-			}
-			if must_be_in_rule {
-				now!(t0);
-				trace!("must be in rule: {shape:.1024}");
-				let mut fragment_interpretations_matrix: Vec<Vec<Interpretation>> =
-					vec![Vec::new(); shape_fragments.len() * self.fragments.len()];
+	/// Interpretations for `log_shape`, always via the automata, bypassing [`crate::prefilter`].
+	///
+	/// Exposed so that tests can pin the prefilter against the engine it is meant to agree with.
+	pub fn interpretations_for_log_shape_via_engine(&self, spec: &ParsingSpec, log_shape: &str) -> Vec<Interpretation> {
+		// TODO unwrap
+		let automata: Tnfa = spec.automata_for_shape(log_shape).unwrap();
+		self.interpretations_for_automata(spec, &automata)
+	}
 
-				let mut text_interpretations: Vec<Interpretation> = vec![
-					Interpretation {
-						sub_queries: Vec::new()
-					};
-					shape_fragments.len()
-				];
-
-				let mut rule_indices: Vec<usize> = Vec::new();
-
-				for (i, fragment) in shape_fragments.iter().enumerate() {
-					match fragment {
-						LogShapeFragment::Text(text) => {
-							text_interpretations[i] = Interpretation {
-								sub_queries: vec![SubQuery::new_static_text(Vec::from_iter(
-									text.chars().map(SymbolicChar::Literal),
-								))],
-							};
-						},
-						LogShapeFragment::Rule(rule_name) => {
-							rule_indices.push(i);
-							for (j, search_fragment) in self.fragments.iter().enumerate() {
-								fragment_interpretations_matrix[(i * self.fragments.len()) + j] =
-									if !search_fragment.is_empty() {
-										let sub_search: SearchString =
-											SearchString::parse(&format!("*{search_fragment}*")).unwrap();
-										let interpretations: Vec<Interpretation> =
-											sub_search.search_by_name(spec, rule_name);
-
-										// if !interpretations.is_empty() {
-										// 	trace!(
-										// 		"interpretations for {search_fragment} and {rule_name} can match"
-										// 	);
-										// 	for interp in interpretations.iter() {
-										// 		println!("- {interp:?}");
-										// 	}
-										// }
-
-										interpretations
-									} else {
-										/*
-										Vec::from_iter(spec.rules_for_name(rule_name).into_iter().map(
-											|(rule_info, _regex)| {
-												let sub_rule: Arc<SubRule> =
-													if let Some(sub_rule) = rule_info.maybe_sub_rule.clone() {
-														sub_rule
-													} else {
-														Arc::new(SubRule {
-															name: rule_info.root_name.clone(),
-															regex: Regex::NIL,
-															root_rule_idx: rule_info.root_idx,
-															// TODO
-															id: NonZero::<u16>::MAX,
-															parent_id: None,
-															descendants: 0,
-															qualified_name: rule_info.root_name.clone(),
-															fully_qualified_name: rule_info.root_name.clone(),
-														})
-													};
-												Interpretation {
-													sub_queries: vec![SubQuery::new(
-														0,
-														&sub_rule,
-														vec![SymbolicChar::GlobStar],
-													)],
-												}
-											},
-										))
-										*/
-										Vec::new()
-									};
-							}
-						},
-					}
-				}
-
-				if rule_indices.is_empty() {
-					interpretations_by_shape.push(Vec::new());
-					continue;
-				}
-
-				let mut finished: Vec<Interpretation> = Vec::new();
-
-				let mut stack: Vec<(Interpretation, usize, usize)> = Vec::new();
-
-				for i in 0..self.fragments.len() {
-					// let mut no_match: bool = true;
-					for interpretation in
-						fragment_interpretations_matrix[(rule_indices[0] * self.fragments.len()) + i].iter()
-					{
-						stack.push((interpretation.clone(), 1, i + 1));
-						// no_match = false;
-					}
-					// if no_match {
-					// 	println!(
-					// 		"fragment {:?} no matches among {:?}",
-					// 		&shape_fragments[rule_indices[0]],
-					// 		&self.fragments[..]
-					// 	);
-					// }
-				}
-
-				while let Some((interpretation, shape_fragment, search_fragment)) = stack.pop() {
-					if shape_fragment == rule_indices.len() {
-						finished.push(interpretation);
-						continue;
-					}
-					if search_fragment == self.fragments.len() {
-						continue;
-					}
-					let row: usize = rule_indices[shape_fragment];
-					let search_fragment: usize = search_fragment.max(row + 1);
-					for col in search_fragment..self.fragments.len() {
-						// let mut no_match: bool = true;
-						for interpretation in fragment_interpretations_matrix[(row * self.fragments.len()) + col].iter()
-						{
-							stack.push((interpretation.clone(), shape_fragment + 1, col + 1));
-							// no_match = false;
-						}
-						// if no_match {
-						// 	println!(
-						// 		"fragment {:?} no matches among {:?}",
-						// 		&shape_fragments[rule_indices[shape_fragment]],
-						// 		&self.fragments[..]
-						// 	);
-						// }
-					}
-				}
-
-				now!(t1);
-				debug!("have {} interpretations, took {} ms", finished.len(), millis!(t0, t1));
-				// for interp in finished.iter() {
-				// 	println!("- {interp:?}");
-				// }
-				interpretations_by_shape.push(finished);
-			} else {
-				// TODO unwrap
-				let automata: Tnfa = spec.automata_for_shape(shape).unwrap();
-				interpretations_by_shape.push(view.interpretations_for_shape(spec, &automata));
-			}
-		}
-
-		interpretations_by_shape
+	/// Interpretations for an already-built shape automaton.
+	///
+	/// Exposed so that tests can pin a *truncated* automaton (see
+	/// [`ParsingSpec::automata_for_fragments`]) against the full one it stands in for.
+	pub fn interpretations_for_automata(&self, spec: &ParsingSpec, automata: &Tnfa) -> Vec<Interpretation> {
+		let anchored: AnchoredQuery<'_> = self.anchored();
+		anchored
+			.view
+			.interpretations_for_shape(spec, automata, anchored.anchored_end)
 	}
 
 	fn view(&self, start: usize, end: usize) -> SearchStringView<'_> {
@@ -520,6 +376,141 @@ impl<'a> SearchStringView<'a> {
 		Regex::Sequence(Vec::from_iter(self.as_str().iter().map(SymbolicChar::to_regex)))
 	}
 
+	/// Interpretations of this query for a single log shape.
+	///
+	/// Three paths, cheapest first:
+	///
+	/// 1. [`crate::prefilter::can_match`] on the coarse charset model. When it proves the shape cannot
+	///    match, the shape's TNFA is never built and never intersected with the query.
+	/// 2. [`crate::prefilter::compose`], which decomposes the query against the shape directly, reusing
+	///    per-rule simulations across shapes. This answers the real question — which rule instance holds
+	///    what text — without building any automata for the shape.
+	/// 3. The engine, when composition declines to conclude (an unreasonable rule, or an exhausted
+	///    budget). This is the slow path that the other two exist to avoid.
+	///
+	/// Note the [`crate::prefilter::align`] decompositions are *not* usable as a result: placeholders
+	/// there are over-approximated (notably they may match the empty string, which a rule like `[a-z]+`
+	/// cannot), so they form a superset of the engine's interpretations. Composition is exact because it
+	/// simulates the rules themselves rather than their charsets.
+	fn interpretations_for_log_shape(
+		&self,
+		spec: &ParsingSpec,
+		model: &ShapeModel,
+		shape: &str,
+		runs: &[Run],
+		fits: &RunFitCache,
+		anchored_end: bool,
+	) -> Vec<Interpretation> {
+		now!(t0);
+
+		if !prefilter::can_match(model, self.as_str(), anchored_end) {
+			trace!("prefilter rejected shape {shape:.256}");
+			return Vec::new();
+		}
+
+		// `None` means a resource cap was exceeded, so the table is incomplete and nothing may be
+		// concluded from it; fall back to the engine.
+		let maybe_table: Option<PlacementTable> = PlacementTable::compute(spec, model, runs, fits);
+
+		if let Some(table) = maybe_table.as_ref()
+			&& let Some(interpretations) = Self::composed_interpretations(spec, model, table, runs, fits)
+		{
+			now!(t1);
+			trace!("composed shape in {} ms {shape:.256}", millis!(t0, t1));
+			return interpretations;
+		}
+
+		// Composition declined to conclude, but its placements still bound where the query's literal
+		// text can sit, which is enough to drop the shape's unreachable tail from the automaton.
+		let maybe_narrowed: Option<Tnfa> = maybe_table
+			.as_ref()
+			.and_then(|table| self.truncated_automata(spec, model, table, anchored_end));
+
+		let automata: Tnfa = match maybe_narrowed {
+			Some(automata) => automata,
+			// TODO unwrap
+			None => spec.automata_for_shape(shape).unwrap(),
+		};
+		let interpretations: Vec<Interpretation> = self.interpretations_for_shape(spec, &automata, anchored_end);
+		now!(t1);
+		debug!("- took {} ms", millis!(t0, t1));
+		interpretations
+	}
+
+	/// The shape's automaton, truncated to the parts the query can actually reach.
+	///
+	/// Real shapes carry very long tails of static text — tens of thousands of characters — while their
+	/// placeholders cluster near the front, and one state is emitted per literal character. Under prefix
+	/// matching the intersection accepts as soon as the *query's* automaton accepts, which happens at the
+	/// end of its last literal run, so those trailing states are built and intersected only to be thrown
+	/// away.
+	///
+	/// [`PlacementTable::window`] bounds every placement of every run, so no literal character of the
+	/// query can land beyond `window.1`. Truncating there is exactly "do not simulate the query's
+	/// trailing wildcard": the parts dropped are the ones it would have consumed.
+	///
+	/// Only the *tail* is dropped. The head must be kept verbatim — the query's leading wildcard still
+	/// has to traverse it, and replacing it with `.*` would be a superset, letting runs straddle where
+	/// the real static text forbids it and inventing interpretations the full shape does not have.
+	///
+	/// Returns `None` when there is nothing to truncate, so the caller builds the shape as before.
+	fn truncated_automata(
+		&self,
+		spec: &ParsingSpec,
+		model: &ShapeModel,
+		table: &PlacementTable,
+		anchored_end: bool,
+	) -> Option<Tnfa> {
+		// A query anchored at the end must consume the shape through to its end, so nothing may be
+		// dropped: the truncated parts are precisely the ones it still has to match.
+		if anchored_end {
+			return None;
+		}
+
+		let (_, end): (usize, usize) = table.window()?;
+		let last: usize = model.parts.len().checked_sub(1)?;
+
+		if end >= last {
+			return None;
+		}
+
+		let fragments: Vec<LogShapeFragment> = model.fragments_in(0, end);
+		let truncated: Tnfa = spec.automata_for_fragments(&fragments).ok()?;
+
+		trace!("truncated shape from {} parts to 0..={end}", model.parts.len());
+
+		Some(truncated)
+	}
+
+	/// Interpretations for `model` via [`crate::prefilter::compose`].
+	///
+	/// `None` means composition declined to conclude and the caller must fall back to the engine. An
+	/// empty vector is a real answer — the shape cannot match — and is not the same thing.
+	fn composed_interpretations(
+		spec: &ParsingSpec,
+		model: &ShapeModel,
+		table: &PlacementTable,
+		runs: &[Run],
+		fits: &RunFitCache,
+	) -> Option<Vec<Interpretation>> {
+		match prefilter::compose(spec, model, table, runs, fits, ComposeBudget::default()) {
+			Composed::Impossible => Some(Vec::new()),
+			Composed::Unknown => None,
+			Composed::Compositions(compositions) => {
+				let mut interpretations: Vec<Interpretation> = Vec::from_iter(
+					compositions
+						.iter()
+						.map(|composition| composition.to_interpretation(model, runs)),
+				);
+				// The engine's callers expect a canonical, duplicate-free set; distinct compositions can
+				// render identically once positions collapse to the same sub-queries.
+				interpretations.sort();
+				interpretations.dedup();
+				Some(interpretations)
+			},
+		}
+	}
+
 	fn interpretations_for_name(&self, spec: &ParsingSpec, rows: &[(&RuleInfo, &Regex)]) -> Vec<Interpretation> {
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
@@ -527,7 +518,7 @@ impl<'a> SearchStringView<'a> {
 			let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_info.root_idx, regex, &[]);
 
 			let potential_interpretations: Vec<Interpretation> =
-				self.interpretations_for_nfa(spec, &rule_nfa, 0, Some(rule_info));
+				self.interpretations_for_nfa(spec, &rule_nfa, Some(rule_info));
 
 			interpretations.extend(potential_interpretations.into_iter());
 		}
@@ -538,7 +529,24 @@ impl<'a> SearchStringView<'a> {
 		interpretations
 	}
 
-	fn interpretations_for_shape(&self, _spec: &ParsingSpec, shape_nfa: &Tnfa) -> Vec<Interpretation> {
+	/// Interpretations of this query against a shape's automaton.
+	///
+	/// `anchored_end` decides how the intersection is closed off, and is the whole of end-anchoring on
+	/// the engine side:
+	///
+	/// - `false` (`*foo*`, `foo*`): the intersection accepts as soon as the *query's* automaton accepts,
+	///   whatever state the shape is in. The shape's remaining states are never explored, which is what
+	///   makes an absent trailing wildcard cheap — it is never simulated, only assumed. Paths are then
+	///   closed with a trailing wildcard to say "and then anything".
+	/// - `true` (`*foo`, `foo`): both automata must accept together, so the match runs to the end of the
+	///   message. Nothing is appended to the paths, and a rule pinned to producing nothing is reported
+	///   as an empty capture.
+	fn interpretations_for_shape(
+		&self,
+		_spec: &ParsingSpec,
+		shape_nfa: &Tnfa,
+		anchored_end: bool,
+	) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
@@ -546,7 +554,11 @@ impl<'a> SearchStringView<'a> {
 		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());
 
 		now!(t0);
-		let intersection: Tnfa = shape_nfa.intersect::<true, false>(&search_nfa);
+		let intersection: Tnfa = if anchored_end {
+			shape_nfa.intersect::<true, true>(&search_nfa)
+		} else {
+			shape_nfa.intersect::<true, false>(&search_nfa)
+		};
 		now!(t1);
 		trace!(
 			"intersecting {} states with {} states took {}",
@@ -558,7 +570,11 @@ impl<'a> SearchStringView<'a> {
 			return Vec::new();
 		}
 
-		let paths: Vec<Path> = intersection.compute_paths::<true>();
+		let paths: Vec<Path> = if anchored_end {
+			intersection.compute_paths::<false>()
+		} else {
+			intersection.compute_paths::<true>()
+		};
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -571,7 +587,7 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						sub_queries.push(SubQuery::new(1, sub_rule, contents.clone()));
+						sub_queries.push(SubQuery::new(sub_rule, contents.clone()));
 					},
 				}
 			}
@@ -593,7 +609,6 @@ impl<'a> SearchStringView<'a> {
 		&self,
 		spec: &ParsingSpec,
 		nfa: &Tnfa,
-		group: usize,
 		maybe_rule_info: Option<&RuleInfo>,
 	) -> Vec<Interpretation> {
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
@@ -623,7 +638,6 @@ impl<'a> SearchStringView<'a> {
 				};
 
 				let mut implicit_capture: SubQuery = SubQuery::new(
-					group,
 					&Arc::new(SubRule {
 						name: rule.name.clone(),
 						regex: rule.regex.regex.clone(),
@@ -667,7 +681,7 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						sub_queries.push(SubQuery::new(group, sub_rule, contents.clone()));
+						sub_queries.push(SubQuery::new(sub_rule, contents.clone()));
 					},
 				}
 			}
@@ -719,13 +733,12 @@ impl Interpretation {
 }
 
 impl SubQuery {
-	fn new_static_text(symbolic_value: Vec<SymbolicChar>) -> Self {
+	pub(crate) fn new_static_text(symbolic_value: Vec<SymbolicChar>) -> Self {
 		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
 			accum.push_str(&ch.to_string());
 			accum
 		});
 		Self {
-			group: 0,
 			rule_idx: None,
 			fully_qualified_name: Arc::from(""),
 			symbolic_value,
@@ -733,7 +746,7 @@ impl SubQuery {
 		}
 	}
 
-	fn new(group: usize, sub_rule: &SubRule, symbolic_value: Vec<SymbolicChar>) -> Self {
+	pub(crate) fn new(sub_rule: &SubRule, symbolic_value: Vec<SymbolicChar>) -> Self {
 		// TODO duplicated above
 		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
 			accum.push_str(&ch.to_string());
@@ -744,7 +757,6 @@ impl SubQuery {
 		}
 		assert!(!sub_rule.fully_qualified_name.is_empty());
 		Self {
-			group,
 			rule_idx: Some(sub_rule.root_rule_idx),
 			fully_qualified_name: sub_rule.fully_qualified_name.clone(),
 			symbolic_value,
@@ -759,29 +771,33 @@ impl SubQuery {
 	/// Returns `true` iff `self` is a "refinement" of `other`,
 	/// or `self` is exactly a single wildcard (star).
 	fn subsumes(&self, other: &Self) -> bool {
-		if (self.group, self.rule_idx, &self.fully_qualified_name)
-			!= (other.group, other.rule_idx, &other.fully_qualified_name)
-		{
+		if (self.rule_idx, &self.fully_qualified_name) != (other.rule_idx, &other.fully_qualified_name) {
 			return false;
 		}
 		if self.symbolic_value == [SymbolicChar::GlobStar] {
 			return true;
+		}
+		// An empty value is a capture pinned to the empty string (an end-anchored query against a rule
+		// such as `(?<leaf>[a-z]*)`). It is maximally specific: it subsumes only another empty value, and
+		// nothing subsumes it but itself.
+		if self.symbolic_value.is_empty() || other.symbolic_value.is_empty() {
+			return self.symbolic_value == other.symbolic_value;
 		}
 		// Remark: Always has 1 subslice.
 		let mut other_parts: Vec<&[SymbolicChar]> = other
 			.symbolic_value
 			.split(|&ch| ch == SymbolicChar::GlobStar)
 			.collect::<Vec<_>>();
-		if *other.symbolic_value.last().unwrap() == SymbolicChar::GlobStar {
-			if *self.symbolic_value.last().unwrap() != SymbolicChar::GlobStar {
+		if *other.symbolic_value.last().expect("non-empty") == SymbolicChar::GlobStar {
+			if *self.symbolic_value.last().expect("non-empty") != SymbolicChar::GlobStar {
 				return false;
 			}
-			let last: &[SymbolicChar] = other_parts.pop().unwrap();
+			let last: &[SymbolicChar] = other_parts.pop().expect("always has 1 subslice");
 			assert_eq!(last, []);
 		}
 		let mut i: usize = 0;
-		if *other.symbolic_value.first().unwrap() == SymbolicChar::GlobStar {
-			if *self.symbolic_value.first().unwrap() != SymbolicChar::GlobStar {
+		if *other.symbolic_value.first().expect("non-empty") == SymbolicChar::GlobStar {
+			if *self.symbolic_value.first().expect("non-empty") != SymbolicChar::GlobStar {
 				return false;
 			}
 			assert_eq!(other_parts[0], []);
@@ -808,11 +824,16 @@ impl SubQuery {
 	}
 
 	fn surround_with_wildcards(&mut self) {
-		if *self.symbolic_value.first().unwrap() != SymbolicChar::GlobStar {
+		// An empty value means the rule is pinned to producing nothing; padding it with wildcards would
+		// turn that into "anything", which is the opposite claim.
+		if self.symbolic_value.is_empty() {
+			return;
+		}
+		if *self.symbolic_value.first().expect("non-empty") != SymbolicChar::GlobStar {
 			self.symbolic_value.insert(0, SymbolicChar::GlobStar);
 			self.string_value.insert(0, '*');
 		}
-		if *self.symbolic_value.last().unwrap() != SymbolicChar::GlobStar {
+		if *self.symbolic_value.last().expect("non-empty") != SymbolicChar::GlobStar {
 			self.symbolic_value.push(SymbolicChar::GlobStar);
 			self.string_value.push('*');
 		}

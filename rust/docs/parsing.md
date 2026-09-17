@@ -145,12 +145,17 @@ Newlines are part of the line preceding it;
 in other words, log events are always terminated by newlines
 (but a newline doesn't necessarily terminate a log event).
 
+### See Also
+Searching log shapes with a search string is a separate subsystem; see
+[Searching Log Shapes][search-by-log-shapes] for its design.
+
 ### TODO
 Explain:
 - anchors
 - leaf ambiguity
 
 [parsing-spec]: parsing-specification.md
+[search-by-log-shapes]: search-by-log-shapes.md
 [python-regex]: https://docs.python.org/3/howto/regex.html
 [dfa]: https://en.wikipedia.org/wiki/Deterministic_finite_automaton
 [tagged-dfa]: https://arxiv.org/abs/2206.01398

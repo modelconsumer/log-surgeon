@@ -167,6 +167,48 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 	}
 }
 
+impl<T: Number, V: Clone + PartialEq> IntervalTree<T, V> {
+	/// Merge adjacent intervals holding equal values,
+	/// e.g. `[0, 5] => x` and `[6, 9] => x` become `[0, 9] => x`.
+	///
+	/// This does not change the value any position maps to;
+	/// it only reduces the number of entries (so lookups touch less memory).
+	/// It is intended to be called once, after the tree is done being mutated:
+	/// coalescing during [`Self::insert`] would require `V: PartialEq` on the hot path,
+	/// and for the insertion patterns in this crate (disjoint, mostly increasing intervals
+	/// with distinct values) it is not measurably faster than a single pass at the end.
+	///
+	/// Note that [`Self::lookup_interval`] returns the *stored* interval,
+	/// so a caller that distinguishes adjacent intervals with equal values
+	/// will observe the merged interval after calling this.
+	pub fn coalesce(&mut self) {
+		if self.intervals.is_empty() {
+			return;
+		}
+
+		// `write` is the index of the last entry kept;
+		// entries in `(write, read)` have been merged into it and are dropped by the final truncate.
+		let mut write: usize = 0;
+		for read in 1..self.intervals.len() {
+			let (kept, candidate): (&(Interval<T>, V), &(Interval<T>, V)) =
+				(&self.intervals[write], &self.intervals[read]);
+			// Guard against `up()` overflowing; nothing can be adjacent to an interval ending at `T::MAX`.
+			let adjacent: bool = (kept.0.end() != T::MAX) && (kept.0.end().up() == candidate.0.start());
+			if adjacent && (kept.1 == candidate.1) {
+				let end: T = candidate.0.end();
+				self.intervals[write].0 = Interval::new(self.intervals[write].0.start(), end);
+			} else {
+				write += 1;
+				self.intervals.swap(write, read);
+			}
+		}
+		self.intervals.truncate(write + 1);
+
+		#[cfg(debug_assertions)]
+		self.check_invariants();
+	}
+}
+
 impl<T: Number, V: Clone> IntervalTree<T, V> {
 	/// Lookup the entry for the interval containing `pos`.
 	fn lookup_entry(&self, pos: T) -> Option<(Interval<T>, &V)> {
@@ -191,7 +233,10 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 	}
 
 	/// Checks that intervals are non-overlapping.
-	#[cfg_attr(debug_assertions, allow(unused))]
+	///
+	/// Only called under `debug_assertions`; the attribute silences the dead-code warning in release
+	/// builds, where there are no callers.
+	#[cfg_attr(not(debug_assertions), allow(unused))]
 	fn check_invariants(&self) {
 		let mut maybe_previous: Option<T> = None;
 		for (interval, _) in self.intervals.iter() {

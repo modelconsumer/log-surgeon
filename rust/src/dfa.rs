@@ -837,6 +837,9 @@ impl Tdfa {
 					for (_, transition) in transitions.iter_mut() {
 						transition.target = partition_for_state[transition.target];
 					}
+					// Minimization frequently makes neighbouring intervals share a target;
+					// fewer intervals means smaller jump tables in the JIT and cheaper lookups.
+					transitions.coalesce();
 					maybe_transitions = Some(transitions);
 				}
 			}

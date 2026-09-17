@@ -147,7 +147,10 @@ impl PartialPath {
 						// Closing capture.
 						assert!(!is_open);
 						assert_eq!(sub_rule, &active_rule);
-						assert!(!symbols.is_empty());
+						// `symbols` may be empty: a rule such as `(?<leaf>[a-z]*)` can match nothing, and
+						// an end-anchored query pins it to exactly that. The empty capture is the precise
+						// answer — it says the rule produced no text — so it is reported as-is rather than
+						// widened to `*`, which would claim the opposite.
 
 						components.push(PathComponent::Capture {
 							sub_rule: active_rule,

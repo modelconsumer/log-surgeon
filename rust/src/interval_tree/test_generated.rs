@@ -307,3 +307,296 @@ fn iter_and_iter_mut() {
 	assert_eq!(tree.lookup(0), Some(&10));
 	assert_eq!(tree.lookup(10), Some(&20));
 }
+
+#[test]
+fn coalesce_empty_and_singleton() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	tree.coalesce();
+	assert!(tree.is_empty());
+
+	tree.insert(Interval::new(3, 7), 1, PolicyAdd);
+	tree.coalesce();
+	assert_eq!(tree.intervals, vec![(Interval::new(3, 7), 1)]);
+}
+
+#[test]
+fn coalesce_merges_adjacent_equal_values() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	tree.insert(Interval::new(0, 5), 1, PolicyAdd);
+	tree.insert(Interval::new(6, 10), 1, PolicyAdd);
+	tree.insert(Interval::new(11, 20), 1, PolicyAdd);
+	assert_eq!(tree.len(), 3);
+	tree.coalesce();
+	assert_eq!(tree.intervals, vec![(Interval::new(0, 20), 1)]);
+}
+
+#[test]
+fn coalesce_keeps_adjacent_different_values() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	tree.insert(Interval::new(0, 5), 1, PolicyAdd);
+	tree.insert(Interval::new(6, 10), 2, PolicyAdd);
+	tree.coalesce();
+	assert_eq!(
+		tree.intervals,
+		vec![(Interval::new(0, 5), 1), (Interval::new(6, 10), 2)]
+	);
+}
+
+/// Equal values that are *not* adjacent must not be merged.
+#[test]
+fn coalesce_keeps_non_adjacent_equal_values() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	tree.insert(Interval::new(0, 5), 1, PolicyAdd);
+	tree.insert(Interval::new(7, 10), 1, PolicyAdd);
+	tree.coalesce();
+	assert_eq!(
+		tree.intervals,
+		vec![(Interval::new(0, 5), 1), (Interval::new(7, 10), 1)]
+	);
+	assert_eq!(tree.lookup(6), None);
+}
+
+#[test]
+fn coalesce_merges_runs_and_preserves_boundaries() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	for (interval, value) in [
+		(Interval::new(0, 1), 1),
+		(Interval::new(2, 3), 1),
+		(Interval::new(4, 5), 2),
+		(Interval::new(6, 7), 2),
+		(Interval::new(8, 9), 2),
+		(Interval::new(11, 12), 2),
+		(Interval::new(13, 14), 3),
+	] {
+		tree.insert(interval, value, PolicyAdd);
+	}
+	tree.coalesce();
+	assert_eq!(
+		tree.intervals,
+		vec![
+			(Interval::new(0, 3), 1),
+			(Interval::new(4, 9), 2),
+			(Interval::new(11, 12), 2),
+			(Interval::new(13, 14), 3),
+		]
+	);
+}
+
+/// Coalescing an interval ending at `T::MAX` must not overflow in `up()`.
+#[test]
+fn coalesce_at_max_does_not_overflow() {
+	let mut tree: IntervalTree<u8, u64> = IntervalTree::new();
+	tree.insert(Interval::new(0, 127), 1, PolicyAdd);
+	tree.insert(Interval::new(128, u8::MAX), 1, PolicyAdd);
+	tree.coalesce();
+	assert_eq!(tree.intervals, vec![(Interval::new(0, u8::MAX), 1)]);
+
+	// A tree that is a single full-range interval is already coalesced.
+	tree.coalesce();
+	assert_eq!(tree.intervals, vec![(Interval::new(0, u8::MAX), 1)]);
+}
+
+#[test]
+fn coalesce_is_idempotent() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	for i in 0..20u32 {
+		tree.insert(Interval::new(i * 2, (i * 2) + 1), u64::from(i % 3), PolicyAdd);
+	}
+	tree.coalesce();
+	let once: Vec<(Interval<u32>, u64)> = tree.intervals.clone();
+	tree.coalesce();
+	assert_eq!(tree.intervals, once);
+}
+
+/// Coalescing must never change which value a position maps to.
+#[test]
+fn randomized_coalesce_preserves_lookups() {
+	let mut rng: Rng = Rng(0x9E37_79B9_7F4A_7C15);
+
+	for _ in 0..2000 {
+		let mut tree: IntervalTree<u8, u64> = IntervalTree::new();
+		for _ in 0..(1 + rng.below(8)) {
+			let (a, b): (u8, u8) = (
+				u8::try_from(rng.below(64)).unwrap(),
+				u8::try_from(rng.below(64)).unwrap(),
+			);
+			// Few distinct values, so adjacent-equal runs are common.
+			let value: u64 = u64::from(rng.below(3));
+			tree.insert(Interval::new(a.min(b), a.max(b)), value, PolicyOverwrite);
+		}
+
+		let before: Vec<Option<u64>> = (0..=u8::MAX).map(|pos| tree.lookup(pos).copied()).collect();
+		let len_before: usize = tree.len();
+		tree.coalesce();
+		let after: Vec<Option<u64>> = (0..=u8::MAX).map(|pos| tree.lookup(pos).copied()).collect();
+
+		assert_eq!(before, after, "coalesce changed lookups");
+		assert!(tree.len() <= len_before);
+
+		// The result must be fully coalesced: no adjacent-and-equal pair remains.
+		for window in tree.intervals.windows(2) {
+			let (left, right): (&(Interval<u8>, u64), &(Interval<u8>, u64)) = (&window[0], &window[1]);
+			assert!(
+				!((left.0.end() != u8::MAX) && (left.0.end().up() == right.0.start()) && (left.1 == right.1)),
+				"not fully coalesced: {:?}",
+				tree.intervals
+			);
+		}
+	}
+}
+
+/// The new value simply replaces the existing one; used to produce adjacent equal values.
+struct PolicyOverwrite;
+
+impl<T> Policy<T> for PolicyOverwrite {
+	fn combine(&mut self, existing: &mut T, new: T) {
+		*existing = new;
+	}
+}
+
+/// A trivial deterministic xorshift generator, so the randomized tests below
+/// reproduce exactly without pulling in a dependency.
+struct Rng(u64);
+
+impl Rng {
+	fn next(&mut self) -> u64 {
+		self.0 ^= self.0 << 13;
+		self.0 ^= self.0 >> 7;
+		self.0 ^= self.0 << 17;
+		self.0
+	}
+
+	fn below(&mut self, bound: u32) -> u32 {
+		u32::try_from(self.next() % u64::from(bound)).unwrap()
+	}
+}
+
+/// The reference model: every position tracked independently.
+fn reference_insert(cells: &mut [Option<u64>], interval: Interval<u8>, value: u64) {
+	for cell in cells
+		.iter_mut()
+		.take(usize::from(interval.end()) + 1)
+		.skip(usize::from(interval.start()))
+	{
+		*cell = Some(cell.map_or(value, |existing| existing + value));
+	}
+}
+
+/// Compare `insert` against the per-position reference model over random inputs,
+/// biased towards the representable bounds so that `up`/`down` are exercised at the edges.
+#[test]
+fn randomized_insert_matches_reference() {
+	let mut rng: Rng = Rng(0x243F_6A88_85A3_08D3);
+
+	for _ in 0..2000 {
+		let mut tree: IntervalTree<u8, u64> = IntervalTree::new();
+		let mut cells: [Option<u64>; 256] = [None; 256];
+
+		for _ in 0..(1 + rng.below(6)) {
+			let endpoint = |rng: &mut Rng| -> u8 {
+				match rng.below(4) {
+					0 => 0,
+					1 => u8::MAX,
+					_ => u8::try_from(rng.below(256)).unwrap(),
+				}
+			};
+			let (a, b): (u8, u8) = (endpoint(&mut rng), endpoint(&mut rng));
+			let interval: Interval<u8> = Interval::new(a.min(b), a.max(b));
+			let value: u64 = u64::from(1 + rng.below(4));
+
+			tree.insert(interval, value, PolicyAdd);
+			reference_insert(&mut cells, interval, value);
+
+			for pos in 0..=u8::MAX {
+				assert_eq!(
+					tree.lookup(pos),
+					cells[usize::from(pos)].as_ref(),
+					"mismatch at {pos} after inserting {interval:?} => {value}"
+				);
+			}
+		}
+	}
+}
+
+/// `complement` must return exactly the positions no input interval covers.
+#[test]
+fn randomized_complement_matches_reference() {
+	let mut rng: Rng = Rng(0x4528_21E6_38D0_1377);
+
+	for _ in 0..2000 {
+		let mut intervals: Vec<Interval<u8>> = Vec::new();
+		for _ in 0..rng.below(6) {
+			let a: u8 = u8::try_from(rng.below(256)).unwrap();
+			let b: u8 = u8::try_from(rng.below(256)).unwrap();
+			intervals.push(Interval::new(a.min(b), a.max(b)));
+		}
+
+		let mut covered: [bool; 256] = [false; 256];
+		for interval in intervals.iter() {
+			for cell in covered
+				.iter_mut()
+				.take(usize::from(interval.end()) + 1)
+				.skip(usize::from(interval.start()))
+			{
+				*cell = true;
+			}
+		}
+
+		let complement: Vec<Interval<u8>> = Interval::complement(&mut intervals);
+
+		let mut uncovered: [bool; 256] = [false; 256];
+		let mut maybe_previous: Option<u8> = None;
+		for interval in complement.iter() {
+			if let Some(previous) = maybe_previous {
+				assert!(
+					interval.start() > previous,
+					"complement is not disjoint: {complement:?}"
+				);
+			}
+			maybe_previous = Some(interval.end());
+			for cell in uncovered
+				.iter_mut()
+				.take(usize::from(interval.end()) + 1)
+				.skip(usize::from(interval.start()))
+			{
+				*cell = true;
+			}
+		}
+
+		for pos in 0..256 {
+			assert_eq!(uncovered[pos], !covered[pos], "mismatch at {pos}: {complement:?}");
+		}
+	}
+}
+
+/// `overlap` must agree with the set-intersection of the two interval's positions.
+#[test]
+fn randomized_overlap_matches_reference() {
+	let mut rng: Rng = Rng(0xB7E1_5162_8AED_2A6A);
+
+	for _ in 0..20000 {
+		let interval = |rng: &mut Rng| -> Interval<u8> {
+			let a: u8 = u8::try_from(rng.below(32)).unwrap();
+			let b: u8 = u8::try_from(rng.below(32)).unwrap();
+			Interval::new(a.min(b), a.max(b))
+		};
+		let (left, right): (Interval<u8>, Interval<u8>) = (interval(&mut rng), interval(&mut rng));
+
+		let expected: Vec<u8> = (0..32u8)
+			.filter(|&pos| {
+				(left.start() <= pos) && (pos <= left.end()) && (right.start() <= pos) && (pos <= right.end())
+			})
+			.collect();
+
+		match left.overlap(&right) {
+			None => assert!(expected.is_empty(), "{left:?} and {right:?} do overlap"),
+			Some(overlap) => {
+				assert_eq!(Some(&overlap.start()), expected.first(), "{left:?} {right:?}");
+				assert_eq!(Some(&overlap.end()), expected.last(), "{left:?} {right:?}");
+			},
+		}
+
+		// `overlap` is symmetric.
+		assert_eq!(left.overlap(&right), right.overlap(&left));
+	}
+}

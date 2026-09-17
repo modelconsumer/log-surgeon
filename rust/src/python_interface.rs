@@ -62,7 +62,8 @@ struct PyMatch {
 	#[pyo3(get, name = "parent")]
 	maybe_parent: Option<Py<PyMatch>>,
 
-	/// Slice indexing into the text of this match.
+	/// Slice indexing into [`PyLogEvent::message`], in code points (not bytes),
+	/// so that `match.text == event.message[match.offsets]`.
 	#[pyo3(get)]
 	offsets: Py<PySlice>,
 
@@ -152,6 +153,7 @@ impl PyParser {
 		let mut all_matches: Vec<Bound<'_, PyMatch>> = Vec::new();
 
 		let spec: &ParsingSpec = event.spec;
+		let offsets: CodePointOffsets = CodePointOffsets::new(event.message.as_str());
 
 		for (i, mat) in event.all_matches.iter().enumerate() {
 			let rule: &RootRule = &spec[mat.rule_idx];
@@ -170,7 +172,13 @@ impl PyParser {
 				root_rule_id: PyInt::new(py, u16::from(mat.rule_idx)).unbind(),
 				sub_rule_id: PyInt::new(py, mat.sub_rule_id.map_or(0, NonZero::get)).unbind(),
 				maybe_parent,
-				offsets: PySlice::new(py, mat.range.start as isize, mat.range.end as isize, 1).unbind(),
+				offsets: PySlice::new(
+					py,
+					offsets.at(mat.range.start) as isize,
+					offsets.at(mat.range.end) as isize,
+					1,
+				)
+				.unbind(),
 				name: PyString::new(py, name).unbind(),
 				fully_qualified_name: PyString::new(py, &rule_info.fully_qualified_name).unbind(),
 				lexeme: PyString::new(py, &event.message[mat.range.start..mat.range.end]).unbind(),
@@ -287,6 +295,48 @@ impl PyMatch {
 	#[pyo3(name = "__repr__")]
 	fn repr(&self) -> String {
 		format!("{self:?}")
+	}
+}
+
+/// Maps byte offsets into a [`str`] to Python code-point offsets into the
+/// corresponding [`PyString`].
+///
+/// Python strings are indexed by code point, but the parser reports byte
+/// offsets into the UTF-8 buffer; the two agree iff the message is ASCII.
+enum CodePointOffsets {
+	/// The message is ASCII, so byte offset == code-point offset.
+	Identity,
+	/// `byte_to_code_point[i]` is the code-point offset of byte offset `i`;
+	/// has one extra entry for the end-of-string offset.
+	Table { byte_to_code_point: Vec<u32> },
+}
+
+impl CodePointOffsets {
+	fn new(message: &str) -> Self {
+		if message.is_ascii() {
+			return Self::Identity;
+		}
+
+		let mut byte_to_code_point: Vec<u32> = Vec::with_capacity(message.len() + 1);
+		let mut code_point: u32 = 0;
+		for &byte in message.as_bytes() {
+			byte_to_code_point.push(code_point);
+			// Continuation bytes (`0b10xx_xxxx`) do not start a new code point.
+			if (byte as i8) >= -0x40 {
+				code_point += 1;
+			}
+		}
+		byte_to_code_point.push(code_point);
+
+		Self::Table { byte_to_code_point }
+	}
+
+	/// Panics if `byte_offset` is out of range.
+	fn at(&self, byte_offset: usize) -> u32 {
+		match self {
+			Self::Identity => byte_offset as u32,
+			Self::Table { byte_to_code_point } => byte_to_code_point[byte_offset],
+		}
 	}
 }
 
