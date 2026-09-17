@@ -285,8 +285,9 @@ fn symbolic_value_of(
 		previous_run = Some(piece.run);
 	}
 
-	// Likewise after: a rule may emit more text, but only where the query permits it.
-	if is_rule && !continues_after && !runs[last.run].anchored_end {
+	// Likewise after: a rule may emit more text, but only where the query permits it. The condition
+	// mirrors the leading one exactly — the run must be the last thing emitted, not merely end-anchored.
+	if is_rule && !continues_after && !(following_run.is_none() && runs[last.run].anchored_end) {
 		value.push(SymbolicChar::GlobStar);
 	}
 
@@ -335,6 +336,16 @@ pub fn compose(
 ) -> Composed {
 	if table.is_impossible() {
 		return Composed::Impossible;
+	}
+
+	// An end-anchored query pins the shape's trailing parts to producing *nothing*, which is a real
+	// constraint this module cannot express: rendering is truncated at the last constrained part (see
+	// `rendered_parts`), justified by the query's implicit trailing wildcard leaving the rest
+	// unconstrained. With no such wildcard those parts are constrained — to the empty string — and the
+	// engine reports that precisely, as an empty capture. Defer to it rather than render a `*` that
+	// claims the opposite.
+	if runs.last().is_some_and(|run| run.anchored_end) && model.parts.last().is_some_and(ShapePart::can_be_empty) {
+		return Composed::Unknown;
 	}
 
 	let num_runs: usize = table.placements.len();

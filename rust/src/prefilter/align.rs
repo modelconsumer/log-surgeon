@@ -14,8 +14,8 @@
 //!
 //! Start anchoring needs no special handling: a query that is not anchored at the start simply
 //! *begins* with a [`SymbolicChar::GlobStar`], which is what lets the shape emit unconsumed text. End
-//! anchoring is passed explicitly, because the engine currently treats a missing trailing wildcard as
-//! if it were present, and the prefilter must not be stricter than the engine it filters for.
+//! anchoring is passed explicitly, because the engine expresses it by *not* simulating a trailing
+//! wildcard rather than by carrying one in the symbols — there is nothing in `symbols` to read it off.
 //!
 //! # Structure and termination
 //!
@@ -130,8 +130,8 @@ impl ShapeModel {
 /// are not needed.
 ///
 /// `symbols` is the query as the engine sees it, i.e. with any single trailing wildcard already
-/// stripped. `anchored_at_end` states whether the query must consume the shape through to its end;
-/// pass `false` to mirror the engine's current prefix matching.
+/// stripped. `anchored_at_end` states whether the query must consume the shape through to its end,
+/// which is exactly "the query had no trailing wildcard to strip".
 #[must_use]
 pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool {
 	// An empty query constrains nothing; never claim it cannot match.
@@ -157,9 +157,13 @@ pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: 
 
 /// A cheap *sufficient* condition for "not ruled out", used to skip the full walk.
 ///
-/// If the query may float freely (it starts with a wildcard, and is not anchored at the end) and some
-/// single placeholder's charset admits every literal the query contains, then as far as this model
-/// knows that placeholder alone could emit the entire query text, so the shape cannot be rejected.
+/// If the query may float freely (it starts with a wildcard) and some single placeholder's charset
+/// admits every literal the query contains, then as far as this model knows that placeholder alone
+/// could emit the entire query text, so the shape cannot be rejected.
+///
+/// When the query is anchored at the end the placeholder must additionally be able to be *last*, since
+/// the query has to consume the message through to its end; a placeholder with only nullable parts
+/// after it qualifies.
 ///
 /// This only ever returns `true`, i.e. only ever causes a shape to be *kept*, so it cannot make the
 /// prefilter unsound. It matters because it is `O(placeholders + query)` against the walk's
@@ -167,11 +171,18 @@ pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: 
 /// permissive placeholder, so this is the common case, and paying for the full table there is what
 /// made the prefilter cost more than it saved.
 fn is_obviously_not_ruled_out(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool {
-	if anchored_at_end || (Some(&SymbolicChar::GlobStar) != symbols.first()) {
+	if Some(&SymbolicChar::GlobStar) != symbols.first() {
 		return false;
 	}
 
-	model.placeholders().any(|placeholder| {
+	model.parts.iter().enumerate().any(|(index, part)| {
+		let ShapePart::Placeholder(placeholder) = part else {
+			return false;
+		};
+		// The query must be able to finish here, or it could not reach the end of the message.
+		if anchored_at_end && !model.can_end_at(index) {
+			return false;
+		}
 		placeholder.charset.is_universal()
 			|| symbols.iter().all(|symbol| match symbol {
 				SymbolicChar::Literal(c) => placeholder.charset.contains(*c),

@@ -177,6 +177,39 @@ impl PlacementTable {
 		self.placements.iter().any(Vec::is_empty)
 	}
 
+	/// The inclusive range of shape parts outside which no run can be placed.
+	///
+	/// Every way this query's literal text can sit in the shape lies within `start..=end`, so the parts
+	/// outside it can only ever be traversed by a wildcard. In particular nothing beyond `end` can hold
+	/// a literal character of the query, which is what lets the shape's automaton be built as a *prefix*
+	/// ending there: a long tail of static text that no run can reach would otherwise contribute
+	/// thousands of states to the intersection while constraining nothing. See
+	/// [`crate::search::SearchString::search_by_log_shapes`].
+	///
+	/// Returns `None` when some run has no placement at all (the shape cannot match, so there is no
+	/// window to speak of) or when there are no runs (the query is all wildcards and constrains
+	/// nothing).
+	#[must_use]
+	pub fn window(&self) -> Option<(usize, usize)> {
+		let mut start: usize = usize::MAX;
+		let mut end: usize = 0;
+
+		for placements in self.placements.iter() {
+			// A run with nowhere to go means the shape cannot match; the caller must not narrow.
+			let first: &Placement = placements.first()?;
+			let mut lo: usize = first.start_part;
+			let mut hi: usize = first.end_part;
+			for placement in placements.iter() {
+				lo = lo.min(placement.start_part);
+				hi = hi.max(placement.end_part);
+			}
+			start = start.min(lo);
+			end = end.max(hi);
+		}
+
+		(usize::MAX != start).then_some((start, end))
+	}
+
 	/// Computes the placements for every run of a query against `model`.
 	///
 	/// Returns `None` if any rule in the shape could not be reasoned about, in which case the caller
@@ -193,18 +226,26 @@ impl PlacementTable {
 					ShapePart::Static(text) => {
 						// The run must appear verbatim in this static text.
 						for (offset, _) in text.match_indices(&run.text) {
-							// An anchored run must sit at the very beginning of the shape.
-							if run.anchored_start && ((0 != index) || (0 != offset)) {
-								continue;
-							}
 							// Offsets are in characters, not bytes, so that they can be compared against
 							// character counts elsewhere.
 							let start_offset: usize = text[..offset].chars().count();
+							let end_offset: usize = start_offset + run.text.chars().count();
+
+							// A start-anchored run must be the first thing the message emits: nothing may
+							// precede it in this part, nor in any earlier part.
+							if run.anchored_start && ((0 != start_offset) || !model.can_start_at(index)) {
+								continue;
+							}
+							// And symmetrically for the end.
+							if run.anchored_end && ((end_offset != text.chars().count()) || !model.can_end_at(index)) {
+								continue;
+							}
+
 							for_run.push(Placement {
 								start_part: index,
 								end_part: index,
 								start_offset,
-								end_offset: start_offset + run.text.chars().count(),
+								end_offset,
 								pieces: vec![Piece {
 									part: index,
 									text: run.text.clone(),
@@ -220,16 +261,22 @@ impl PlacementTable {
 					ShapePart::Placeholder(placeholder) => {
 						let fit: Arc<RunFit> = fits.get(spec, &placeholder.name, &run.text);
 
-						// A run anchored to the start of the message can only begin inside a rule if that
-						// rule is the shape's first part; otherwise earlier parts would emit text before it.
-						//
-						// Anchoring also demands more than containment: the rule must *begin* with the run,
-						// which is `prefixes[0]`, not `fits_wholly` ("contains it somewhere"). Without this a
-						// query of `N*` would be placed in a rule matching `WARN`.
-						let fits_here: bool = if run.anchored_start {
-							(0 == index) && fit.prefixes.first().copied().unwrap_or(false)
-						} else {
-							fit.fits_wholly()
+						// Anchoring demands more than containment. A start-anchored run must be the first
+						// thing the message emits, so every earlier part must be able to vanish *and* the
+						// rule must *begin* with the run — `prefixes[0]`, not `fits_wholly` ("contains it
+						// somewhere"). Without this a query of `N*` would be placed in a rule matching
+						// `WARN`. The end is the mirror image, via `suffixes[len]`; anchored at both ends
+						// the rule must match the run exactly, with nothing around it.
+						let fits_here: bool = match (run.anchored_start, run.anchored_end) {
+							(false, false) => fit.fits_wholly(),
+							(true, false) => {
+								model.can_start_at(index) && fit.prefixes.first().copied().unwrap_or(false)
+							},
+							(false, true) => model.can_end_at(index) && fit.suffixes.last().copied().unwrap_or(false),
+							(true, true) => {
+								model.can_start_at(index)
+									&& model.can_end_at(index) && fits.matches_exactly(spec, &placeholder.name, &run.text)
+							},
 						};
 						if fits_here {
 							for_run.push(Placement {
@@ -287,9 +334,9 @@ impl PlacementTable {
 			if !text.ends_with(&head) {
 				continue;
 			}
-			// An anchored run must begin at the very start of the shape, so the text it consumes must be
-			// the entire first part.
-			if run.anchored_start && ((0 != index) || (head.chars().count() != text.chars().count())) {
+			// A start-anchored run must be the first thing the message emits, so nothing may precede it:
+			// every earlier part must be able to vanish, and the head must be the whole of this text.
+			if run.anchored_start && (!model.can_start_at(index) || (head.chars().count() != text.chars().count())) {
 				continue;
 			}
 
@@ -336,9 +383,9 @@ impl PlacementTable {
 		// `split` is how many leading characters the rule supplies; it must be a non-empty proper prefix,
 		// since `split == 0` and `split == len` are the non-straddling cases handled elsewhere.
 		for split in 1..characters.len() {
-			// A run anchored to the shape's start cannot begin part-way through a rule's output unless the
-			// rule is the very first part.
-			if run.anchored_start && (0 != index) {
+			// A start-anchored run cannot begin part-way through a rule's output unless nothing can
+			// precede that rule.
+			if run.anchored_start && !model.can_start_at(index) {
 				continue;
 			}
 
@@ -443,6 +490,21 @@ impl PlacementTable {
 				Some(piece) if !piece.is_rule => piece.text.chars().count(),
 				_ => 0,
 			};
+
+			// An end-anchored run must be the last thing the message emits. Every later part must be able
+			// to vanish, and the run must reach the end of the part it finishes in. (A piece that ends
+			// inside a *rule* is handled where that piece is produced, which is the only place that knows
+			// whether the rule may emit more after it.)
+			if run.anchored_end {
+				let ends_cleanly: bool = match (last, &model.parts[end_part]) {
+					(Some(piece), ShapePart::Static(text)) if !piece.is_rule => end_offset == text.chars().count(),
+					_ => true,
+				};
+				if !ends_cleanly || !model.can_end_at(end_part) {
+					return Vec::new();
+				}
+			}
+
 			return vec![Placement {
 				start_part,
 				end_part,
@@ -496,8 +558,17 @@ impl PlacementTable {
 				let mut results: Vec<Placement> = Vec::new();
 
 				// The rule finishes the run: it can begin with everything that remains.
+				//
+				// `prefixes[consumed]` only says the rule can *begin* with the remainder, leaving it free
+				// to emit more afterwards. An end-anchored run forbids that, so the rule must match the
+				// remainder exactly and nothing may follow it.
 				let fit: Arc<RunFit> = fits.get(spec, &placeholder.name, &run.text);
-				if fit.prefixes.get(consumed).copied().unwrap_or(false) {
+				let finishes_here: bool = if run.anchored_end {
+					model.can_end_at(part) && fits.matches_exactly(spec, &placeholder.name, &remaining)
+				} else {
+					fit.prefixes.get(consumed).copied().unwrap_or(false)
+				};
+				if finishes_here {
 					let mut pieces: Vec<Piece> = pieces.clone();
 					pieces.push(Piece {
 						part,

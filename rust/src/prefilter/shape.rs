@@ -37,6 +37,18 @@ impl ShapePart {
 		matches!(self, Self::Placeholder(_))
 	}
 
+	/// Whether this part can emit nothing at all.
+	///
+	/// Static text is never empty (the tokenizer does not emit empty fragments), so only a nullable
+	/// placeholder can.
+	#[must_use]
+	pub fn can_be_empty(&self) -> bool {
+		match self {
+			Self::Placeholder(placeholder) => placeholder.can_match_empty,
+			Self::Static(text) => text.is_empty(),
+		}
+	}
+
 	/// The rule name this part references, if it is a reference at all.
 	#[must_use]
 	pub fn placeholder_name(&self) -> Option<&str> {
@@ -64,6 +76,12 @@ pub struct Placeholder {
 	/// Only leaf placeholders can be decomposed by this module; a nested capture would require
 	/// reporting the inner structure too, which is left to the engine.
 	pub is_leaf: bool,
+	/// Whether some alternative can match the empty string.
+	///
+	/// A nullable placeholder can stand entirely aside, so a part *before* it can still be the first
+	/// thing a message emits, and a part *after* it can still be the last. Anchoring therefore cannot
+	/// simply demand the first or last shape part; see [`ShapeModel::can_start_at`].
+	pub can_match_empty: bool,
 }
 
 /// A log shape, modelled as a sequence of [`ShapePart`]s.
@@ -107,6 +125,37 @@ impl ShapeModel {
 		}
 
 		Some(Self { parts })
+	}
+
+	/// The fragments for parts `start..=end`, for rebuilding a *slice* of the shape's automaton.
+	///
+	/// Round-trips through [`LogShapeFragment`] rather than re-tokenizing the shape string, so the parts
+	/// the automaton is built from are exactly the parts the placement reasoned about.
+	#[must_use]
+	pub fn fragments_in(&self, start: usize, end: usize) -> Vec<LogShapeFragment> {
+		Vec::from_iter(self.parts[start..=end].iter().map(|part| match part {
+			ShapePart::Static(text) => LogShapeFragment::Text(text.clone()),
+			ShapePart::Placeholder(placeholder) => LogShapeFragment::Rule(placeholder.name.clone()),
+		}))
+	}
+
+	/// Whether a message of this shape can *begin* with the text part `part` emits.
+	///
+	/// True when every earlier part can emit nothing at all. Static text is never empty — the tokenizer
+	/// does not produce empty fragments — so only nullable placeholders can stand aside. This is what a
+	/// start-anchored run needs: it must be the first thing in the message, which does not require it to
+	/// be in the first *part* if the parts before it can vanish.
+	#[must_use]
+	pub fn can_start_at(&self, part: usize) -> bool {
+		self.parts[..part].iter().all(ShapePart::can_be_empty)
+	}
+
+	/// Whether a message of this shape can *end* with the text part `part` emits.
+	///
+	/// The mirror of [`Self::can_start_at`]: every later part must be able to emit nothing.
+	#[must_use]
+	pub fn can_end_at(&self, part: usize) -> bool {
+		self.parts[(part + 1)..].iter().all(ShapePart::can_be_empty)
 	}
 
 	/// The placeholders of this shape, in order.
@@ -154,9 +203,13 @@ impl Placeholder {
 		let mut charset: Charset = Charset::empty();
 		let mut alternatives: Vec<Arc<SubRule>> = Vec::with_capacity(rows.len());
 		let mut is_leaf: bool = true;
+		let mut can_match_empty: bool = false;
 
 		for &(info, regex) in rows.iter() {
 			charset.add_regex(regex);
+			// Conservative in the direction that keeps anchoring sound: if *any* alternative is nullable,
+			// the placeholder is treated as able to stand aside.
+			can_match_empty |= regex.is_nullable().is_some();
 
 			if let Some(sub_rule) = &info.maybe_sub_rule {
 				is_leaf &= sub_rule.is_leaf();
@@ -186,6 +239,7 @@ impl Placeholder {
 			charset,
 			alternatives,
 			is_leaf,
+			can_match_empty,
 		})
 	}
 }

@@ -14,14 +14,12 @@ fn test_spec() -> ParsingSpec {
 	spec_with_rules(&[("digits", "[0-9]+"), ("word", "[a-z]+"), ("level", "INFO|WARN|ERROR")])
 }
 
+/// The query's symbols, exactly as written.
+///
+/// Runs are taken from the *raw* symbols, not the engine's view: a trailing wildcard is what tells
+/// [`runs_of`] the last run is unanchored, so stripping it here would silently anchor every query.
 fn symbols_of(query: &str) -> Vec<SymbolicChar> {
-	let parsed: SearchString = SearchString::parse(query).unwrap();
-	let symbols: &[SymbolicChar] = parsed.as_slice();
-	if Some(&SymbolicChar::GlobStar) == symbols.last() {
-		symbols[..(symbols.len() - 1)].to_vec()
-	} else {
-		symbols.to_vec()
-	}
+	SearchString::parse(query).unwrap().as_slice().to_vec()
 }
 
 fn table_for(spec: &ParsingSpec, shape: &str, query: &str) -> (ShapeModel, Vec<Run>, PlacementTable) {

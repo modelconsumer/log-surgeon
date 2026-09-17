@@ -19,18 +19,13 @@ fn test_spec() -> ParsingSpec {
 	spec_with_rules(&[("digits", "[0-9]+"), ("word", "[a-z]+")])
 }
 
-/// The query's symbols, with the engine's prefix semantics applied.
+/// The query's symbols, exactly as written.
 ///
-/// A query not ending in a wildcard still matches a longer message (`*END` behaves as `*END*`), so the
-/// wildcard is made explicit. [`runs_of`] then reports no run as end-anchored, which is what lets a
-/// capture keep the trailing `*` a rule needs to emit its own text.
+/// Runs are taken from the raw symbols: whether the query ends in a wildcard is precisely what tells
+/// [`runs_of`] whether the last run is anchored at the end, so neither adding nor removing one here is
+/// harmless.
 fn symbols_of(query: &str) -> Vec<SymbolicChar> {
-	let parsed: SearchString = SearchString::parse(query).unwrap();
-	let mut symbols: Vec<SymbolicChar> = parsed.as_slice().to_vec();
-	if Some(&SymbolicChar::GlobStar) != symbols.last() {
-		symbols.push(SymbolicChar::GlobStar);
-	}
-	symbols
+	SearchString::parse(query).unwrap().as_slice().to_vec()
 }
 
 /// The texts of `pieces`, comma separated.

@@ -307,18 +307,36 @@ impl ParsingSpec {
 	/// References to rules (by name) should be enclosed with percent symbols as `%foo.bar%`.
 	/// Returns `Err(name)` if a name is not found.
 	pub fn automata_for_shape(&self, shape: &str) -> Result<Tnfa, String> {
+		self.automata_for_fragments(&self.split_log_shape(shape))
+	}
+
+	/// Converts a sequence of shape fragments to an automaton.
+	///
+	/// Split out from [`Self::automata_for_shape`] so a caller can build a **prefix** of a shape. Under
+	/// the engine's prefix matching a query is satisfied as soon as its own automaton accepts, which is
+	/// at the end of its last literal run, so shape parts beyond that run are never traversed and need
+	/// never be built. Real shapes carry tens of thousands of characters of trailing static text and one
+	/// state is emitted per character, so not building it is the difference between a ~20-state
+	/// intersection and a ~20 000-state one.
+	///
+	/// Note the elided tail is dropped outright rather than replaced by `.*`: a wildcard is a *superset*
+	/// of the text it stands for, and would let a run straddle into the tail in ways the real text
+	/// forbids, inventing interpretations the full shape does not have.
+	///
+	/// Returns `Err(name)` if a name is not found.
+	pub fn automata_for_fragments(&self, fragments: &[LogShapeFragment]) -> Result<Tnfa, String> {
 		let mut sequence: Vec<Tnfa> = Vec::new();
 
-		for fragment in self.split_log_shape(shape) {
+		for fragment in fragments.iter() {
 			match fragment {
 				LogShapeFragment::Text(text) => {
 					let regex: Regex = Regex::Sequence(text.chars().map(Regex::Literal).collect::<Vec<_>>());
 					sequence.push(Tnfa::for_regex(&regex));
 				},
 				LogShapeFragment::Rule(rule_name) => {
-					let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(&rule_name);
+					let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(rule_name);
 					if rules.is_empty() {
-						return Err(rule_name);
+						return Err(rule_name.clone());
 					}
 
 					let branches: Tnfa = rules
