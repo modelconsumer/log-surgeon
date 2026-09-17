@@ -31,10 +31,12 @@
 #[cfg(test)]
 mod test;
 
+use crate::parsing_spec::ParsingSpec;
 use crate::prefilter::Placement;
 use crate::prefilter::PlacementTable;
 use crate::prefilter::Position;
 use crate::prefilter::Run;
+use crate::prefilter::RunFitCache;
 use crate::prefilter::ShapeModel;
 use crate::prefilter::ShapePart;
 use crate::prefilter::placement::index_of;
@@ -317,8 +319,20 @@ pub enum Composed {
 }
 
 /// Enumerates every composition of `table`'s placements.
+///
+/// Compositions that assign several runs to one rule are verified against that rule before being
+/// returned: [`PlacementTable`] places a run at a time, and a rule that admits each run separately need
+/// not admit them together. Verification lives here, rather than in the caller, so that an infeasible
+/// composition cannot escape.
 #[must_use]
-pub fn compose(model: &ShapeModel, table: &PlacementTable, budget: ComposeBudget) -> Composed {
+pub fn compose(
+	spec: &ParsingSpec,
+	model: &ShapeModel,
+	table: &PlacementTable,
+	runs: &[Run],
+	fits: &RunFitCache,
+	budget: ComposeBudget,
+) -> Composed {
 	if table.is_impossible() {
 		return Composed::Impossible;
 	}
@@ -384,6 +398,15 @@ pub fn compose(model: &ShapeModel, table: &PlacementTable, budget: ComposeBudget
 	) {
 		return Composed::Unknown;
 	}
+
+	// A rule holding pieces of several runs was validated one run at a time; check it against all of
+	// them together. An alternation such as `INFO|WARN` admits either run alone but never both.
+	compositions.retain(|composition| {
+		composition
+			.captures_to_verify(model, runs)
+			.iter()
+			.all(|(name, value)| fits.can_produce_all_text(spec, name, value))
+	});
 
 	compositions.sort();
 	compositions.dedup();

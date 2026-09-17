@@ -52,7 +52,7 @@ fn composed_and_runs_for(spec: &ParsingSpec, shape: &str, query: &str) -> (Shape
 	let runs: Vec<Run> = runs_of(&symbols_of(query));
 	let fits: RunFitCache = RunFitCache::new();
 	let table: PlacementTable = PlacementTable::compute(spec, &model, &runs, &fits).unwrap();
-	let composed: Composed = compose(&model, &table, ComposeBudget::default());
+	let composed: Composed = compose(spec, &model, &table, &runs, &fits, ComposeBudget::default());
 	(model, composed, runs)
 }
 
@@ -186,7 +186,14 @@ fn exhausted_budget_is_unknown_not_impossible() {
 	let runs: Vec<Run> = runs_of(&symbols_of("*q*q*q*"));
 	let fits: RunFitCache = RunFitCache::new();
 	let table: PlacementTable = PlacementTable::compute(&spec, &model, &runs, &fits).unwrap();
-	let composed: Composed = compose(&model, &table, ComposeBudget { max_compositions: 1 });
+	let composed: Composed = compose(
+		&spec,
+		&model,
+		&table,
+		&runs,
+		&fits,
+		ComposeBudget { max_compositions: 1 },
+	);
 	// Degrading must never look like a proof of impossibility.
 	assert!(matches!(composed, Composed::Unknown), "got {composed:?}");
 }
@@ -346,6 +353,66 @@ fn captures_in_distinct_rules_keep_their_positions() {
 		rendered.contains(&"<word=*qq*> <digits=*77*>".to_owned()),
 		"got {rendered:?}"
 	);
+}
+
+/// Whether the composed path finds any decomposition at all.
+fn composes(spec: &ParsingSpec, shape: &str, query: &str) -> bool {
+	let (_, composed) = composed_for(spec, shape, query);
+	matches!(&composed, Composed::Compositions(compositions) if !compositions.is_empty())
+}
+
+/// A spec whose rules are alternations, so that "the rule contains X" and "the rule *is* X" differ.
+fn level_spec() -> ParsingSpec {
+	spec_with_rules(&[("level", "TRACE|DEBUG|INFO|WARN|ERROR|FATAL"), ("word", "[a-zA-Z]+")])
+}
+
+#[test]
+fn several_runs_can_share_one_static_part() {
+	let spec: ParsingSpec = test_spec();
+	// Regression: placements recorded only *which* part a run landed in, not where within it. All three
+	// runs belong in the single static part `abc `, at increasing offsets, which the part-only DP state
+	// could not express — so this decomposition was missed entirely.
+	assert!(composes(&spec, "abc %word%", "a*b*c"));
+	// The offsets must be respected, not merely recorded: `c*b` is not in ascending order.
+	assert!(!composes(&spec, "abc %word%", "c*b*a"));
+}
+
+#[test]
+fn one_rule_must_produce_all_of_its_runs_together() {
+	let spec: ParsingSpec = level_spec();
+	// Regression: each run was checked against the rule *individually*, so both `INFO` and `WARN` were
+	// placed in one `%level%`. The rule is an alternation: it matches either alone and neither pair.
+	let rendered: Vec<String> = interpretations_of(&spec, "%level% %word%", "*INFO*WARN*");
+	assert!(
+		!rendered.iter().any(|one| one.contains("<level=*INFO*WARN*>")),
+		"a single `level` cannot produce both runs: {rendered:?}"
+	);
+	// The decomposition that splits them across the two rules is still found.
+	assert!(
+		rendered.iter().any(|one| one.contains("<word=*INFO*WARN*>")),
+		"got {rendered:?}"
+	);
+}
+
+#[test]
+fn an_anchored_run_must_start_the_rule_not_merely_occur_in_it() {
+	let spec: ParsingSpec = level_spec();
+	// Regression: containment (`fits_wholly`) was used where anchoring demands the rule *begin* with the
+	// run. `WARN` contains `N`, but no level starts with it, so `N*` must not be placed in `%level%`.
+	assert!(!composes(&spec, "%level% %word%", "N*"));
+	// A level that really does start with `I` is still placed.
+	assert!(composes(&spec, "%level% %word%", "I*"));
+}
+
+#[test]
+fn an_anchored_straddle_must_match_the_rule_exactly() {
+	let spec: ParsingSpec = level_spec();
+	// Regression: the straddle path used `suffixes[split]` ("the rule can *end* with this"), but an
+	// anchored run pins the rule's start too, so the rule must match the piece exactly. `WARN` ends with
+	// `N`, which allowed `NIn*` to be split as `level=N` + `word=In`.
+	assert!(!composes(&spec, "%level%%word%", "NIn*"));
+	// The same shape still admits a split where the first piece really is a whole level.
+	assert!(composes(&spec, "%level%%word%", "INFOxy*"));
 }
 
 #[test]

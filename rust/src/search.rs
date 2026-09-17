@@ -404,22 +404,13 @@ impl<'a> SearchStringView<'a> {
 		// `None` here means some rule could not be reasoned about.
 		let table: PlacementTable = PlacementTable::compute(spec, model, runs, fits)?;
 
-		match prefilter::compose(model, &table, ComposeBudget::default()) {
+		match prefilter::compose(spec, model, &table, runs, fits, ComposeBudget::default()) {
 			Composed::Impossible => Some(Vec::new()),
 			Composed::Unknown => None,
 			Composed::Compositions(compositions) => {
 				let mut interpretations: Vec<Interpretation> = Vec::from_iter(
 					compositions
 						.iter()
-						// Placement validates one run at a time, so a rule holding pieces of *several* runs
-						// still has to be checked against all of them together: `INFO|WARN` admits either
-						// run alone but never both.
-						.filter(|composition| {
-							composition
-								.captures_to_verify(model, runs)
-								.iter()
-								.all(|(name, value)| fits.can_produce_all_text(spec, name, value))
-						})
 						.map(|composition| composition.to_interpretation(model, runs)),
 				);
 				// The engine's callers expect a canonical, duplicate-free set; distinct compositions can
