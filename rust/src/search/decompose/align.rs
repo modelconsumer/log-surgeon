@@ -31,7 +31,7 @@
 //!
 //! # Soundness
 //!
-//! Placeholders are approximated by a [`crate::prefilter::Charset`], and are permitted to match the
+//! Placeholders are approximated by a [`crate::search::decompose::Charset`], and are permitted to match the
 //! empty string (the model does not know a rule's minimum length). Both widen the set of accepted
 //! alignments, so the result is a **superset** of the true decompositions: [`Outcome::Rejected`]
 //! proves no match is possible, while [`Outcome::Approximate`] must still be confirmed by the engine.
@@ -42,10 +42,10 @@ mod test;
 use std::sync::Arc;
 
 use crate::parsing_spec::SubRule;
-use crate::prefilter::Placeholder;
-use crate::prefilter::ShapeModel;
-use crate::prefilter::ShapePart;
 use crate::search::SymbolicChar;
+use crate::search::decompose::Placeholder;
+use crate::search::decompose::ShapeModel;
+use crate::search::decompose::ShapePart;
 
 /// One way the query's fixed text lines up with a shape.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]

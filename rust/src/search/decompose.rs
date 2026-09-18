@@ -1,14 +1,31 @@
-//! Cheap, sound over-approximations of log shapes, for [`crate::search::SearchString`].
+//! Decomposes a query against a log shape without building the shape's automaton.
 //!
-//! Searching a log shape is expensive: it builds the shape's TNFA, intersects it with the query's
-//! TNFA, and enumerates paths through the result. This module models a shape with a much coarser
-//! object — a sequence of static text and per-placeholder *character sets* — so that a shape which
-//! provably cannot match can be discarded before any of that work happens.
+//! Answering [`crate::search::SearchString::search_by_log_shapes`] via the engine is expensive: it
+//! builds the shape's TNFA, intersects it with the query's, and enumerates paths through the result.
+//! This module answers the same question directly from a coarse model of the shape, and on a real
+//! corpus it answers nearly all of them — the engine is a fallback, not the normal path.
 //!
-//! Soundness rests on [`Charset`] being a **superset** of the characters a rule can emit: every
-//! regex construct either contributes its exact alphabet or widens the set to "everything". A shape
-//! rejected on this model therefore could never have matched, while a shape that is retained is only
-//! "not ruled out".
+//! It is organised as two tiers, cheapest first:
+//!
+//! 1. **Rejection** ([`align`]) — a `false` from [`can_match`] *proves* no message of the shape can
+//!    match, so the shape is discarded outright. This tier is a true prefilter: it only ever answers
+//!    "no" or "maybe". Its soundness rests on [`Charset`] being a **superset** of the characters a
+//!    rule can emit, and on placeholders being allowed to match empty; both only widen what is
+//!    accepted, so a rejection is never wrong. For the same reason its *decompositions* are not
+//!    usable as a result — only the yes/no answer is.
+//! 2. **Composition** ([`placement`] then [`compose`]) — decides where each of the query's runs can
+//!    sit ([`PlacementTable`]), enumerates the consistent assignments, and renders them as the
+//!    [`crate::search::Interpretation`]s the caller receives. Unlike tier 1 this is **exact**: what
+//!    it reports is what the engine would report, so a wrong value here is a wrong answer rather
+//!    than a loose filter.
+//!
+//! [`run_fit`] underpins both by answering "how can this run sit inside this rule?" for one
+//! `(rule, run)` pair. It is not an approximation — it simulates the rule via
+//! [`crate::search::SearchString::search_by_name`] — and is cached because a corpus mentions few
+//! distinct rules relative to the number of references to them.
+//!
+//! Every budget in here degrades to "no conclusion" rather than to a wrong answer; the caller then
+//! falls back to the engine. See `docs/search-by-log-shapes.md` for the full design.
 
 pub mod align;
 pub mod cache;

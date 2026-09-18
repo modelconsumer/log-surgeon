@@ -209,7 +209,7 @@ mod search {
 			.iter()
 			.map(|shape| shape.as_utf8().unwrap())
 			.collect::<Vec<_>>();
-		// The parser outlives individual queries, so reuse its prefilter models across them.
+		// The parser outlives individual queries, so reuse its shape models across them.
 		let interpretations_by_shapes: Vec<Vec<Interpretation>> =
 			input.search_by_log_shapes_cached(&parser.spec, parser.shape_models(), &log_shapes);
 		Box::new(interpretations_by_shapes)

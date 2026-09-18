@@ -1,3 +1,5 @@
+pub mod decompose;
+
 #[cfg(test)]
 mod test;
 
@@ -10,15 +12,14 @@ use crate::parsing_spec::LogShapeFragment;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleInfo;
-use crate::prefilter;
-use crate::prefilter::ComposeBudget;
-use crate::prefilter::Composed;
-use crate::prefilter::PlacementTable;
-use crate::prefilter::Run;
-use crate::prefilter::RunFitCache;
-use crate::prefilter::ShapeModel;
-use crate::prefilter::ShapeModelCache;
 use crate::regex::Regex;
+use crate::search::decompose::ComposeBudget;
+use crate::search::decompose::Composed;
+use crate::search::decompose::PlacementTable;
+use crate::search::decompose::Run;
+use crate::search::decompose::RunFitCache;
+use crate::search::decompose::ShapeModel;
+use crate::search::decompose::ShapeModelCache;
 
 #[derive(Debug)]
 pub struct SearchString {
@@ -263,10 +264,10 @@ impl SearchString {
 		self.search_by_log_shapes_with(spec, Some(&ShapeModelCache::new()), log_shapes)
 	}
 
-	/// As [`Self::search_by_log_shapes`], reusing `cache`'s prefilter models.
+	/// As [`Self::search_by_log_shapes`], reusing `cache`'s shape models.
 	///
 	/// Prefer this when searching the same shapes more than once, e.g. via
-	/// [`crate::parser::Parser::shape_models`]: building a shape's prefilter model is otherwise repeated
+	/// [`crate::parser::Parser::shape_models`]: building a shape's model is otherwise repeated
 	/// for every query.
 	pub fn search_by_log_shapes_cached(
 		&self,
@@ -290,9 +291,9 @@ impl SearchString {
 		// behaviour on a run does not depend on the shape referencing it.
 		//
 		// Note the runs come from the *raw* symbols, not the engine's view: dropping the trailing
-		// wildcard is what tells [`prefilter::runs_of`] the last run is anchored, and re-adding one would
+		// wildcard is what tells [`decompose::runs_of`] the last run is anchored, and re-adding one would
 		// erase exactly the information anchoring depends on.
-		let runs: Vec<Run> = prefilter::runs_of(&self.symbols);
+		let runs: Vec<Run> = decompose::runs_of(&self.symbols);
 		let fits: RunFitCache = RunFitCache::new();
 
 		// Resolve every shape before searching any, so an unsupported shape fails the call outright
@@ -338,9 +339,9 @@ impl SearchString {
 		}
 	}
 
-	/// Interpretations for `log_shape`, always via the automata, bypassing [`crate::prefilter`].
+	/// Interpretations for `log_shape`, always via the automata, bypassing [`crate::search::decompose`].
 	///
-	/// Exposed so that tests can pin the prefilter against the engine it is meant to agree with.
+	/// Exposed so that tests can pin [`decompose`] against the engine it is meant to agree with.
 	pub fn interpretations_for_log_shape_via_engine(&self, spec: &ParsingSpec, log_shape: &str) -> Vec<Interpretation> {
 		// TODO unwrap
 		let automata: Tnfa = spec.automata_for_shape(log_shape).unwrap();
@@ -380,15 +381,15 @@ impl<'a> SearchStringView<'a> {
 	///
 	/// Three paths, cheapest first:
 	///
-	/// 1. [`crate::prefilter::can_match`] on the coarse charset model. When it proves the shape cannot
+	/// 1. [`crate::search::decompose::can_match`] on the coarse charset model. When it proves the shape cannot
 	///    match, the shape's TNFA is never built and never intersected with the query.
-	/// 2. [`crate::prefilter::compose`], which decomposes the query against the shape directly, reusing
+	/// 2. [`crate::search::decompose::compose`], which decomposes the query against the shape directly, reusing
 	///    per-rule simulations across shapes. This answers the real question — which rule instance holds
 	///    what text — without building any automata for the shape.
 	/// 3. The engine, when composition declines to conclude (an unreasonable rule, or an exhausted
 	///    budget). This is the slow path that the other two exist to avoid.
 	///
-	/// Note the [`crate::prefilter::align`] decompositions are *not* usable as a result: placeholders
+	/// Note the [`crate::search::decompose::align`] decompositions are *not* usable as a result: placeholders
 	/// there are over-approximated (notably they may match the empty string, which a rule like `[a-z]+`
 	/// cannot), so they form a superset of the engine's interpretations. Composition is exact because it
 	/// simulates the rules themselves rather than their charsets.
@@ -403,8 +404,8 @@ impl<'a> SearchStringView<'a> {
 	) -> Vec<Interpretation> {
 		now!(t0);
 
-		if !prefilter::can_match(model, self.as_str(), anchored_end) {
-			trace!("prefilter rejected shape {shape:.256}");
+		if !decompose::can_match(model, self.as_str(), anchored_end) {
+			trace!("decompose rejected shape {shape:.256}");
 			return Vec::new();
 		}
 
@@ -482,7 +483,7 @@ impl<'a> SearchStringView<'a> {
 		Some(truncated)
 	}
 
-	/// Interpretations for `model` via [`crate::prefilter::compose`].
+	/// Interpretations for `model` via [`crate::search::decompose::compose`].
 	///
 	/// `None` means composition declined to conclude and the caller must fall back to the engine. An
 	/// empty vector is a real answer — the shape cannot match — and is not the same thing.
@@ -493,7 +494,7 @@ impl<'a> SearchStringView<'a> {
 		runs: &[Run],
 		fits: &RunFitCache,
 	) -> Option<Vec<Interpretation>> {
-		match prefilter::compose(spec, model, table, runs, fits, ComposeBudget::default()) {
+		match decompose::compose(spec, model, table, runs, fits, ComposeBudget::default()) {
 			Composed::Impossible => Some(Vec::new()),
 			Composed::Unknown => None,
 			Composed::Compositions(compositions) => {

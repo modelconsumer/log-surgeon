@@ -5,10 +5,10 @@
 //! A [`Composition`] chooses one placement per run such that the chosen placements run left to right
 //! and do not overlap. The state is `(run index, earliest usable part)` and every placement advances
 //! both, so the state space is a DAG and is solved by a reverse sweep — the same structure as
-//! [`crate::prefilter::align`], and the reason feasibility can be decided in
+//! [`crate::search::decompose::align`], and the reason feasibility can be decided in
 //! `O(runs × parts × placements)` even when the number of compositions is large.
 //!
-//! Enumeration is separated from feasibility ([`crate::prefilter::can_compose`]) so that a shape can be
+//! Enumeration is separated from feasibility ([`crate::search::decompose::can_compose`]) so that a shape can be
 //! *rejected* cheaply, and only a shape that survives pays for materializing its decompositions. A
 //! [`ComposeBudget`] caps enumeration so a pathological shape degrades to "no conclusion" instead of
 //! exploding.
@@ -42,18 +42,18 @@
 mod test;
 
 use crate::parsing_spec::ParsingSpec;
-use crate::prefilter::Placement;
-use crate::prefilter::PlacementTable;
-use crate::prefilter::Position;
-use crate::prefilter::Run;
-use crate::prefilter::RunFitCache;
-use crate::prefilter::ShapeModel;
-use crate::prefilter::ShapePart;
-use crate::prefilter::placement::index_of;
-use crate::prefilter::placement::positions_of;
 use crate::search::Interpretation;
 use crate::search::SubQuery;
 use crate::search::SymbolicChar;
+use crate::search::decompose::Placement;
+use crate::search::decompose::PlacementTable;
+use crate::search::decompose::Position;
+use crate::search::decompose::Run;
+use crate::search::decompose::RunFitCache;
+use crate::search::decompose::ShapeModel;
+use crate::search::decompose::ShapePart;
+use crate::search::decompose::placement::index_of;
+use crate::search::decompose::placement::positions_of;
 
 /// One complete way the query's literal text maps onto a shape.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -446,7 +446,7 @@ pub fn compose(
 
 	let num_parts: usize = model.parts.len();
 	// States are *positions* (part plus character offset), not bare part indices: several runs can sit in
-	// one static part, distinguished only by where in it they begin. See [`crate::prefilter::placement`].
+	// one static part, distinguished only by where in it they begin. See [`crate::search::decompose::placement`].
 	let positions: Vec<Position> = positions_of(table, num_parts);
 
 	// Feasibility first, as *bits*: `reachable[(run * width) + position]` is true when runs `run..` can

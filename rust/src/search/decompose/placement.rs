@@ -14,7 +14,7 @@
 //! **Composition**: choose one placement per run such that the placements occur left to right and do
 //! not overlap. This is a reachability problem over `(run index, shape position)` — every placement
 //! advances both — so it is solved by the same kind of reverse DP sweep as
-//! [`crate::prefilter::align`], in `O(runs × positions × placements)`, rather than by enumerating
+//! [`crate::search::decompose::align`], in `O(runs × positions × placements)`, rather than by enumerating
 //! choices.
 //!
 //! # Positional identity
@@ -32,11 +32,11 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::parsing_spec::ParsingSpec;
-use crate::prefilter::RunFit;
-use crate::prefilter::RunFitCache;
-use crate::prefilter::ShapeModel;
-use crate::prefilter::ShapePart;
 use crate::search::SymbolicChar;
+use crate::search::decompose::RunFit;
+use crate::search::decompose::RunFitCache;
+use crate::search::decompose::ShapeModel;
+use crate::search::decompose::ShapePart;
 
 /// A maximal stretch of literal characters from a query, with no wildcards.
 #[derive(Clone, Debug, Eq, PartialEq)]

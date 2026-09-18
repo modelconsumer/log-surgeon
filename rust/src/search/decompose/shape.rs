@@ -25,8 +25,8 @@ use crate::parsing_spec::LogShapeFragment;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleInfo;
 use crate::parsing_spec::SubRule;
-use crate::prefilter::Charset;
 use crate::regex::Regex;
+use crate::search::decompose::Charset;
 
 /// One token of a log shape.
 #[derive(Clone, Debug)]

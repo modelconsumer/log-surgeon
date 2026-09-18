@@ -1,11 +1,11 @@
 use super::*;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::ParsingSpecBuilder;
-use crate::prefilter::Run;
-use crate::prefilter::RunFitCache;
-use crate::prefilter::runs_of;
 use crate::search::SearchString;
 use crate::search::SymbolicChar;
+use crate::search::decompose::Run;
+use crate::search::decompose::RunFitCache;
+use crate::search::decompose::runs_of;
 
 fn spec_with_rules(rules: &[(&str, &str)]) -> ParsingSpec {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();

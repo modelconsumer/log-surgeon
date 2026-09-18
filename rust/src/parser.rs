@@ -16,7 +16,7 @@ use crate::log_event::Match;
 use crate::log_event::MatchFfiPointers;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleInfo;
-use crate::prefilter::ShapeModelCache;
+use crate::search::decompose::ShapeModelCache;
 
 /// A parser is almost stateless aside from 2/3 fields:
 ///
@@ -79,7 +79,7 @@ impl Parser {
 		}
 	}
 
-	/// The prefilter model cache, for [`crate::search::SearchString::search_by_log_shapes_cached`].
+	/// The shape model cache, for [`crate::search::SearchString::search_by_log_shapes_cached`].
 	pub fn shape_models(&self) -> &ShapeModelCache {
 		&self.shape_models
 	}

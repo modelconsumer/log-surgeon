@@ -2,7 +2,7 @@
 //!
 //! Building a model walks the whole shape and resolves every placeholder against the spec. Shapes are
 //! long (thousands of characters is normal) and a caller typically searches the same set of shapes
-//! repeatedly, so rebuilding per query dominates the prefilter's cost. The cache makes it a
+//! repeatedly, so rebuilding per query dominates the cost of [`crate::search::decompose`]. The cache makes it a
 //! once-per-shape cost instead.
 //!
 //! Uses interior mutability so it can sit behind a shared reference on a long-lived owner such as
@@ -16,9 +16,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use crate::parsing_spec::ParsingSpec;
-use crate::prefilter::ShapeModel;
+use crate::search::decompose::ShapeModel;
 
-/// A shape-keyed cache of prefilter models.
+/// A shape-keyed cache of [`ShapeModel`]s.
 #[derive(Debug, Default)]
 pub struct ShapeModelCache {
 	models: Mutex<BTreeMap<Box<str>, Arc<ShapeModel>>>,

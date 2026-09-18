@@ -19,7 +19,7 @@ concepts.
 - Public API
 - Query Semantics
 - Architecture
-- Prefilter Models
+- Shape Models
 - Tier 1: Rejection
 - Tier 2: Composition
 - Tier 3: The Engine
@@ -49,7 +49,7 @@ form that allocates a throwaway cache. Both funnel into the private `search_by_l
 
 Two further methods expose the engine directly and exist for tests, not users:
 
-- `interpretations_for_log_shape_via_engine` — bypasses the prefilter entirely, so the
+- `interpretations_for_log_shape_via_engine` — bypasses `decompose` entirely, so the
   [differential test][differential] can pin the fast paths against the engine they stand in for.
 - `interpretations_for_automata` — takes an already-built automaton, so the
   [truncation test][narrowing] can compare a truncated shape against the full one.
@@ -88,7 +88,7 @@ The unanchored case is therefore exactly as cheap as it ever was: acceptance is 
 "don't fully simulate a trailing `*`" principle, and it is why the flag exists rather than a symbol.
 
 > **History.** The engine used to treat a missing trailing wildcard as if it were present, making
-> `foo` and `foo*` equivalent and forcing the prefilter to mirror that. The uniform rule above replaced
+> `foo` and `foo*` equivalent and forcing `decompose` to mirror that. The uniform rule above replaced
 > that hack. See the tests in `tests/search_anchoring.rs`.
 
 #### Empty captures
@@ -103,6 +103,11 @@ match empty* (`RegexErrorKind::NullableExpression`), so this arises from nullabl
 rule, not from nullable root rules.
 
 ### Architecture
+
+Tiers 1 and 2 live in [`search::decompose`][decompose], a submodule of `search` because it is an
+implementation detail of one function and has no other caller. It was once called `prefilter`, which
+described only tier 1: on the HDFS corpus tier 2 *answers* 1205 shapes while tier 1 rejects 38 and the
+engine never runs, so the module is primarily a decomposer that happens to begin with a filter.
 
 `interpretations_for_log_shape` is a cascade, cheapest path first. A shape is answered by the first tier
 that can conclude.
@@ -138,13 +143,13 @@ that can conclude.
 
 Two pieces of per-query state are computed once and shared across all shapes:
 
-- **Runs** — `prefilter::runs_of(&self.symbols)`. A *run* is a maximal stretch of literal characters,
+- **Runs** — `decompose::runs_of(&self.symbols)`. A *run* is a maximal stretch of literal characters,
   carrying `anchored_start`/`anchored_end`. Runs come from the **raw** symbols, never from the engine's
   view: dropping the trailing wildcard is exactly what marks the last run as end-anchored, so
   re-adding one would erase the information anchoring depends on.
 - **RunFitCache** — see below.
 
-### Prefilter Models
+### Shape Models
 
 [`ShapeModel`][shape-model] is a coarse, allocation-light model of a shape, built by
 [`ParsingSpec::split_log_shape`][split-log-shape] — the same tokenizer the automaton builder uses, so
@@ -212,11 +217,11 @@ because they need a single simulation rather than one per split point.
 ### Tier 1: Rejection
 
 ```rust
-prefilter::can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool
+decompose::can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool
 ```
 
 `false` **proves** no message of the shape can match. It runs the reachability pass of
-[`prefilter::align`][align], a DP over `(query cursor, shape cursor)` where every transition advances
+[`decompose::align`][align], a DP over `(query cursor, shape cursor)` where every transition advances
 one or the other, so the state space is a DAG solved in one reverse sweep. It allocates one bit per
 state and nothing per alignment.
 
@@ -227,7 +232,7 @@ There is a cheap sufficient fast path, `is_obviously_not_ruled_out`: if the quer
 wildcard and some single placeholder's charset admits every literal in the query, that placeholder
 alone could emit the whole query, so the shape cannot be rejected. It is `O(placeholders + query)`
 against the walk's `O(atoms × query)`, and it is the common case on real shapes — paying for the full
-table there once made the prefilter cost more than it saved. When the query is end-anchored, the
+table there once made the rejection tier cost more than it saved. When the query is end-anchored, the
 placeholder must additionally satisfy `can_end_at`.
 
 > The `align` **decompositions** are deliberately not usable as the result. Because placeholders are
@@ -431,7 +436,7 @@ rather than computing it.
 
 The properties the implementation must preserve, and where they are pinned:
 
-- **Soundness of rejection.** A shape the prefilter rejects must produce no engine match. A rejection
+- **Soundness of rejection.** A shape the rejection tier discards must produce no engine match. A rejection
   must never drop a real result. This is why every candidate cap that cannot be exhausted completely
   must return "no conclusion" rather than an empty placement set; see [Budgets](#budgets).
 - **Containment.** Where a decomposition is produced, it must cover every capture the engine reports
@@ -460,13 +465,13 @@ The properties the implementation must preserve, and where they are pinned:
 
 | Test | What it pins |
 | --- | --- |
-| `tests/prefilter_differential.rs` | Transparency and containment over 447 queries × 18 shapes, including end-anchored forms, nullable placeholders, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_sub_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
-| `tests/search_anchoring.rs` | The anchoring semantics through the public entry point, plus prefilter/engine agreement. |
+| `tests/decompose_differential.rs` | Transparency and containment over 447 queries × 18 shapes, including end-anchored forms, nullable placeholders, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_sub_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
+| `tests/search_anchoring.rs` | The anchoring semantics through the public entry point, plus `decompose`/engine agreement. |
 | `tests/search_shape_support.rs` | Which shapes are supported, pure-static handling, and the panic contract for unsupported shapes. |
 | `tests/shape_narrowing.rs` | Truncation is transparent, and actually reduces state count. |
-| `tests/prefilter_invariant.rs` | The invariant holds over the real HDFS corpus (thousands of shapes). |
+| `tests/decompose_invariant.rs` | The invariant holds over the real HDFS corpus (thousands of shapes). |
 | `src/search/test.rs` | `covers` soundness against true glob containment (`covers_never_claims_an_unsound_containment`) and its partial-order properties in normal form (`covers_is_a_partial_order_in_normal_form`). |
-| `src/prefilter/*/test.rs` | Unit tests for placement, composition, run fit, align, shape, and cache. |
+| `src/search/decompose/*/test.rs` | Unit tests for placement, composition, run fit, align, shape, and cache. |
 | `tests/local_search.rs::blk_id_full_log_message` | End-to-end corpus run; also a performance baseline. |
 
 The differential test is the one to update when semantics change: it runs both sides (public entry
@@ -489,36 +494,37 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 
 - `src/search.rs` — the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
   `SubQuery::covers` and `dedup_covered_interpretations`.
-- `src/prefilter/shape.rs` — `ShapeModel`, `Placeholder`, anchoring helpers.
-- `src/prefilter/align.rs` — the reachability DP and its fast path.
-- `src/prefilter/placement.rs` — `Run`, `Placement`, `PlacementTable`, `window`, composition DP.
-- `src/prefilter/compose.rs` — composition enumeration and rendering.
-- `src/prefilter/run_fit.rs` — per-rule run simulation and caches.
-- `src/prefilter/cache.rs` — `ShapeModelCache`.
+- `src/search/decompose/shape.rs` — `ShapeModel`, `Placeholder`, anchoring helpers.
+- `src/search/decompose/align.rs` — the reachability DP and its fast path.
+- `src/search/decompose/placement.rs` — `Run`, `Placement`, `PlacementTable`, `window`, composition DP.
+- `src/search/decompose/compose.rs` — composition enumeration and rendering.
+- `src/search/decompose/run_fit.rs` — per-rule run simulation and caches.
+- `src/search/decompose/cache.rs` — `ShapeModelCache`.
 - `src/parsing_spec.rs` — `automata_for_shape` / `automata_for_fragments`, `split_log_shape`.
 - `src/nfa.rs`, `src/nfa/search_decomposition.rs` — the engine.
 
 Tests: `tests/search_anchoring.rs`, `tests/search_shape_support.rs`, `tests/shape_narrowing.rs`,
-`tests/prefilter_differential.rs`, `tests/prefilter_invariant.rs`.
+`tests/decompose_differential.rs`, `tests/decompose_invariant.rs`.
 
 [search-by-log-shapes]: ../src/search.rs
 [search-parse]: ../src/search.rs
 [search-anchored]: ../src/search.rs
-[shape-model]: ../src/prefilter/shape.rs
-[shape-part]: ../src/prefilter/shape.rs
-[shape-model-cache]: ../src/prefilter/cache.rs
-[charset]: ../src/prefilter.rs
-[placement-compute]: ../src/prefilter/placement.rs
-[compose]: ../src/prefilter/compose.rs
-[to-interpretation]: ../src/prefilter/compose.rs
+[shape-model]: ../src/search/decompose/shape.rs
+[shape-part]: ../src/search/decompose/shape.rs
+[shape-model-cache]: ../src/search/decompose/cache.rs
+[charset]: ../src/search/decompose.rs
+[decompose]: ../src/search/decompose.rs
+[placement-compute]: ../src/search/decompose/placement.rs
+[compose]: ../src/search/decompose/compose.rs
+[to-interpretation]: ../src/search/decompose/compose.rs
 [covers]: ../src/search.rs
-[run-fit]: ../src/prefilter/run_fit.rs
-[run-fit-cache]: ../src/prefilter/run_fit.rs
-[align]: ../src/prefilter/align.rs
-[window]: ../src/prefilter/placement.rs
+[run-fit]: ../src/search/decompose/run_fit.rs
+[run-fit-cache]: ../src/search/decompose/run_fit.rs
+[align]: ../src/search/decompose/align.rs
+[window]: ../src/search/decompose/placement.rs
 [split-log-shape]: ../src/parsing_spec.rs
 [intersect]: ../src/nfa.rs
 [parser]: ../src/parser.rs
-[differential]: https://github.com/y-scope/log-surgeon/blob/log-mechanic/rust/tests/prefilter_differential.rs
+[differential]: https://github.com/y-scope/log-surgeon/blob/log-mechanic/rust/tests/decompose_differential.rs
 [narrowing]: https://github.com/y-scope/log-surgeon/blob/log-mechanic/rust/tests/shape_narrowing.rs
 [parsing-spec]: parsing-specification.md
