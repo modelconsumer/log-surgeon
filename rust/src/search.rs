@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod test;
 
-use std::num::NonZero;
 use std::sync::Arc;
 
 use crate::nfa::Path;
@@ -10,9 +9,7 @@ use crate::nfa::Tnfa;
 use crate::parsing_spec::LogShapeFragment;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
-use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::RuleInfo;
-use crate::parsing_spec::SubRule;
 use crate::prefilter;
 use crate::prefilter::ComposeBudget;
 use crate::prefilter::Composed;
@@ -84,7 +81,6 @@ impl std::fmt::Debug for Interpretation {
 
 #[derive(Clone)]
 pub struct SubQuery {
-	pub rule_idx: Option<RuleIdx>,
 	pub fully_qualified_name: Arc<str>,
 	pub symbolic_value: Vec<SymbolicChar>,
 	pub string_value: String,
@@ -92,10 +88,10 @@ pub struct SubQuery {
 
 impl std::fmt::Debug for SubQuery {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		if let Some(rule_idx) = self.rule_idx {
+		if !self.is_static_text() {
 			fmt.write_fmt(format_args!(
-				"(?<{}:{}>{})",
-				rule_idx, self.fully_qualified_name, self.string_value,
+				"(?<{}>{:?})",
+				self.fully_qualified_name, self.string_value,
 			))
 		} else {
 			fmt.write_str(&self.string_value)
@@ -107,11 +103,7 @@ impl Eq for SubQuery {}
 
 impl Ord for SubQuery {
 	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-		(&self.rule_idx, &self.fully_qualified_name, &self.symbolic_value).cmp(&(
-			&other.rule_idx,
-			&other.fully_qualified_name,
-			&other.symbolic_value,
-		))
+		(&self.fully_qualified_name, &self.symbolic_value).cmp(&(&other.fully_qualified_name, &other.symbolic_value))
 	}
 }
 
@@ -587,7 +579,10 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						sub_queries.push(SubQuery::new(sub_rule, contents.clone()));
+						sub_queries.push(SubQuery::new_rule(
+							sub_rule.fully_qualified_name.clone(),
+							contents.clone(),
+						));
 					},
 				}
 			}
@@ -637,20 +632,7 @@ impl<'a> SearchStringView<'a> {
 					&rule[None]
 				};
 
-				let mut implicit_capture: SubQuery = SubQuery::new(
-					&Arc::new(SubRule {
-						name: rule.name.clone(),
-						regex: rule.regex.regex.clone(),
-						root_rule_idx: rule.idx,
-						// TODO
-						id: NonZero::<u16>::MAX,
-						parent_id: None,
-						descendants: 0,
-						qualified_name: rule.name.clone(),
-						fully_qualified_name: rule.name.clone(),
-					}),
-					contents.clone(),
-				);
+				let mut implicit_capture: SubQuery = SubQuery::new_rule(rule.name.clone(), contents.clone());
 
 				if let Some(sub_rule) = &rule_info.maybe_sub_rule {
 					assert!(!sub_rule.is_leaf());
@@ -681,7 +663,10 @@ impl<'a> SearchStringView<'a> {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { sub_rule, contents } => {
-						sub_queries.push(SubQuery::new(sub_rule, contents.clone()));
+						sub_queries.push(SubQuery::new_rule(
+							sub_rule.fully_qualified_name.clone(),
+							contents.clone(),
+						));
 					},
 				}
 			}
@@ -734,44 +719,35 @@ impl Interpretation {
 
 impl SubQuery {
 	pub(crate) fn new_static_text(symbolic_value: Vec<SymbolicChar>) -> Self {
+		// `Arc::default()` special-cases ZSTs; no allocation needed.
+		Self::new(Arc::<str>::default(), symbolic_value)
+	}
+
+	pub(crate) fn new_rule(fully_qualified_name: Arc<str>, symbolic_value: Vec<SymbolicChar>) -> Self {
+		assert!(!fully_qualified_name.is_empty());
+		Self::new(fully_qualified_name, symbolic_value)
+	}
+
+	fn new(fully_qualified_name: Arc<str>, symbolic_value: Vec<SymbolicChar>) -> Self {
 		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
 			accum.push_str(&ch.to_string());
 			accum
 		});
 		Self {
-			rule_idx: None,
-			fully_qualified_name: Arc::from(""),
+			fully_qualified_name,
 			symbolic_value,
 			string_value,
 		}
 	}
 
-	pub(crate) fn new(sub_rule: &SubRule, symbolic_value: Vec<SymbolicChar>) -> Self {
-		// TODO duplicated above
-		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
-			accum.push_str(&ch.to_string());
-			accum
-		});
-		if sub_rule.fully_qualified_name.is_empty() {
-			panic!("qualified name is {}", sub_rule.qualified_name);
-		}
-		assert!(!sub_rule.fully_qualified_name.is_empty());
-		Self {
-			rule_idx: Some(sub_rule.root_rule_idx),
-			fully_qualified_name: sub_rule.fully_qualified_name.clone(),
-			symbolic_value,
-			string_value,
-		}
-	}
-
-	fn is_static_text(&self) -> bool {
-		self.rule_idx.is_none()
+	pub fn is_static_text(&self) -> bool {
+		self.fully_qualified_name.is_empty()
 	}
 
 	/// Returns `true` iff `self` is a "refinement" of `other`,
 	/// or `self` is exactly a single wildcard (star).
 	fn subsumes(&self, other: &Self) -> bool {
-		if (self.rule_idx, &self.fully_qualified_name) != (other.rule_idx, &other.fully_qualified_name) {
+		if self.fully_qualified_name != other.fully_qualified_name {
 			return false;
 		}
 		if self.symbolic_value == [SymbolicChar::GlobStar] {

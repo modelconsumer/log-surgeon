@@ -118,46 +118,16 @@ fn search_nested_name_without_leaf_capture() {
 
 #[test]
 fn test_subsumes() {
-	let a: SubQuery = SubQuery {
-		rule_idx: None,
-		fully_qualified_name: Arc::from(""),
-		symbolic_value: vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar],
-		string_value: String::new(),
-	};
-	let b: SubQuery = SubQuery {
-		rule_idx: None,
-		fully_qualified_name: Arc::from(""),
-		symbolic_value: vec![SymbolicChar::Literal('a')],
-		string_value: String::new(),
-	};
-	let c: SubQuery = SubQuery {
-		rule_idx: None,
-		fully_qualified_name: Arc::from(""),
-		symbolic_value: vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')],
-		string_value: String::new(),
-	};
-	let d: SubQuery = SubQuery {
-		rule_idx: None,
-		fully_qualified_name: Arc::from(""),
-		symbolic_value: vec![SymbolicChar::Literal('a')],
-		string_value: String::new(),
-	};
-	let e: SubQuery = SubQuery {
-		rule_idx: None,
-		fully_qualified_name: Arc::from(""),
-		symbolic_value: vec![SymbolicChar::GlobStar],
-		string_value: String::new(),
-	};
-	let f: SubQuery = SubQuery {
-		rule_idx: None,
-		fully_qualified_name: Arc::from(""),
-		symbolic_value: vec![
-			SymbolicChar::GlobStar,
-			SymbolicChar::Literal('a'),
-			SymbolicChar::GlobStar,
-		],
-		string_value: String::new(),
-	};
+	let a: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar]);
+	let b: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
+	let c: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')]);
+	let d: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
+	let e: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::GlobStar]);
+	let f: SubQuery = SubQuery::new_static_text(vec![
+		SymbolicChar::GlobStar,
+		SymbolicChar::Literal('a'),
+		SymbolicChar::GlobStar,
+	]);
 
 	assert!(a.subsumes(&b));
 	assert!(!b.subsumes(&a));

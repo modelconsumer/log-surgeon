@@ -185,7 +185,7 @@ private:
 };
 
 struct SubQuery {
-    std::string qualified_name;
+    std::string name;
     std::string value;
 };
 
@@ -449,13 +449,13 @@ inline auto Parser::convert_interpretation(Interpretation const* interpretation)
             break;
         }
 
-        std::string_view const qualified_name{
-                imp::log_surgeon_search_sub_query_get_qualified_name(sub_query)
+        std::string_view const name{
+                imp::log_surgeon_search_sub_query_get_name(sub_query)
         };
         std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
 
         sub_queries.push_back({
-                .qualified_name = std::string{qualified_name},
+                .name = std::string{name},
                 .value = std::string{value},
         });
 

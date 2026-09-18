@@ -199,7 +199,7 @@ fn render_interpretation(interpretation: &crate::search::Interpretation) -> Stri
 		.sub_queries
 		.iter()
 		.map(|sub_query| {
-			if sub_query.rule_idx.is_some() {
+			if !sub_query.is_static_text() {
 				format!("<{}={}>", sub_query.fully_qualified_name, sub_query.string_value)
 			} else {
 				format!("'{}'", sub_query.string_value)

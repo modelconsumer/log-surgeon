@@ -572,8 +572,9 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 				id: NonZero::<u16>::MAX,
 				parent_id: None,
 				descendants: 0,
-				qualified_name: Arc::from(""),
-				fully_qualified_name: Arc::from(""),
+				// `Arc::default()` special-cases ZSTs; no allocation needed.
+				qualified_name: Arc::<str>::default(),
+				fully_qualified_name: Arc::<str>::default(),
 			}))),
 		))
 	}

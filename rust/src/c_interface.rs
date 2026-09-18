@@ -249,7 +249,7 @@ mod search {
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_sub_query_get_qualified_name(sub_query: &SubQuery) -> CCharArray<'_> {
+	extern "C" fn log_surgeon_search_sub_query_get_name(sub_query: &SubQuery) -> CCharArray<'_> {
 		if !sub_query.fully_qualified_name.is_empty() {
 			CCharArray::from_utf8(&sub_query.fully_qualified_name)
 		} else {

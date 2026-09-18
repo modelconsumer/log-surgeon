@@ -255,7 +255,7 @@ extern "C" {
 
     void log_surgeon_search_interpretations_by_name_drop(Box<Vec<Interpretation>> value);
 
-    CCharArray log_surgeon_search_sub_query_get_qualified_name(SubQuery const* sub_query);
+    CCharArray log_surgeon_search_sub_query_get_name(SubQuery const* sub_query);
 
     CCharArray log_surgeon_search_sub_query_get_value(SubQuery const* sub_query);
 
