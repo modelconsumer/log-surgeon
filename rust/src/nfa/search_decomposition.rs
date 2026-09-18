@@ -12,6 +12,8 @@ use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::SubRule;
 use crate::search::SymbolicChar;
 
+const PATH_TIMEOUT_MILLIS: u128 = 2 * 1000;
+
 #[derive(Debug, Clone)]
 pub struct Path {
 	pub rule_idx: RuleIdx,
@@ -333,8 +335,16 @@ impl Tnfa {
 		// TODO no ::new?
 		let mut seen_prefixes: FxHashSet<(PartialPath, NfaIdx)> = FxHashSet::default();
 		{
+			now!(t_start);
 			let mut stack: Vec<(PartialPath, &NfaState)> = vec![(PartialPath::new(Vec::new()), &self[NfaIdx::BEGIN])];
 			while let Some((prefix_path, current)) = stack.pop() {
+				now!(t_current);
+
+				if millis!(t_start, t_current) > PATH_TIMEOUT_MILLIS {
+					eprintln!("timed out computing paths, potentially exponential input");
+					todo!();
+				}
+
 				if let Some(rule_idx) = current.maybe_accepts_for_rule {
 					finished.push(prefix_path.finish::<WILDCARD_END>(rule_idx));
 					continue;

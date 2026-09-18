@@ -334,7 +334,7 @@ impl Tdfa {
 				maybe_close = prefix_tree[close_node].maybe_predecessor;
 			}
 		}
-		captures.sort_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
+		captures.sort_unstable_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
 		for i in 0..captures.len() {
 			if let Some(parent_id) = captures[i].parent_id {
 				// Linear search (backwards) since it should usually be small.

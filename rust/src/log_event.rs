@@ -8,7 +8,7 @@ use crate::ffi::UncheckedCArray;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RuleIdx;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 #[repr(C)]
 pub struct LogEvent<'parser> {
 	/// Strictly speaking, this field is redundant;
@@ -85,6 +85,41 @@ pub struct MatchFfiPointers {
 /// Rust is annoying about Send/Sync for pointers, even when it technically **is** safe.
 unsafe impl Send for MatchFfiPointers {}
 unsafe impl Sync for MatchFfiPointers {}
+
+impl std::fmt::Debug for LogEvent<'_> {
+	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let mut last_pos: usize = 0;
+		for mat in self.all_matches.iter() {
+			if !mat.is_leaf {
+				continue;
+			}
+			for ch in self.message[last_pos..mat.range.start].chars() {
+				if matches!(ch, '(' | ')') {
+					fmt.write_str("\\")?;
+				}
+				std::fmt::Display::fmt(&ch.escape_default(), fmt)?;
+			}
+			fmt.write_str("(?<")?;
+			fmt.write_str(&self.spec[mat.rule_idx][mat.sub_rule_id].fully_qualified_name)?;
+			fmt.write_str(">")?;
+			for ch in self.message[mat.range.start..mat.range.end].chars() {
+				if matches!(ch, '(' | ')') {
+					fmt.write_str("\\")?;
+				}
+				std::fmt::Display::fmt(&ch.escape_default(), fmt)?;
+			}
+			fmt.write_str(")")?;
+			last_pos = mat.range.end;
+		}
+		for ch in self.message[last_pos..].chars() {
+			if matches!(ch, '(' | ')') {
+				fmt.write_str("\\")?;
+			}
+			std::fmt::Display::fmt(&ch.escape_default(), fmt)?;
+		}
+		Ok(())
+	}
+}
 
 impl<'parser> LogEvent<'parser> {
 	/// Blank `LogEvent`; default value required for C FFI.
