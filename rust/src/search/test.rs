@@ -117,7 +117,7 @@ fn search_nested_name_without_leaf_capture() {
 }
 
 #[test]
-fn test_subsumes() {
+fn test_covers() {
 	let a: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar]);
 	let b: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
 	let c: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')]);
@@ -129,26 +129,148 @@ fn test_subsumes() {
 		SymbolicChar::GlobStar,
 	]);
 
-	assert!(a.subsumes(&b));
-	assert!(!b.subsumes(&a));
+	assert!(a.covers(&b));
+	assert!(!b.covers(&a));
 
-	assert!(c.subsumes(&d));
-	assert!(!d.subsumes(&e));
+	assert!(c.covers(&d));
+	assert!(!d.covers(&e));
 
-	assert!(!a.subsumes(&c));
-	assert!(!c.subsumes(&a));
+	assert!(!a.covers(&c));
+	assert!(!c.covers(&a));
 
-	assert!(a.subsumes(&a));
-	assert!(b.subsumes(&b));
-	assert!(c.subsumes(&c));
-	assert!(d.subsumes(&d));
-	assert!(e.subsumes(&e));
+	assert!(a.covers(&a));
+	assert!(b.covers(&b));
+	assert!(c.covers(&c));
+	assert!(d.covers(&d));
+	assert!(e.covers(&e));
 
-	assert!(e.subsumes(&a));
-	assert!(e.subsumes(&b));
-	assert!(e.subsumes(&c));
-	assert!(e.subsumes(&d));
-	assert!(e.subsumes(&f));
+	assert!(e.covers(&a));
+	assert!(e.covers(&b));
+	assert!(e.covers(&c));
+	assert!(e.covers(&d));
+	assert!(e.covers(&f));
+}
+
+/// Whether the glob `pattern` matches the whole of `text`.
+fn glob_matches(pattern: &[SymbolicChar], text: &[char]) -> bool {
+	match pattern.first() {
+		None => text.is_empty(),
+		Some(SymbolicChar::GlobStar) => (0..=text.len()).any(|skip| glob_matches(&pattern[1..], &text[skip..])),
+		Some(&SymbolicChar::Literal(expected)) => {
+			!text.is_empty() && (text[0] == expected) && glob_matches(&pattern[1..], &text[1..])
+		},
+	}
+}
+
+/// Every value with no adjacent wildcards, up to `length` symbols over `alphabet`.
+fn values_in_normal_form(alphabet: &[char], length: usize) -> Vec<Vec<SymbolicChar>> {
+	let mut found: Vec<Vec<SymbolicChar>> = Vec::new();
+	let mut frontier: Vec<Vec<SymbolicChar>> = vec![Vec::new()];
+	found.push(Vec::new());
+
+	for _ in 0..length {
+		let mut next: Vec<Vec<SymbolicChar>> = Vec::new();
+		for value in frontier.iter() {
+			// Adjacent wildcards are excluded: no producer emits them, and `covers` is not even
+			// reflexive on them. See `Interpretation::invariants`.
+			if !matches!(value.last(), Some(SymbolicChar::GlobStar)) {
+				next.push([value.as_slice(), &[SymbolicChar::GlobStar]].concat());
+			}
+			for &character in alphabet.iter() {
+				next.push([value.as_slice(), &[SymbolicChar::Literal(character)]].concat());
+			}
+		}
+		found.extend(next.iter().cloned());
+		frontier = next;
+	}
+
+	found
+}
+
+/// `covers` must never claim a containment that does not hold.
+///
+/// This is the *only* direction the implementation guarantees, and the one
+/// `dedup_covered_interpretations` depends on: a spurious `true` deletes a real answer, whereas a
+/// missed containment merely leaves a redundant one. The converse is deliberately not asserted —
+/// `covers` is a positional test and misses e.g. `aa*` against `aaa*`.
+#[test]
+fn covers_never_claims_an_unsound_containment() {
+	let alphabet: [char; 2] = ['a', 'b'];
+	let values: Vec<Vec<SymbolicChar>> = values_in_normal_form(&alphabet, 4);
+
+	// Every word the patterns could distinguish, up to a length exceeding the longest pattern.
+	let mut words: Vec<Vec<char>> = vec![Vec::new()];
+	let mut frontier: Vec<Vec<char>> = vec![Vec::new()];
+	for _ in 0..6 {
+		let mut next: Vec<Vec<char>> = Vec::new();
+		for word in frontier.iter() {
+			for &character in alphabet.iter() {
+				next.push([word.as_slice(), &[character]].concat());
+			}
+		}
+		words.extend(next.iter().cloned());
+		frontier = next;
+	}
+
+	let languages: Vec<Vec<bool>> = values
+		.iter()
+		.map(|value| Vec::from_iter(words.iter().map(|word| glob_matches(value, word))))
+		.collect::<Vec<_>>();
+
+	let mut checked: usize = 0;
+	for (general, general_language) in values.iter().zip(languages.iter()) {
+		for (specific, specific_language) in values.iter().zip(languages.iter()) {
+			if !SubQuery::new_static_text(general.clone()).covers(&SubQuery::new_static_text(specific.clone())) {
+				continue;
+			}
+			checked += 1;
+			let unsound: Option<usize> = specific_language
+				.iter()
+				.zip(general_language.iter())
+				.position(|(&in_specific, &in_general)| in_specific && !in_general);
+			assert!(
+				unsound.is_none(),
+				"{:?} claims to cover {:?}, but {:?} matches only the latter",
+				String::from_iter(general.iter().map(ToString::to_string)),
+				String::from_iter(specific.iter().map(ToString::to_string)),
+				words[unsound.expect("just checked")].iter().collect::<String>(),
+			);
+		}
+	}
+
+	assert!(
+		0 < checked,
+		"expected some pair to be covered, or the test proves nothing"
+	);
+	println!("verified {checked} covering pairs against true glob containment");
+}
+
+/// `covers` is reflexive and transitive on values in normal form, which is what makes
+/// `dedup_covered_interpretations` reach a fixpoint.
+#[test]
+fn covers_is_a_partial_order_in_normal_form() {
+	let values: Vec<SubQuery> = values_in_normal_form(&['a', 'b'], 3)
+		.into_iter()
+		.map(SubQuery::new_static_text)
+		.collect::<Vec<_>>();
+
+	for value in values.iter() {
+		assert!(value.covers(value), "not reflexive: {:?}", value.string_value);
+	}
+
+	for general in values.iter() {
+		for middle in values.iter().filter(|middle| general.covers(middle)) {
+			for specific in values.iter().filter(|specific| middle.covers(specific)) {
+				assert!(
+					general.covers(specific),
+					"not transitive: {:?} > {:?} > {:?}",
+					general.string_value,
+					middle.string_value,
+					specific.string_value,
+				);
+			}
+		}
+	}
 }
 
 #[test]

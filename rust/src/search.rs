@@ -156,42 +156,50 @@ impl std::fmt::Display for SearchStringView<'_> {
 }
 
 impl Interpretation {
+	/// Whether every sub-query of `self` covers the corresponding one of `other`, so `other` describes
+	/// nothing `self` does not already describe.
+	///
+	/// Positional, so it presumes both decompose the shape the same way; a difference in length means
+	/// they are different decompositions and neither covers the other.
+	fn covers(&self, other: &Self) -> bool {
+		(self.sub_queries.len() == other.sub_queries.len())
+			&& std::iter::zip(self.sub_queries.iter(), other.sub_queries.iter())
+				.all(|(mine, theirs)| mine.covers(theirs))
+	}
+
+	/// Drops interpretations that another already covers.
+	///
+	/// [`SubQuery::covers`] is a *conservative* test, so the result is not guaranteed to be a minimal
+	/// antichain: a redundant interpretation the test cannot see through is kept. That costs an extra
+	/// result, never a wrong one, which is why the cheap test is preferred to deciding glob containment.
+	///
+	/// Order is not preserved. Callers sort beforehand only to `dedup` exact duplicates; nothing
+	/// downstream depends on the order, and not preserving it keeps this a single pass over each
+	/// candidate.
 	fn dedup_covered_interpretations(interpretations: &mut Vec<Self>) {
 		interpretations.sort();
 		interpretations.dedup();
 
-		let mut i: usize = 0;
-		while i < interpretations.len() {
-			let mut j: usize = i + 1;
-			while j < interpretations.len() {
-				if interpretations[i].sub_queries.len() != interpretations[j].sub_queries.len() {
-					j += 1;
-					continue;
-				}
-				if std::iter::zip(
-					interpretations[i].sub_queries.iter(),
-					interpretations[j].sub_queries.iter(),
-				)
-				.all(|(query1, query2)| query1.subsumes(query2))
-				{
-					interpretations.remove(j);
-					continue;
-				}
-				if std::iter::zip(
-					interpretations[i].sub_queries.iter(),
-					interpretations[j].sub_queries.iter(),
-				)
-				.all(|(query1, query2)| query2.subsumes(query1))
-				{
-					interpretations.swap(i, j);
-					interpretations.remove(j);
-					j = i + 1;
-					continue;
-				}
-				j += 1;
+		let mut kept: Vec<Self> = Vec::with_capacity(interpretations.len());
+
+		for candidate in interpretations.drain(..) {
+			if kept.iter().any(|keeper| keeper.covers(&candidate)) {
+				continue;
 			}
-			i += 1;
+			// The candidate survives, so anything it covers is now redundant. `swap_remove` is used
+			// rather than `retain` only because the order is already known not to matter.
+			let mut index: usize = 0;
+			while index < kept.len() {
+				if candidate.covers(&kept[index]) {
+					kept.swap_remove(index);
+				} else {
+					index += 1;
+				}
+			}
+			kept.push(candidate);
 		}
+
+		*interpretations = kept;
 	}
 }
 
@@ -713,6 +721,18 @@ impl Interpretation {
 			} else {
 				last_was_static_text = false;
 			}
+
+			// No value carries adjacent wildcards: `**` says exactly what `*` does, and [`SubQuery::covers`]
+			// is reflexive and transitive only on values without it — its fast path recognises a lone `*`
+			// as universal, but `**` falls through to the segment loop and fails even against itself.
+			assert!(
+				!sub_query
+					.symbolic_value
+					.windows(2)
+					.any(|pair| pair.iter().all(SymbolicChar::is_wildcard)),
+				"adjacent wildcards in {:?}",
+				sub_query.string_value
+			);
 		}
 	}
 }
@@ -744,9 +764,22 @@ impl SubQuery {
 		self.fully_qualified_name.is_empty()
 	}
 
-	/// Returns `true` iff `self` is a "refinement" of `other`,
-	/// or `self` is exactly a single wildcard (star).
-	fn subsumes(&self, other: &Self) -> bool {
+	/// Whether `self` describes everything `other` does: `true` implies every string matching `other`'s
+	/// value also matches `self`'s.
+	///
+	/// This is a **conservative syntactic test, not glob containment**. It compares the two values
+	/// wildcard-segment by wildcard-segment, so it only sees a containment when the wildcards line up
+	/// positionally: it reports `false` for `aa*` against `aaa*`, even though every string matching the
+	/// latter matches the former. Only the stated implication holds; the converse does not.
+	///
+	/// That is enough for its one caller, [`Interpretation::dedup_covered_interpretations`], where a
+	/// missed containment leaves a redundant interpretation and a spurious one would delete a real
+	/// answer. Deciding true containment would need a quadratic match over the two patterns, which is
+	/// not worth it to tidy the output.
+	///
+	/// Note this is reflexive and transitive only for values with no adjacent wildcards, which is what
+	/// every producer emits; see [`Interpretation::invariants`].
+	fn covers(&self, other: &Self) -> bool {
 		if self.fully_qualified_name != other.fully_qualified_name {
 			return false;
 		}

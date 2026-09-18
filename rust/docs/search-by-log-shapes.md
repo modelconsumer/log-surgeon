@@ -23,6 +23,7 @@ concepts.
 - Tier 1: Rejection
 - Tier 2: Composition
 - Tier 3: The Engine
+  - Covering
 - Shape Truncation
 - Correctness
 - Testing
@@ -44,7 +45,7 @@ can zip the two. Each inner vector is a canonical, duplicate-free set.
 `_cached` takes a long-lived [`ShapeModelCache`][shape-model-cache]; it exists because building a
 shape's model walks and resolves the whole shape, and callers such as
 [`Parser`][parser] search the same shapes for many queries. `search_by_log_shapes` is the convenience
-form that allocates a throwaway cache. Both funnel into `search_by_log_shapes_with`.
+form that allocates a throwaway cache. Both funnel into the private `search_by_log_shapes_with`.
 
 Two further methods expose the engine directly and exist for tests, not users:
 
@@ -211,7 +212,7 @@ because they need a single simulation rather than one per split point.
 ### Tier 1: Rejection
 
 ```rust
-prefilter::can_match(model, view, anchored_end) -> bool
+prefilter::can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool
 ```
 
 `false` **proves** no message of the shape can match. It runs the reachability pass of
@@ -274,9 +275,24 @@ alternation such as `INFO|WARN` admits either and neither pair.
 #### Rendering
 
 [`Composition::to_interpretation`][to-interpretation] turns a composition into the reported result. A
-wildcard is emitted exactly where the query had one — at a run boundary — and nowhere else, so a run
-crossing a part boundary stays contiguous. Rules may be padded with `*` where they could emit their own
-text, suppressed at run boundaries and where the run is anchored at that end.
+wildcard separating two runs is emitted exactly where the query had one, so a run crossing a part
+boundary stays contiguous.
+
+The `*` *padding* around a value is decided differently for the two kinds of part, because they mean
+different things — this is `symbolic_value_of`'s `static_len` parameter:
+
+- A **rule** may emit text of its own around the query's characters, so it is padded wherever the query
+  permits: suppressed where the run continues into a neighbouring part, and where the query anchors the
+  run to that end of the message.
+- **Static text** is reproduced verbatim, so its value must glob-match the part's text *exactly*.
+  Padding is decided by the piece offsets recorded in `Placement` — a `*` stands for the characters of
+  the part the run does not cover, and appears if and only if there are some. Anchoring and run
+  continuation need no special case: a run flowing in from the previous part necessarily begins at
+  offset 0, and one flowing out necessarily reaches the text's end.
+
+  This is the opposite of the intuition that "static text must match verbatim, so it is never padded".
+  Precisely *because* it is verbatim, a value covering only part of it must be free to skip the rest;
+  see [Correctness](#correctness).
 
 Static text is reported whether or not the query constrains it, matching the engine and
 `search_by_name`'s output shape: a stretch the query's wildcard merely passes over becomes a `'*'`
@@ -351,8 +367,32 @@ meaningful search value. The `TO_END` parameter is described in the comment abov
 [`Tnfa::intersect`][intersect]; `WILDCARD_END` in `compute_paths` decides whether a path is closed with
 a synthetic trailing wildcard.
 
-The result is sorted, deduplicated, and `dedup_covered_interpretations` removes interpretations
-subsumed by a more specific one.
+The result is sorted, deduplicated, and `dedup_covered_interpretations` drops interpretations another
+already covers.
+
+#### Covering
+
+[`SubQuery::covers`][covers] decides whether one sub-query's value describes everything another's does.
+It is a **conservative syntactic test, not glob containment**: it compares the two values
+wildcard-segment by wildcard-segment, so it only sees a containment when the wildcards line up
+positionally. It reports `false` for `aa*` against `aaa*`, even though every string matching the latter
+matches the former.
+
+Only one direction is guaranteed — `covers` implies containment, never the converse — and that is the
+direction `dedup_covered_interpretations` needs: a missed containment leaves a redundant
+interpretation, whereas a spurious one would delete a real answer. Deciding true containment would
+need a quadratic match over the two patterns, which is not worth it merely to tidy the output. The
+result is therefore **not guaranteed to be a minimal antichain**.
+
+`covers` is reflexive and transitive only on values with **no adjacent wildcards**, which is what makes
+the dedup loop reach a fixpoint. Its fast path recognises a lone `*` as universal, but `**` falls
+through to the segment loop and fails even against itself. Every producer emits values in that normal
+form — `symbolic_value_of` emits at most one leading and one trailing `*`, and `condense_wildcards`
+collapses any doubling introduced by merging — and `Interpretation::invariants` asserts it.
+
+The loop itself builds an antichain in one pass per candidate: a candidate covered by a survivor is
+dropped, otherwise anything it covers is removed (by `swap_remove`) and it is kept. Order is not
+preserved, which is why callers `sort` beforehand only to `dedup` exact duplicates.
 
 ### Shape Truncation
 
@@ -402,15 +442,16 @@ The properties the implementation must preserve, and where they are pinned:
   one.
 - **Invariant.** Every literal character of the query appears in the result, in order, however it was
   split between static text and rules; a wildcard appears exactly where the query had one.
-- **Satisfiability of static values.** A static sub-query's value must glob-match its shape part's
-  text exactly. A run covering only part of a static stretch must therefore be padded with `*` on
-  *both* sides — precisely *because* static text is reproduced verbatim, a value covering part of it
-  must be free to skip the rest. Reporting `'*ab'` for the run `ab` inside `abcdef` names the right
-  characters but asserts the text ends in `ab`, which is false. Padding is decided by the piece
-  offsets recorded in `Placement`, so no simulation is needed. Note this is the opposite rule from a
-  *capture*, which is padded by whatever the query's wildcards permit, since a rule's output is not
-  fixed. Pinned by `static_sub_query_values_are_satisfiable`; the structural comparison cannot see it,
-  because stripping wildcards is blind to where they sit.
+- **Normal form.** No value carries adjacent wildcards, and no two static sub-queries are adjacent.
+  Both are asserted by `Interpretation::invariants`. The first is not cosmetic: [`SubQuery::covers`] is
+  reflexive and transitive only without `**`, so dedup would silently misbehave on a value carrying it.
+  See [Covering](#covering).
+- **Satisfiability of static values.** A static sub-query's value must glob-match its shape part's text
+  exactly. Reporting `'*ab'` for the run `ab` inside `abcdef` names the right characters but asserts
+  the text *ends* in `ab`, which is false and matches nothing. A run covering only part of a stretch is
+  therefore padded on both sides; see [Rendering](#rendering) for how the offsets decide it. Pinned by
+  `static_sub_query_values_are_satisfiable` — the structural comparison cannot see this, because
+  stripping wildcards is blind to where they sit.
 - **Support.** A shape either is supported — every placeholder defined and leaf — or the call fails up
   front. It never silently falls back to the engine for an unsupported shape, because that would make
   the same query return answers in a different form depending on the shape.
@@ -419,11 +460,12 @@ The properties the implementation must preserve, and where they are pinned:
 
 | Test | What it pins |
 | --- | --- |
-| `tests/prefilter_differential.rs` | Transparency and containment over ~450 queries × 18 shapes, including end-anchored forms, nullable placeholders, and pure-static shapes. The primary safety net. Also pins satisfiability of static values, which the structural comparison cannot see. |
+| `tests/prefilter_differential.rs` | Transparency and containment over 447 queries × 18 shapes, including end-anchored forms, nullable placeholders, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_sub_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
 | `tests/search_anchoring.rs` | The anchoring semantics through the public entry point, plus prefilter/engine agreement. |
 | `tests/search_shape_support.rs` | Which shapes are supported, pure-static handling, and the panic contract for unsupported shapes. |
 | `tests/shape_narrowing.rs` | Truncation is transparent, and actually reduces state count. |
 | `tests/prefilter_invariant.rs` | The invariant holds over the real HDFS corpus (thousands of shapes). |
+| `src/search/test.rs` | `covers` soundness against true glob containment (`covers_never_claims_an_unsound_containment`) and its partial-order properties in normal form (`covers_is_a_partial_order_in_normal_form`). |
 | `src/prefilter/*/test.rs` | Unit tests for placement, composition, run fit, align, shape, and cache. |
 | `tests/local_search.rs::blk_id_full_log_message` | End-to-end corpus run; also a performance baseline. |
 
@@ -445,7 +487,8 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 
 ### Related Code
 
-- `src/search.rs` — the public API, `anchored`, the tier cascade, `interpretations_for_shape`.
+- `src/search.rs` — the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
+  `SubQuery::covers` and `dedup_covered_interpretations`.
 - `src/prefilter/shape.rs` — `ShapeModel`, `Placeholder`, anchoring helpers.
 - `src/prefilter/align.rs` — the reachability DP and its fast path.
 - `src/prefilter/placement.rs` — `Run`, `Placement`, `PlacementTable`, `window`, composition DP.
@@ -468,6 +511,7 @@ Tests: `tests/search_anchoring.rs`, `tests/search_shape_support.rs`, `tests/shap
 [placement-compute]: ../src/prefilter/placement.rs
 [compose]: ../src/prefilter/compose.rs
 [to-interpretation]: ../src/prefilter/compose.rs
+[covers]: ../src/search.rs
 [run-fit]: ../src/prefilter/run_fit.rs
 [run-fit-cache]: ../src/prefilter/run_fit.rs
 [align]: ../src/prefilter/align.rs
