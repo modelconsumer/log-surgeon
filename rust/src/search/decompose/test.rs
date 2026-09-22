@@ -13,7 +13,7 @@ fn assert_contains_exactly(charset: &Charset, expected: &str) {
 		assert!(charset.contains(c), "expected {c:?} to be in the charset");
 	}
 	// Sample the rest of ASCII, plus a non-ASCII scalar value.
-	for c in (0..0x80u32).filter_map(char::from_u32).chain(['é', '\u{10FFFF}']) {
+	for c in (0..0x80u32).filter_map(char::from_u32).chain(['\u{e9}', '\u{10FFFF}']) {
 		if expected.contains(c) {
 			continue;
 		}
@@ -72,7 +72,7 @@ fn negated_bracketed_ranges_are_exact() {
 	for c in "aZ_ ".chars() {
 		assert!(charset.contains(c), "expected {c:?} to be included");
 	}
-	assert!(charset.contains('é'));
+	assert!(charset.contains('\u{e9}'));
 }
 
 #[test]

@@ -30,7 +30,7 @@ fn symbols_of(query: &str) -> Vec<SymbolicChar> {
 	}
 }
 
-/// Aligns with the engine's current (prefix-matching) semantics.
+/// Aligns without requiring the query to reach the end of the shape.
 fn align_query(spec: &ParsingSpec, shape: &str, query: &str) -> Outcome {
 	let model: ShapeModel = ShapeModel::new(spec, shape);
 	align(&model, &symbols_of(query), false, Budget::default())

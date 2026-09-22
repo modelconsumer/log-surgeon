@@ -148,7 +148,7 @@ class TestSimple(unittest.TestCase):
 
 		# Each of these non-ASCII characters is 2, 3, and 4 UTF-8 bytes
 		# respectively, so byte offsets and code point offsets disagree.
-		text = "é 234 \u4e2d\U0001f600 789"
+		text = "\u00e9 234 \u4e2d\U0001f600 789"
 
 		p.set_input_stream(text)
 		e = p.next_log_event()

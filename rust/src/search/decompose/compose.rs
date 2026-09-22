@@ -4,9 +4,9 @@
 //!
 //! A [`Composition`] chooses one placement per run such that the chosen placements run left to right
 //! and do not overlap. The state is `(run index, earliest usable part)` and every placement advances
-//! both, so the state space is a DAG and is solved by a reverse sweep — the same structure as
+//! both, so the state space is a DAG and is solved by a reverse sweep -- the same structure as
 //! [`crate::search::decompose::align`], and the reason feasibility can be decided in
-//! `O(runs × parts × placements)` even when the number of compositions is large.
+//! `O(runs x parts x placements)` even when the number of compositions is large.
 //!
 //! Enumeration is separated from feasibility ([`crate::search::decompose::can_compose`]) so that a shape can be
 //! *rejected* cheaply, and only a shape that survives pays for materializing its decompositions. A
@@ -26,17 +26,16 @@
 //!
 //! Static text is reported even where the query does not constrain it, as a `'*'` sub-query, so the
 //! output has the same shape as the engine's and [`crate::search::SearchString::search_by_name`]'s:
-//! a run split across static text and a rule yields one sub-query for each. This is pure rendering —
+//! a run split across static text and a rule yields one sub-query for each. This is pure rendering --
 //! the parts and their attribution are already known, so no automaton or simulation is involved.
 //!
 //! A static sub-query's value must glob-match its part's text *exactly*, so a run covering only part
 //! of a stretch is padded with `*` on both sides; see [`symbolic_value_of`], which decides this from
 //! the piece offsets rather than from whether the part is a rule.
 //!
-//! References *after* the last constrained capture are omitted: the query ends in an implicit `*`
-//! (a single trailing wildcard is redundant under prefix matching), so trailing references are
-//! unconstrained and add nothing. Their static text is still reported, since that is where the
-//! trailing wildcard applies.
+//! References *after* the last constrained capture are omitted when the query is not anchored at the
+//! end: its trailing wildcard leaves them unconstrained, so they add nothing. Their static text is
+//! still reported, since that is where the trailing wildcard applies.
 
 #[cfg(test)]
 mod test;
@@ -117,7 +116,7 @@ impl Composition {
 	///
 	/// Shape parts are emitted in order: static text as a static sub-query, rule references as captures.
 	/// A reference with no query text attributed to it becomes a vacuous `*` capture, so a capture's
-	/// position among the placeholders identifies which reference it is — this is how two references to
+	/// position among the placeholders identifies which reference it is -- this is how two references to
 	/// one rule name are told apart.
 	///
 	/// Static text is reported whether or not the query constrains it, matching the engine and the shape
@@ -186,7 +185,7 @@ impl Composition {
 			return Vec::new();
 		};
 
-		// Every static part is reported, whether or not the query constrains it — an unconstrained one
+		// Every static part is reported, whether or not the query constrains it -- an unconstrained one
 		// becomes the value `*`, matching the engine and `search_by_name`'s output shape. Placeholders are
 		// reported only up to the last constrained part; beyond that they are unconstrained and omitted.
 		//
@@ -236,7 +235,7 @@ impl Composition {
 		//
 		// - genuinely adjacent in the shape (`a%%b` escapes a `%` as text): each value glob-matches its
 		//   own text exactly, so the concatenation glob-matches the concatenated text exactly;
-		// - separated by an omitted placeholder, which happens only past the last constrained part — so
+		// - separated by an omitted placeholder, which happens only past the last constrained part -- so
 		//   the later part has no attributed text and its value is a bare `*`, which is exactly the
 		//   wildcard the omitted placeholder's output requires.
 		let mut merged: Vec<RenderedPart> = Vec::with_capacity(rendered.len());
@@ -263,7 +262,7 @@ impl Composition {
 	/// exact, so they are skipped.
 	///
 	/// Values come from the same rendering used by [`Self::to_interpretation`], so the check asks about
-	/// exactly the string that will be reported — including whether it is padded, which decides whether
+	/// exactly the string that will be reported -- including whether it is padded, which decides whether
 	/// the rule may emit anything around it.
 	#[must_use]
 	pub fn captures_to_verify(&self, model: &ShapeModel, runs: &[Run]) -> Vec<(String, String)> {
@@ -311,7 +310,7 @@ fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<Symbol
 
 /// The symbolic value for one part's pieces.
 ///
-/// A wildcard is emitted exactly where the query had one — at a run boundary — and nowhere else. In
+/// A wildcard is emitted exactly where the query had one -- at a run boundary -- and nowhere else. In
 /// particular a run that crosses from one part into the next stays contiguous: `preceding_run` and
 /// `following_run` name the runs adjacent to this part, so a boundary can be told apart from a mere
 /// part boundary.
@@ -323,7 +322,7 @@ fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<Symbol
 /// anchors the run to the start or end of the message.
 ///
 /// **Static text** is reproduced verbatim, so its value must be a glob matching the part's text
-/// *exactly*. The padding is therefore decided by the piece offsets alone — a wildcard stands for the
+/// *exactly*. The padding is therefore decided by the piece offsets alone -- a wildcard stands for the
 /// characters of the part the run does not cover, and appears if and only if there are some. Anchoring
 /// and run continuation need no special case here: a run flowing in from the previous part necessarily
 /// begins at offset zero, and one flowing out necessarily reaches the text's end, so both fall out of
@@ -390,7 +389,15 @@ pub struct ComposeBudget {
 impl Default for ComposeBudget {
 	fn default() -> Self {
 		Self {
-			max_compositions: 4_096,
+			// Sized so that a shape which genuinely *has* many decompositions is still answered here
+			// rather than deferred. The engine is not a cheaper way to enumerate the same answers -- it
+			// derives them by walking paths through an intersection, which on such a shape is far more
+			// expensive and can hit its own path timeout. Falling back is only worthwhile when the
+			// engine would do something different, not when it would do the same thing slowly.
+			//
+			// The HDFS corpus motivates the size: `*INFO*blk*` against the repeated-classpath shapes
+			// yields ~18 000 distinct interpretations, enumerated in ~2s, where the engine times out.
+			max_compositions: 65_536,
 		}
 	}
 }
@@ -428,7 +435,7 @@ pub fn compose(
 	// An end-anchored query pins the shape's trailing parts to producing *nothing*, which is a real
 	// constraint this module cannot express: rendering is truncated at the last constrained part (see
 	// `rendered_parts`), justified by the query's implicit trailing wildcard leaving the rest
-	// unconstrained. With no such wildcard those parts are constrained — to the empty string — and the
+	// unconstrained. With no such wildcard those parts are constrained -- to the empty string -- and the
 	// engine reports that precisely, as an empty capture. Defer to it rather than render a `*` that
 	// claims the opposite.
 	if runs.last().is_some_and(|run| run.anchored_end) && model.parts.last().is_some_and(ShapePart::can_be_empty) {
@@ -453,7 +460,7 @@ pub fn compose(
 	// all be placed without starting before `position`.
 	//
 	// Keeping this separate from enumeration is what bounds memory. Materializing the compositions at
-	// every state instead would cost `states × compositions`, and a shape can have tens of thousands of
+	// every state instead would cost `states x compositions`, and a shape can have tens of thousands of
 	// parts, so that is not viable.
 	let width: usize = positions.len();
 	let mut reachable: Vec<bool> = vec![false; (num_runs + 1) * width];

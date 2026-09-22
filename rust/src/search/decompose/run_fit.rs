@@ -3,8 +3,8 @@
 //! # Why this exists
 //!
 //! Searching a log shape by intersecting automata costs the size of the *whole shape*. Real shapes are
-//! dominated by static text — in the HDFS corpus, 403 shapes are 22KB of banner text wrapped around two
-//! small rules — so that cost is paid on material that a plain substring search could handle.
+//! dominated by static text -- in the HDFS corpus, 403 shapes are 22KB of banner text wrapped around two
+//! small rules -- so that cost is paid on material that a plain substring search could handle.
 //!
 //! This module instead asks the question *per rule*: "can this run of literal text sit inside this
 //! rule, and if so how?" That cost is the size of the rule (tens of states), not the shape (tens of
@@ -95,9 +95,9 @@ impl RunFit {
 			Err(_) => Vec::new(),
 		};
 
-		// Partial fits. `run[..k]` as a suffix of the rule means a query of `*run[..k]`, which (with the
-		// engine's prefix semantics) asks for a match *ending* with that text. Symmetrically `run[k..]`
-		// as a prefix of the rule is `run[k..]*`.
+		// Partial fits. `run[..k]` as a suffix of the rule means a query of `*run[..k]`, which, having no
+		// trailing wildcard, is anchored at the end and so asks for a match *ending* with that text.
+		// Symmetrically `run[k..]` as a prefix of the rule is `run[k..]*`.
 		let mut suffixes: Vec<bool> = vec![false; characters.len() + 1];
 		let mut prefixes: Vec<bool> = vec![false; characters.len() + 1];
 		// The empty contribution is always available.
@@ -185,7 +185,7 @@ impl RunFitCache {
 
 	/// Whether the rule(s) named `name` can match `text` exactly, with nothing before or after.
 	///
-	/// Cheaper than [`Self::get`] — one simulation rather than one per split point — and cached
+	/// Cheaper than [`Self::get`] -- one simulation rather than one per split point -- and cached
 	/// separately, because placing a rule in the *middle* of a run asks this for many short substrings.
 	#[must_use]
 	pub fn matches_exactly(&self, spec: &ParsingSpec, name: &str, text: &str) -> bool {

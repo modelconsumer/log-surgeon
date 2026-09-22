@@ -128,16 +128,16 @@ impl PartialPath {
 		}
 	}
 
-	fn finish<const WILDCARD_END: bool>(mut self, rule_idx: RuleIdx) -> Path {
+	/// Renders this path's edges as [`PathComponent`]s.
+	///
+	/// The path runs to an accepting state of the intersection, which means it has consumed the whole
+	/// shape as well as the whole search; nothing is appended or assumed. A capture is therefore always
+	/// closed by an explicit closing tag, and its contents are exactly what the rule produced -- possibly
+	/// nothing, when the search pins it to the empty string.
+	fn finish(self, rule_idx: RuleIdx) -> Path {
 		let mut components: Vec<PathComponent> = Vec::new();
 		let mut maybe_active_capture: Option<Arc<SubRule>> = None;
 		let mut symbols: Vec<SymbolicChar> = Vec::new();
-
-		if WILDCARD_END {
-			if self.edges.last() != Some(&PathEdge::Wildcard) {
-				self.edges.push(PathEdge::Wildcard);
-			}
-		}
 
 		for edge in self.edges.iter() {
 			match edge {
@@ -151,7 +151,7 @@ impl PartialPath {
 						assert_eq!(sub_rule, &active_rule);
 						// `symbols` may be empty: a rule such as `(?<leaf>[a-z]*)` can match nothing, and
 						// an end-anchored query pins it to exactly that. The empty capture is the precise
-						// answer — it says the rule produced no text — so it is reported as-is rather than
+						// answer -- it says the rule produced no text -- so it is reported as-is rather than
 						// widened to `*`, which would claim the opposite.
 
 						components.push(PathComponent::Capture {
@@ -177,21 +177,16 @@ impl PartialPath {
 				},
 			}
 		}
-		if let Some(active_rule) = maybe_active_capture {
-			assert!(WILDCARD_END);
-			if symbols.last() != Some(&SymbolicChar::GlobStar) {
-				symbols.push(SymbolicChar::GlobStar);
-			}
-			components.push(PathComponent::Capture {
-				sub_rule: active_rule,
-				contents: symbols,
-			});
-			components.push(PathComponent::Literal(vec![SymbolicChar::GlobStar]));
-		} else {
-			if !symbols.is_empty() {
-				assert!(!matches!(components.last(), Some(PathComponent::Literal(_))));
-				components.push(PathComponent::Literal(symbols));
-			}
+		// Every capture opened on this path was closed: the path reaches an accepting state, so the
+		// automaton walked past each closing tag. A capture left open would mean the path stopped
+		// mid-rule, which no longer happens now that the intersection always runs to the end.
+		assert!(
+			maybe_active_capture.is_none(),
+			"path ended inside a capture: {maybe_active_capture:?}"
+		);
+		if !symbols.is_empty() {
+			assert!(!matches!(components.last(), Some(PathComponent::Literal(_))));
+			components.push(PathComponent::Literal(symbols));
 		}
 
 		Path { rule_idx, components }
@@ -300,7 +295,7 @@ impl PathEdge {
 }
 
 impl Tnfa {
-	pub fn compute_paths<const WILDCARD_END: bool>(&self) -> Vec<Path> {
+	pub fn compute_paths(&self) -> Vec<Path> {
 		let tarjan: TarjanSccs = self.sccs();
 
 		trace!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
@@ -346,7 +341,7 @@ impl Tnfa {
 				}
 
 				if let Some(rule_idx) = current.maybe_accepts_for_rule {
-					finished.push(prefix_path.finish::<WILDCARD_END>(rule_idx));
+					finished.push(prefix_path.finish(rule_idx));
 					continue;
 				}
 				for (next_path, next_idx) in cache[current.idx.0].as_ref().unwrap().iter() {
@@ -560,7 +555,7 @@ mod test {
 		// let search = nfa_for("(ab)*");
 		// println!("{}", nfa.intersect(&search).to_dot_output());
 		// return;
-		let paths = nfa.intersect::<true, true>(&search).compute_paths::<false>();
+		let paths = nfa.intersect::<true>(&search).compute_paths();
 		let mut paths = paths.iter().map(ToString::to_string).collect::<Vec<_>>();
 		paths.sort();
 		paths.dedup();

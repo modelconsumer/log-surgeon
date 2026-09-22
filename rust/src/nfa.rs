@@ -215,7 +215,13 @@ impl Tnfa {
 	/// in order to differentiate between literal edges that "come from"
 	/// a parsing specification pattern (i.e. "would necessarily match"),
 	/// as opposed to the search (i.e. "meaningful search value").
-	pub fn intersect<const FOR_SEARCH: bool, const TO_END: bool>(&self, other: &Self) -> Self {
+	///
+	/// The intersection is always taken *to the end*: a state accepts only when both sides accept, so a
+	/// match must consume all of `self` and all of `other`. A search that should be free to stop early
+	/// says so in `other` itself, by ending in a wildcard -- see
+	/// [`crate::search::SearchString::search_by_log_shapes`], where deciding how much of `self` even
+	/// needs building is the caller's job rather than this function's.
+	pub fn intersect<const FOR_SEARCH: bool>(&self, other: &Self) -> Self {
 		let begin: NfaIdx = NfaIdx::BEGIN;
 
 		let mut stack: Vec<(StatePair<'_>, NfaIdx)> = vec![(StatePair::new(self, other, begin, begin), begin)];
@@ -235,11 +241,6 @@ impl Tnfa {
 		};
 
 		while let Some((pair, state)) = stack.pop() {
-			if FOR_SEARCH && !TO_END && pair.state2().is_accepting() {
-				intersection[state].maybe_accepts_for_rule = Some(RuleIdx::NIL);
-				assert_eq!(intersection[state].transitions.len(), 0);
-				continue;
-			}
 			if let Some(rule) = pair.state1().maybe_accepts_for_rule
 				&& pair.state2().is_accepting()
 			{

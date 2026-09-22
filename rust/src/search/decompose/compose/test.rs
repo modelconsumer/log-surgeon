@@ -317,7 +317,7 @@ fn text_matched_by_static_text_is_preserved() {
 	let spec: ParsingSpec = test_spec();
 	// The run is satisfied by the shape's static text: no rule is constrained, but the query's
 	// characters must still appear. The run covers the whole of `id=`, so the value carries no
-	// wildcard on either side — a static value must glob-match its part's text exactly, and `'*id='`
+	// wildcard on either side -- a static value must glob-match its part's text exactly, and `'*id='`
 	// would not match `id=`.
 	assert_eq!(vec!["'id='"], interpretations_of(&spec, "id=%digits%", "*id=*"));
 }
@@ -389,7 +389,7 @@ fn several_runs_can_share_one_static_part() {
 	let spec: ParsingSpec = test_spec();
 	// Regression: placements recorded only *which* part a run landed in, not where within it. All three
 	// runs belong in the single static part `abc `, at increasing offsets, which the part-only DP state
-	// could not express — so this decomposition was missed entirely.
+	// could not express -- so this decomposition was missed entirely.
 	assert!(composes(&spec, "abc %word%", "a*b*c"));
 	// The offsets must be respected, not merely recorded: `c*b` is not in ascending order.
 	assert!(!composes(&spec, "abc %word%", "c*b*a"));

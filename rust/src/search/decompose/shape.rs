@@ -12,7 +12,7 @@
 //!
 //! A shape is expected to be *decomposable*: every placeholder must name a rule the spec defines, and
 //! every such rule must be a **leaf** (no nested captures). Both are asserted when the model is built,
-//! so callers never have to ask whether a shape can be decomposed — the type says it can. Violations
+//! so callers never have to ask whether a shape can be decomposed -- the type says it can. Violations
 //! are programming errors in the shape, not conditions to recover from; see [`ShapeModel::new`].
 
 #[cfg(test)]
@@ -102,8 +102,8 @@ impl ShapeModel {
 	/// Panics if a placeholder names a rule the spec does not define, or names a rule with nested
 	/// captures (i.e. one that is not a leaf). Both make the shape unsupported for direct
 	/// decomposition, and continuing past them would silently produce a different answer than the
-	/// engine — a non-leaf rule must be reported as its nested captures, which this model does not
-	/// carry — so they are treated as errors in the shape rather than as conditions to recover from.
+	/// engine -- a non-leaf rule must be reported as its nested captures, which this model does not
+	/// carry -- so they are treated as errors in the shape rather than as conditions to recover from.
 	#[must_use]
 	pub fn new(spec: &ParsingSpec, shape: &str) -> Self {
 		let mut parts: Vec<ShapePart> = Vec::new();
@@ -136,8 +136,8 @@ impl ShapeModel {
 
 	/// Whether a message of this shape can *begin* with the text part `part` emits.
 	///
-	/// True when every earlier part can emit nothing at all. Static text is never empty — the tokenizer
-	/// does not produce empty fragments — so only nullable placeholders can stand aside. This is what a
+	/// True when every earlier part can emit nothing at all. Static text is never empty -- the tokenizer
+	/// does not produce empty fragments -- so only nullable placeholders can stand aside. This is what a
 	/// start-anchored run needs: it must be the first thing in the message, which does not require it to
 	/// be in the first *part* if the parts before it can vanish.
 	#[must_use]

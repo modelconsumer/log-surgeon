@@ -191,7 +191,7 @@ fn values_in_normal_form(alphabet: &[char], length: usize) -> Vec<Vec<SymbolicCh
 ///
 /// This is the *only* direction the implementation guarantees, and the one
 /// `dedup_covered_interpretations` depends on: a spurious `true` deletes a real answer, whereas a
-/// missed containment merely leaves a redundant one. The converse is deliberately not asserted —
+/// missed containment merely leaves a redundant one. The converse is deliberately not asserted --
 /// `covers` is a positional test and misses e.g. `aa*` against `aaa*`.
 #[test]
 fn covers_never_claims_an_unsound_containment() {

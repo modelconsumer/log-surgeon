@@ -127,6 +127,17 @@ struct SearchStringView<'a> {
 	end: usize,
 }
 
+/// A shape's automaton, possibly cut short, with what that cut left out.
+///
+/// See [`SearchStringView::truncated_automata`]. The flag is what lets the rendering stay identical to
+/// the full shape's: dropped static text still has to appear as a trailing `'*'`, because it is text
+/// the message contains even though the query does not constrain it.
+struct TruncatedShape {
+	automata: Tnfa,
+	/// Whether the parts dropped from the end included any static text.
+	dropped_static: bool,
+}
+
 /// A query as the engine sees it, with its end-anchoring made explicit.
 ///
 /// See [`SearchString::anchored`], which is the only place these two are derived, so that every caller
@@ -320,8 +331,8 @@ impl SearchString {
 	///
 	/// Start anchoring needs no flag because it is already *structural*: an unanchored query literally
 	/// begins with a [`SymbolicChar::GlobStar`], so the automaton built from it begins with `.*`. End
-	/// anchoring cannot be structural in the same way — a trailing `.*` would have to be simulated
-	/// through the whole rest of the shape — so it is carried as a flag, the wildcard is dropped from
+	/// anchoring cannot be structural in the same way -- a trailing `.*` would have to be simulated
+	/// through the whole rest of the shape -- so it is carried as a flag, the wildcard is dropped from
 	/// the view, and the automata are instead told not to require reaching the shape's end. That keeps
 	/// the unanchored case exactly as cheap as it was: acceptance is decided the moment the query's own
 	/// automaton accepts.
@@ -345,18 +356,33 @@ impl SearchString {
 	pub fn interpretations_for_log_shape_via_engine(&self, spec: &ParsingSpec, log_shape: &str) -> Vec<Interpretation> {
 		// TODO unwrap
 		let automata: Tnfa = spec.automata_for_shape(log_shape).unwrap();
-		self.interpretations_for_automata(spec, &automata)
+		self.interpretations_for_automata(spec, &automata, false)
 	}
 
 	/// Interpretations for an already-built shape automaton.
 	///
 	/// Exposed so that tests can pin a *truncated* automaton (see
 	/// [`ParsingSpec::automata_for_fragments`]) against the full one it stands in for.
-	pub fn interpretations_for_automata(&self, spec: &ParsingSpec, automata: &Tnfa) -> Vec<Interpretation> {
+	///
+	/// `dropped_static` says whether the parts cut from the end of the shape included any static text;
+	/// pass `false` for a complete shape. It is needed because such text is still reported -- as a
+	/// trailing `'*'` -- by the full shape, so a truncated one has to put it back to render identically.
+	pub fn interpretations_for_automata(
+		&self,
+		spec: &ParsingSpec,
+		automata: &Tnfa,
+		dropped_static: bool,
+	) -> Vec<Interpretation> {
 		let anchored: AnchoredQuery<'_> = self.anchored();
-		anchored
-			.view
-			.interpretations_for_shape(spec, automata, anchored.anchored_end)
+		anchored.view.interpretations_for_shape(
+			spec,
+			&TruncatedShape {
+				// TODO: avoid this clone by borrowing the automaton instead.
+				automata: automata.clone(),
+				dropped_static,
+			},
+			anchored.anchored_end,
+		)
 	}
 
 	fn view(&self, start: usize, end: usize) -> SearchStringView<'_> {
@@ -374,7 +400,22 @@ impl<'a> SearchStringView<'a> {
 	}
 
 	fn to_regex(&self) -> Regex {
-		Regex::Sequence(Vec::from_iter(self.as_str().iter().map(SymbolicChar::to_regex)))
+		self.to_regex_ending(false)
+	}
+
+	/// This query as a regex, optionally with a trailing `.*`.
+	///
+	/// [`SearchString::anchored`] strips a query's trailing wildcard so that the rest of the pipeline
+	/// sees its runs correctly unanchored. `trailing_wildcard` puts it back for the automaton, which
+	/// needs it explicitly: the intersection always runs to the end, so "and then anything" has to be
+	/// something the query can actually consume.
+	fn to_regex_ending(&self, trailing_wildcard: bool) -> Regex {
+		let symbols = self.as_str().iter().map(SymbolicChar::to_regex);
+		Regex::Sequence(if trailing_wildcard {
+			Vec::from_iter(symbols.chain(std::iter::once(SymbolicChar::GlobStar.to_regex())))
+		} else {
+			Vec::from_iter(symbols)
+		})
 	}
 
 	/// Interpretations of this query for a single log shape.
@@ -384,8 +425,8 @@ impl<'a> SearchStringView<'a> {
 	/// 1. [`crate::search::decompose::can_match`] on the coarse charset model. When it proves the shape cannot
 	///    match, the shape's TNFA is never built and never intersected with the query.
 	/// 2. [`crate::search::decompose::compose`], which decomposes the query against the shape directly, reusing
-	///    per-rule simulations across shapes. This answers the real question — which rule instance holds
-	///    what text — without building any automata for the shape.
+	///    per-rule simulations across shapes. This answers the real question -- which rule instance holds
+	///    what text -- without building any automata for the shape.
 	/// 3. The engine, when composition declines to conclude (an unreasonable rule, or an exhausted
 	///    budget). This is the slow path that the other two exist to avoid.
 	///
@@ -423,16 +464,19 @@ impl<'a> SearchStringView<'a> {
 
 		// Composition declined to conclude, but its placements still bound where the query's literal
 		// text can sit, which is enough to drop the shape's unreachable tail from the automaton.
-		let maybe_narrowed: Option<Tnfa> = maybe_table
+		let maybe_truncated: Option<TruncatedShape> = maybe_table
 			.as_ref()
 			.and_then(|table| self.truncated_automata(spec, model, table, anchored_end));
 
-		let automata: Tnfa = match maybe_narrowed {
-			Some(automata) => automata,
+		let truncated: TruncatedShape = match maybe_truncated {
+			Some(truncated) => truncated,
 			// TODO unwrap
-			None => spec.automata_for_shape(shape).unwrap(),
+			None => TruncatedShape {
+				automata: spec.automata_for_shape(shape).unwrap(),
+				dropped_static: false,
+			},
 		};
-		let interpretations: Vec<Interpretation> = self.interpretations_for_shape(spec, &automata, anchored_end);
+		let interpretations: Vec<Interpretation> = self.interpretations_for_shape(spec, &truncated, anchored_end);
 		now!(t1);
 		debug!("- took {} ms", millis!(t0, t1));
 		interpretations
@@ -440,17 +484,16 @@ impl<'a> SearchStringView<'a> {
 
 	/// The shape's automaton, truncated to the parts the query can actually reach.
 	///
-	/// Real shapes carry very long tails of static text — tens of thousands of characters — while their
-	/// placeholders cluster near the front, and one state is emitted per literal character. Under prefix
-	/// matching the intersection accepts as soon as the *query's* automaton accepts, which happens at the
-	/// end of its last literal run, so those trailing states are built and intersected only to be thrown
-	/// away.
+	/// Real shapes carry very long tails of static text -- tens of thousands of characters -- while their
+	/// placeholders cluster near the front, and one state is emitted per literal character. A query that
+	/// is not anchored at the end ends in a wildcard, and that wildcard consumes everything past its
+	/// last literal run, so those trailing states are built and intersected only to be matched by `.*`.
 	///
-	/// [`PlacementTable::window`] bounds every placement of every run, so no literal character of the
-	/// query can land beyond `window.1`. Truncating there is exactly "do not simulate the query's
-	/// trailing wildcard": the parts dropped are the ones it would have consumed.
+	/// [`PlacementTable::last_reachable_part`] bounds every placement of every run, so no literal
+	/// character of the query can land beyond it. Truncating there is exactly "do not simulate the
+	/// query's trailing wildcard": the parts dropped are the ones it would have consumed.
 	///
-	/// Only the *tail* is dropped. The head must be kept verbatim — the query's leading wildcard still
+	/// Only the *tail* is dropped. The head must be kept verbatim -- the query's leading wildcard still
 	/// has to traverse it, and replacing it with `.*` would be a superset, letting runs straddle where
 	/// the real static text forbids it and inventing interpretations the full shape does not have.
 	///
@@ -461,14 +504,14 @@ impl<'a> SearchStringView<'a> {
 		model: &ShapeModel,
 		table: &PlacementTable,
 		anchored_end: bool,
-	) -> Option<Tnfa> {
+	) -> Option<TruncatedShape> {
 		// A query anchored at the end must consume the shape through to its end, so nothing may be
 		// dropped: the truncated parts are precisely the ones it still has to match.
 		if anchored_end {
 			return None;
 		}
 
-		let (_, end): (usize, usize) = table.window()?;
+		let end: usize = table.last_reachable_part()?;
 		let last: usize = model.parts.len().checked_sub(1)?;
 
 		if end >= last {
@@ -480,13 +523,22 @@ impl<'a> SearchStringView<'a> {
 
 		trace!("truncated shape from {} parts to 0..={end}", model.parts.len());
 
-		Some(truncated)
+		// Whether the dropped tail contains any static text. If it does, the full shape would have
+		// reported it as a trailing `'*'` -- it is text the message still contains, even though the query
+		// says nothing about it -- so the truncated rendering has to put that back. A tail of only rule
+		// references needs nothing: those are unconstrained captures, which are omitted either way.
+		let dropped_static: bool = model.parts[(end + 1)..].iter().any(|part| !part.is_placeholder());
+
+		Some(TruncatedShape {
+			automata: truncated,
+			dropped_static,
+		})
 	}
 
 	/// Interpretations for `model` via [`crate::search::decompose::compose`].
 	///
 	/// `None` means composition declined to conclude and the caller must fall back to the engine. An
-	/// empty vector is a real answer — the shape cannot match — and is not the same thing.
+	/// empty vector is a real answer -- the shape cannot match -- and is not the same thing.
 	fn composed_interpretations(
 		spec: &ParsingSpec,
 		model: &ShapeModel,
@@ -532,34 +584,35 @@ impl<'a> SearchStringView<'a> {
 
 	/// Interpretations of this query against a shape's automaton.
 	///
-	/// `anchored_end` decides how the intersection is closed off, and is the whole of end-anchoring on
-	/// the engine side:
+	/// The intersection always runs **to the end**: a state accepts only when the shape's automaton and
+	/// the query's accept together. End-anchoring is therefore not a mode here -- it is simply whether
+	/// the query ends in a wildcard, which `anchored_end` reports and which decides what is fed in:
 	///
-	/// - `false` (`*foo*`, `foo*`): the intersection accepts as soon as the *query's* automaton accepts,
-	///   whatever state the shape is in. The shape's remaining states are never explored, which is what
-	///   makes an absent trailing wildcard cheap — it is never simulated, only assumed. Paths are then
-	///   closed with a trailing wildcard to say "and then anything".
-	/// - `true` (`*foo`, `foo`): both automata must accept together, so the match runs to the end of the
-	///   message. Nothing is appended to the paths, and a rule pinned to producing nothing is reported
-	///   as an empty capture.
+	/// - `true` (`*foo`, `foo`): the query is used as written, so the match must reach the shape's end.
+	/// - `false` (`*foo*`, `foo*`): the trailing wildcard, dropped by [`SearchString::anchored`] so the
+	///   rest of the pipeline sees the query's runs unanchored, is put back -- as a real `.*` the
+	///   intersection consumes.
+	///
+	/// Restoring the wildcard means the automaton must traverse whatever remains of the shape, which is
+	/// why `shape_nfa` should already have been cut down to the part the query can reach; see
+	/// [`Self::truncated_automata`]. That division of labour is the point: deciding *how much shape
+	/// matters* belongs to placement, which knows where the query's text can sit, not to the
+	/// intersection, which would otherwise have to guess by stopping early.
 	fn interpretations_for_shape(
 		&self,
 		_spec: &ParsingSpec,
-		shape_nfa: &Tnfa,
+		shape: &TruncatedShape,
 		anchored_end: bool,
 	) -> Vec<Interpretation> {
+		let shape_nfa: &Tnfa = &shape.automata;
 		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
-		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());
+		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex_ending(!anchored_end));
 
 		now!(t0);
-		let intersection: Tnfa = if anchored_end {
-			shape_nfa.intersect::<true, true>(&search_nfa)
-		} else {
-			shape_nfa.intersect::<true, false>(&search_nfa)
-		};
+		let intersection: Tnfa = shape_nfa.intersect::<true>(&search_nfa);
 		now!(t1);
 		trace!(
 			"intersecting {} states with {} states took {}",
@@ -571,11 +624,7 @@ impl<'a> SearchStringView<'a> {
 			return Vec::new();
 		}
 
-		let paths: Vec<Path> = if anchored_end {
-			intersection.compute_paths::<false>()
-		} else {
-			intersection.compute_paths::<true>()
-		};
+		let paths: Vec<Path> = intersection.compute_paths();
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -596,6 +645,23 @@ impl<'a> SearchStringView<'a> {
 				}
 			}
 
+			if !anchored_end {
+				// A truncated tail containing static text was reported by the full shape as a trailing
+				// `'*'`; restore it so both render the same. It is added before trimming so that it is
+				// treated exactly like the static part it stands for.
+				//
+				// If the path already ends in static text the two are adjacent, which
+				// [`Interpretation::invariants`] forbids, so the wildcard joins that value instead of
+				// becoming a sub-query of its own -- the same merge composition performs.
+				if shape.dropped_static {
+					match sub_queries.last_mut() {
+						Some(last) if last.is_static_text() => last.append_wildcard(),
+						_ => sub_queries.push(SubQuery::new_static_text(vec![SymbolicChar::GlobStar])),
+					}
+				}
+				Self::drop_trailing_unconstrained(&mut sub_queries);
+			}
+
 			interpretations.push(Interpretation { sub_queries });
 		}
 
@@ -607,6 +673,49 @@ impl<'a> SearchStringView<'a> {
 		Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		interpretations
+	}
+
+	/// Drops the *captures* past the last sub-query the query constrains.
+	///
+	/// An unanchored query says nothing about the tail of the message, so every rule reference after its
+	/// last literal character is unconstrained: each would be reported as a bare `*`, carrying no
+	/// information. Composition omits exactly these, so dropping them here is what keeps the two paths
+	/// reporting the same thing. Positional identity is unharmed because it is read left to right -- the
+	/// first `n` sub-queries still correspond to the first `n` shape parts -- so only trailing entries may
+	/// go, and a *leading* or *interior* vacuous capture is always retained.
+	///
+	/// Trailing **static text** is kept, and given a trailing `*` if it does not already end in one. A
+	/// static value has to glob-match its part's text exactly, so a bare `'a'` where the shape continues
+	/// `a%word%b...` would assert the message *ends* at `a` -- false, and matching nothing. The wildcard
+	/// is what the query's own trailing wildcard means at that position, and it is added here rather
+	/// than in the automaton because that is where the shape's remaining text stops being reported.
+	fn drop_trailing_unconstrained(sub_queries: &mut Vec<SubQuery>) {
+		let last_constrained: Option<usize> = sub_queries
+			.iter()
+			.rposition(|sub_query| sub_query.symbolic_value.iter().any(|symbol| !symbol.is_wildcard()));
+
+		let Some(last) = last_constrained else {
+			// Nothing is constrained at all; a single `*` says exactly that.
+			sub_queries.clear();
+			sub_queries.push(SubQuery::new_static_text(vec![SymbolicChar::GlobStar]));
+			return;
+		};
+
+		// Keep a trailing static sub-query: unlike a capture, it is not vacuous -- it names text the
+		// message must still contain, and the query's trailing wildcard covers only what follows *it*.
+		let keep: usize = match sub_queries.get(last + 1) {
+			Some(next) if next.is_static_text() => last + 2,
+			_ => last + 1,
+		};
+		sub_queries.truncate(keep);
+
+		// The last sub-query is now where the query's trailing wildcard applies, so it must permit
+		// anything after it. A capture is already padded by the path itself; static text may not be.
+		if let Some(final_sub_query) = sub_queries.last_mut()
+			&& final_sub_query.is_static_text()
+		{
+			final_sub_query.append_wildcard();
+		}
 	}
 
 	fn interpretations_for_nfa(
@@ -621,9 +730,9 @@ impl<'a> SearchStringView<'a> {
 
 		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());
 
-		let intersection: Tnfa = nfa.intersect::<true, true>(&search_nfa);
+		let intersection: Tnfa = nfa.intersect::<true>(&search_nfa);
 
-		let paths: Vec<Path> = intersection.compute_paths::<false>();
+		let paths: Vec<Path> = intersection.compute_paths();
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -724,7 +833,7 @@ impl Interpretation {
 			}
 
 			// No value carries adjacent wildcards: `**` says exactly what `*` does, and [`SubQuery::covers`]
-			// is reflexive and transitive only on values without it — its fast path recognises a lone `*`
+			// is reflexive and transitive only on values without it -- its fast path recognises a lone `*`
 			// as universal, but `**` falls through to the segment loop and fails even against itself.
 			assert!(
 				!sub_query
@@ -831,6 +940,19 @@ impl SubQuery {
 			}
 		}
 		i == other_parts.len()
+	}
+
+	/// Appends a trailing wildcard, unless the value already ends in one.
+	///
+	/// Used where a value sits at the point the query's trailing wildcard applies, so it must permit
+	/// anything after it. An empty value is left alone: it means the part is pinned to producing
+	/// nothing, and padding it would claim the opposite.
+	fn append_wildcard(&mut self) {
+		if self.symbolic_value.is_empty() || self.symbolic_value.last().is_some_and(SymbolicChar::is_wildcard) {
+			return;
+		}
+		self.symbolic_value.push(SymbolicChar::GlobStar);
+		self.string_value.push('*');
 	}
 
 	fn surround_with_wildcards(&mut self) {

@@ -12,8 +12,8 @@ fn intersect_match() {
 	let nfa2: Tnfa = for_pattern(r"\d+");
 	let nfa3: Tnfa = for_pattern(r"\w+");
 
-	let intersection12: Tnfa = nfa1.intersect::<false, true>(&nfa2);
-	let intersection13: Tnfa = nfa1.intersect::<false, true>(&nfa3);
+	let intersection12: Tnfa = nfa1.intersect::<false>(&nfa2);
+	let intersection13: Tnfa = nfa1.intersect::<false>(&nfa3);
 
 	assert!(!matches(&intersection12, "a1b"));
 	assert!(matches(&intersection13, "a1b"));
@@ -111,7 +111,7 @@ fn or() {
 #[test]
 fn intersect_is_conjunction() {
 	// Digits, but exactly three of them.
-	let intersection: Tnfa = for_pattern(r"\d+").intersect::<false, true>(&for_pattern("..."));
+	let intersection: Tnfa = for_pattern(r"\d+").intersect::<false>(&for_pattern("..."));
 
 	assert!(matches(&intersection, "123"));
 
@@ -125,7 +125,7 @@ fn intersect_with_no_common_language() {
 	let digits: Tnfa = for_pattern(r"\d+");
 	let letters: Tnfa = for_pattern("[a-z]+");
 
-	let intersection: Tnfa = digits.intersect::<false, true>(&letters);
+	let intersection: Tnfa = digits.intersect::<false>(&letters);
 
 	assert!(!intersection.can_accept());
 	assert!(intersection.definitely_cannot_accept());

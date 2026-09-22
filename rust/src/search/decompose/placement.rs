@@ -3,7 +3,7 @@
 //! # The two stages
 //!
 //! **Placement** (per run, per position): where can this run go? A run must be produced in full, and
-//! there are only three possibilities — inside one rule, inside the shape's static text, or straddling
+//! there are only three possibilities -- inside one rule, inside the shape's static text, or straddling
 //! a boundary between a rule and what sits beside it. Each possibility is decided from a cached
 //! [`RunFit`] (rule side) or a substring search (static-text side), so the cost is independent of how
 //! much static text the shape contains.
@@ -12,9 +12,9 @@
 //! immediately, without touching an automaton.
 //!
 //! **Composition**: choose one placement per run such that the placements occur left to right and do
-//! not overlap. This is a reachability problem over `(run index, shape position)` — every placement
-//! advances both — so it is solved by the same kind of reverse DP sweep as
-//! [`crate::search::decompose::align`], in `O(runs × positions × placements)`, rather than by enumerating
+//! not overlap. This is a reachability problem over `(run index, shape position)` -- every placement
+//! advances both -- so it is solved by the same kind of reverse DP sweep as
+//! [`crate::search::decompose::align`], in `O(runs x positions x placements)`, rather than by enumerating
 //! choices.
 //!
 //! # Positional identity
@@ -132,7 +132,7 @@ impl Placement {
 	/// The part index a following run must start at or after.
 	///
 	/// A run that ends inside a rule leaves that rule available to a later run (a rule can produce more
-	/// text after the run), and so does a run ending part-way through static text — the rest of that
+	/// text after the run), and so does a run ending part-way through static text -- the rest of that
 	/// text is still to come. See [`Self::next_available_offset`], which separates the two.
 	#[must_use]
 	pub fn next_available_part(&self) -> usize {
@@ -185,42 +185,29 @@ impl PlacementTable {
 		self.placements.iter().any(Vec::is_empty)
 	}
 
-	/// The inclusive range of shape parts outside which no run can be placed.
+	/// The last shape part the query's literal text can reach.
 	///
-	/// Every way this query's literal text can sit in the shape lies within `start..=end`, so the parts
-	/// outside it can only ever be traversed by a wildcard. In particular nothing beyond `end` can hold
-	/// a literal character of the query, which is what lets the shape's automaton be built as a *prefix*
-	/// ending there: a long tail of static text that no run can reach would otherwise contribute
-	/// thousands of states to the intersection while constraining nothing. See
+	/// This is the max over the placements of the **last** run alone, not over every run: the runs of a
+	/// composition are laid down left to right, so whatever the last run ends at bounds the whole
+	/// query. Taking the union over all runs would be needlessly pessimistic, since an early run that
+	/// *could* sit late in the shape never does in a composition that also places the runs after it.
+	///
+	/// Everything past this part is covered by the query's trailing wildcard, so it constrains nothing
+	/// and is dropped from the reported interpretation anyway. That makes it exactly the point at which
+	/// the shape's automaton can be cut off; see
 	/// [`crate::search::SearchString::search_by_log_shapes`].
 	///
-	/// Returns `None` when some run has no placement at all (the shape cannot match, so there is no
-	/// window to speak of) or when there are no runs (the query is all wildcards and constrains
-	/// nothing).
+	/// Returns `None` when the query has no runs (all wildcards, so nothing is constrained) or the last
+	/// run has no placement at all (the shape cannot match).
 	#[must_use]
-	pub fn window(&self) -> Option<(usize, usize)> {
-		let mut start: usize = usize::MAX;
-		let mut end: usize = 0;
-
-		for placements in self.placements.iter() {
-			// A run with nowhere to go means the shape cannot match; the caller must not narrow.
-			let first: &Placement = placements.first()?;
-			let mut lo: usize = first.start_part;
-			let mut hi: usize = first.end_part;
-			for placement in placements.iter() {
-				lo = lo.min(placement.start_part);
-				hi = hi.max(placement.end_part);
-			}
-			start = start.min(lo);
-			end = end.max(hi);
-		}
-
-		(usize::MAX != start).then_some((start, end))
+	pub fn last_reachable_part(&self) -> Option<usize> {
+		let last_run: &Vec<Placement> = self.placements.last()?;
+		last_run.iter().map(|placement| placement.end_part).max()
 	}
 
 	/// Computes the placements for every run of a query against `model`.
 	///
-	/// Returns `None` if the table would be **incomplete** because a resource cap was exceeded — either
+	/// Returns `None` if the table would be **incomplete** because a resource cap was exceeded -- either
 	/// too many placements for one run, or too long a run between back-to-back rules. The caller must
 	/// then not draw a conclusion and should fall back to the engine. An empty placement list for a run
 	/// is a real answer: the shape cannot match.
@@ -274,7 +261,7 @@ impl PlacementTable {
 
 						// Anchoring demands more than containment. A start-anchored run must be the first
 						// thing the message emits, so every earlier part must be able to vanish *and* the
-						// rule must *begin* with the run — `prefixes[0]`, not `fits_wholly` ("contains it
+						// rule must *begin* with the run -- `prefixes[0]`, not `fits_wholly` ("contains it
 						// somewhere"). Without this a query of `N*` would be placed in a rule matching
 						// `WARN`. The end is the mirror image, via `suffixes[len]`; anchored at both ends
 						// the rule must match the run exactly, with nothing around it.
@@ -537,7 +524,7 @@ impl PlacementTable {
 			let last: Option<&Piece> = pieces.last();
 			let end_part: usize = last.map_or(start_part, |piece| piece.part);
 			// A straddle's final piece starts at the beginning of its part (the run flows into it), so the
-			// end offset is just that piece's length — and is meaningless if the piece is a rule.
+			// end offset is just that piece's length -- and is meaningless if the piece is a rule.
 			let end_offset: usize = match last {
 				Some(piece) if !piece.is_rule => piece.text.chars().count(),
 				_ => 0,
@@ -648,7 +635,7 @@ impl PlacementTable {
 				// pins them:
 				//
 				// - static text: the run must continue with that text, so the rule's piece ends exactly
-				//   where the text's first character next occurs in the run — a handful of candidates found
+				//   where the text's first character next occurs in the run -- a handful of candidates found
 				//   by substring search, not one per length;
 				// - another rule (back-to-back, no literal boundary): nothing pins the split, so every
 				//   length must be tried. `candidate_middle_lengths` refuses to answer when it cannot try

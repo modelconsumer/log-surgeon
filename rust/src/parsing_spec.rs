@@ -312,10 +312,10 @@ impl ParsingSpec {
 
 	/// Converts a sequence of shape fragments to an automaton.
 	///
-	/// Split out from [`Self::automata_for_shape`] so a caller can build a **prefix** of a shape. Under
-	/// the engine's prefix matching a query is satisfied as soon as its own automaton accepts, which is
-	/// at the end of its last literal run, so shape parts beyond that run are never traversed and need
-	/// never be built. Real shapes carry tens of thousands of characters of trailing static text and one
+	/// Split out from [`Self::automata_for_shape`] so a caller can build a **prefix** of a shape. A query
+	/// that is not anchored at the end finishes with a wildcard that consumes everything past its last
+	/// literal run, so shape parts beyond that run only ever match `.*` and need never be built. Real
+	/// shapes carry tens of thousands of characters of trailing static text and one
 	/// state is emitted per character, so not building it is the difference between a ~20-state
 	/// intersection and a ~20 000-state one.
 	///

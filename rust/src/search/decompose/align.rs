@@ -8,24 +8,24 @@
 //! matches when its symbols consume such a message (a *prefix* of it, unless the query is anchored at
 //! the end).
 //!
-//! The shape is flattened into [`Atom`]s — one per static character, one per placeholder — so a
+//! The shape is flattened into [`Atom`]s -- one per static character, one per placeholder -- so a
 //! position in the walk is just a pair of indices: how much of the query has been consumed, and how
 //! much of the shape has been produced.
 //!
 //! Start anchoring needs no special handling: a query that is not anchored at the start simply
 //! *begins* with a [`SymbolicChar::GlobStar`], which is what lets the shape emit unconsumed text. End
 //! anchoring is passed explicitly, because the engine expresses it by *not* simulating a trailing
-//! wildcard rather than by carrying one in the symbols — there is nothing in `symbols` to read it off.
+//! wildcard rather than by carrying one in the symbols -- there is nothing in `symbols` to read it off.
 //!
 //! # Structure and termination
 //!
 //! Every transition advances the query cursor, the shape cursor, or both; neither moves backwards, so
 //! the state space is a DAG and can be solved in one reverse sweep. The work happens in two passes:
 //!
-//! 1. *Reachability* — which states can still consume the rest of the query. This alone answers the
+//! 1. *Reachability* -- which states can still consume the rest of the query. This alone answers the
 //!    prefilter's main question (can this shape match at all?) in `O(states)`, with no allocation per
 //!    state, so rejecting a shape is cheap.
-//! 2. *Enumeration* — only over reachable states, collecting the decompositions themselves. The number
+//! 2. *Enumeration* -- only over reachable states, collecting the decompositions themselves. The number
 //!    of decompositions can be exponential in principle, so this pass is capped by a [`Budget`];
 //!    exceeding it yields [`Outcome::Unknown`] rather than a wrong answer.
 //!
@@ -126,7 +126,7 @@ impl ShapeModel {
 ///
 /// This is the prefilter proper, and runs only the reachability pass: `false` **proves** no message of
 /// the shape can match, while `true` means "not ruled out". It allocates one bit per state and nothing
-/// per alignment, so it is much cheaper than [`align`] — use it whenever the decompositions themselves
+/// per alignment, so it is much cheaper than [`align`] -- use it whenever the decompositions themselves
 /// are not needed.
 ///
 /// `symbols` is the query as the engine sees it, i.e. with any single trailing wildcard already
@@ -167,7 +167,7 @@ pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: 
 ///
 /// This only ever returns `true`, i.e. only ever causes a shape to be *kept*, so it cannot make the
 /// prefilter unsound. It matters because it is `O(placeholders + query)` against the walk's
-/// `O(atoms × query)`: real log shapes are long (thousands of characters) and usually contain a
+/// `O(atoms x query)`: real log shapes are long (thousands of characters) and usually contain a
 /// permissive placeholder, so this is the common case, and paying for the full table there is what
 /// made the prefilter cost more than it saved.
 fn is_obviously_not_ruled_out(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool {
@@ -196,9 +196,11 @@ fn is_obviously_not_ruled_out(model: &ShapeModel, symbols: &[SymbolicChar], anch
 /// Prefer [`can_match`] when only the yes/no answer is needed; this additionally enumerates the
 /// decompositions, which costs proportionally to how many there are.
 ///
-/// `symbols` is the query as the engine sees it, i.e. with any single trailing wildcard already
-/// stripped. `anchored_at_end` states whether the query must consume the shape through to its end;
-/// pass `false` to mirror the engine's current prefix matching.
+/// `symbols` is the query with any single trailing wildcard already stripped; `anchored_at_end`
+/// carries what that wildcard meant, i.e. whether the query must consume the shape through to its
+/// end. The two are read off the same query by [`crate::search::SearchString::anchored`], so a trailing `*` must
+/// be stripped from `symbols` and reported as `anchored_at_end == false`, never one without the
+/// other.
 #[must_use]
 pub fn align(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool, budget: Budget) -> Outcome {
 	// An empty query constrains nothing, and the engine rejects it outright; do not claim otherwise.
@@ -379,7 +381,7 @@ impl<'a> Solver<'a> {
 	/// Collects the decompositions, considering only reachable states.
 	///
 	/// Uses the same reverse sweep as [`Self::reachability`], so each state's decompositions are built
-	/// from its successors' — already computed, and shared rather than re-explored. This is what keeps
+	/// from its successors' -- already computed, and shared rather than re-explored. This is what keeps
 	/// the pass proportional to the number of *distinct* decompositions instead of the number of paths.
 	fn enumerate(&self, reachable: &[bool], budget: Budget) -> Outcome {
 		let num_states: usize = self.num_query_positions() * (self.atoms.len() + 1);

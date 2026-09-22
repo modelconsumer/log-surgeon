@@ -3,25 +3,25 @@
 //! Answering [`crate::search::SearchString::search_by_log_shapes`] via the engine is expensive: it
 //! builds the shape's TNFA, intersects it with the query's, and enumerates paths through the result.
 //! This module answers the same question directly from a coarse model of the shape, and on a real
-//! corpus it answers nearly all of them — the engine is a fallback, not the normal path.
+//! corpus it answers nearly all of them -- the engine is a fallback, not the normal path.
 //!
 //! It is organised as two tiers, cheapest first:
 //!
-//! 1. **Rejection** ([`align`]) — a `false` from [`can_match`] *proves* no message of the shape can
+//! 1. **Rejection** ([`align`]) -- a `false` from [`can_match`] *proves* no message of the shape can
 //!    match, so the shape is discarded outright. This tier is a true prefilter: it only ever answers
 //!    "no" or "maybe". Its soundness rests on [`Charset`] being a **superset** of the characters a
 //!    rule can emit, and on placeholders being allowed to match empty; both only widen what is
 //!    accepted, so a rejection is never wrong. For the same reason its *decompositions* are not
-//!    usable as a result — only the yes/no answer is.
-//! 2. **Composition** ([`placement`] then [`compose`]) — decides where each of the query's runs can
+//!    usable as a result -- only the yes/no answer is.
+//! 2. **Composition** ([`placement`] then [`compose`]) -- decides where each of the query's runs can
 //!    sit ([`PlacementTable`]), enumerates the consistent assignments, and renders them as the
 //!    [`crate::search::Interpretation`]s the caller receives. Unlike tier 1 this is **exact**: what
 //!    it reports is what the engine would report, so a wrong value here is a wrong answer rather
 //!    than a loose filter.
 //!
 //! [`run_fit`] underpins both by answering "how can this run sit inside this rule?" for one
-//! `(rule, run)` pair. It is not an approximation — it simulates the rule via
-//! [`crate::search::SearchString::search_by_name`] — and is cached because a corpus mentions few
+//! `(rule, run)` pair. It is not an approximation -- it simulates the rule via
+//! [`crate::search::SearchString::search_by_name`] -- and is cached because a corpus mentions few
 //! distinct rules relative to the number of references to them.
 //!
 //! Every budget in here degrades to "no conclusion" rather than to a wrong answer; the caller then
