@@ -13,6 +13,7 @@ pub use rule::RuleIdx;
 pub use rule::RuleInfo;
 pub use rule::SubRule;
 
+use crate::dfa::CompressedDfa;
 use crate::dfa::Tdfa;
 use crate::nfa::Tnfa;
 use crate::regex::AnchoredRegex;
@@ -49,6 +50,7 @@ pub struct ParsingSpec {
 	/// DFA used for lexing/parsing;
 	/// determine which root rule matched, without tags for matching sub-rules.
 	pub dfa_for_parsing: Tdfa,
+	pub compressed_dfa_for_parsing: CompressedDfa,
 	pub nfa_for_search: Tnfa,
 
 	/// Derived from `delimiters`.
@@ -231,6 +233,8 @@ impl ParsingSpecBuilder {
 			minimized
 		});
 
+		let compressed_dfa_for_parsing: CompressedDfa = dfa_for_parsing.compress();
+
 		let nfa_for_search: Tnfa = Tnfa::for_rules(&rules, &self.delimiters, &self.encodings);
 
 		let mut ascii_delimiters: [bool; 0x80] = [false; 0x80];
@@ -251,6 +255,7 @@ impl ParsingSpecBuilder {
 			delimiters: self.delimiters,
 			encodings: self.encodings,
 			dfa_for_parsing,
+			compressed_dfa_for_parsing,
 			nfa_for_search,
 			ascii_delimiters,
 			non_ascii_delimiters,
@@ -273,6 +278,7 @@ impl ParsingSpec {
 		delimiters: String::new(),
 		encodings: Vec::new(),
 		dfa_for_parsing: Tdfa::BLANK,
+		compressed_dfa_for_parsing: CompressedDfa::BLANK,
 		nfa_for_search: Tnfa::BLANK,
 		ascii_delimiters: [false; 0x80],
 		non_ascii_delimiters: String::new(),

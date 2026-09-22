@@ -17,7 +17,7 @@ use std::num::NonZero;
 use std::range::Range;
 use std::sync::Arc;
 
-// pub use compressed::CompressedDfa;
+pub use compressed::CompressedDfa;
 pub use jit::Jit;
 pub use jit::JittedDfa;
 

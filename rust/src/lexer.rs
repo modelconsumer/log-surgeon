@@ -170,8 +170,7 @@ impl Lexer {
 				})
 			}
 		} else {
-			self.spec.dfa_for_parsing.execute_without_captures(input, char_before)
-			// self.spec.optimized_dfa.execute(input, char_before)
+			self.spec.compressed_dfa_for_parsing.execute(input, char_before)
 		}
 	}
 
