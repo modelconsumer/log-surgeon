@@ -17,7 +17,6 @@ pub struct TarjanSccs {
 	///
 	/// Further, vertices within an SCC are sorted by [`TarjanVertex::encountered_at`].
 	pub sccs: Vec<Vec<usize>>,
-	pub scc_predecessors: Vec<Vec<usize>>,
 	/// Additional info associated with each vertex.
 	pub vertices: Vec<TarjanVertex>,
 	/// Mapping [`TarjanVertex::encountered_at`] to original vertex indices;
@@ -36,7 +35,6 @@ pub struct TarjanVertex {
 	pub low_link: DfsIndex,
 	/// SCC index (in [`TarjanSccs::sccs`]).
 	pub scc: usize,
-	pub parents: Vec<usize>,
 	/// Working data for the algorithm.
 	on_stack: bool,
 }
@@ -61,13 +59,11 @@ impl TarjanSccs {
 	{
 		let mut this: Self = Self {
 			sccs: Vec::new(),
-			scc_predecessors: Vec::new(),
 			vertices: vec![
 				TarjanVertex {
 					encountered_at: DfsIndex::INVALID,
 					low_link: DfsIndex::INVALID,
 					scc: usize::MAX,
-					parents: Vec::new(),
 					on_stack: false,
 				};
 				vertices.len()
@@ -91,18 +87,6 @@ impl TarjanSccs {
 			for vertex in this.vertices.iter_mut() {
 				vertex.scc = this.sccs.len() - vertex.scc - 1;
 			}
-		}
-
-		this.scc_predecessors = vec![Vec::new(); this.sccs.len()];
-		for vertex in this.vertices.iter() {
-			for &parent in vertex.parents.iter() {
-				this.scc_predecessors[vertex.scc].push(this.vertices[parent].scc);
-			}
-		}
-
-		for parents in this.scc_predecessors.iter_mut() {
-			parents.sort();
-			parents.dedup();
 		}
 
 		this
@@ -148,7 +132,6 @@ impl TarjanSccs {
 						self.vertices[i].low_link = self.vertices[i].low_link.min(self.vertices[j].low_link);
 					}
 				}
-				self.vertices[j].parents.push(i);
 			} else {
 				if let Some(parent) = frames.last() {
 					self.vertices[parent.index].low_link =
@@ -190,7 +173,6 @@ impl TarjanSccs {
 			encountered_at,
 			low_link: encountered_at,
 			on_stack: true,
-			parents: Vec::new(),
 			scc: usize::MAX,
 		};
 		self.original_indices.push(index);
@@ -223,7 +205,6 @@ impl TarjanSccs {
 			encountered_at,
 			low_link: encountered_at,
 			on_stack: true,
-			parents: Vec::new(),
 			scc: usize::MAX,
 		};
 		self.original_indices.push(i);

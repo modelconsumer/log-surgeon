@@ -4,7 +4,7 @@
 //!
 //! [tdfa]: https://arxiv.org/abs/2206.01398
 
-// mod compressed;
+mod compressed;
 mod jit;
 #[cfg(test)]
 mod test;
@@ -410,6 +410,7 @@ impl Tdfa {
 	/// Construct the TDFA for the combination (alternation) of multiple rules,
 	/// i.e. from a parsing specification.
 	/// Capturing is not enabled.
+	#[tracing::instrument(skip_all, level = "trace")]
 	pub fn for_rules(rules: &[RootRule], delimiters: &str, encodings: &[Arc<Encoding>]) -> Self {
 		let nfa: Tnfa = Tnfa::for_rules(rules, delimiters, encodings);
 		Self::determinization::<false>(&nfa)
@@ -429,7 +430,6 @@ impl Tdfa {
 	}
 
 	/// Algorithm 3 in the [paper][tdfa].
-	#[tracing::instrument(skip_all, level = "trace")]
 	pub fn determinization<const WITH_TAGS: bool>(nfa: &Tnfa) -> Self {
 		let tags: Vec<CaptureTag> = nfa.tags().iter().cloned().collect::<Vec<_>>();
 		assert_eq!(tags.len() % 2, 0);

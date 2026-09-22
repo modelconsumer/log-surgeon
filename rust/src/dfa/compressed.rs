@@ -8,13 +8,14 @@ use crate::dfa::Tdfa;
 use crate::graph::TarjanSccs;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RuleIdx;
 use crate::utils::SerdeArray;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressedDfa {
 	pub intervals: Vec<Interval<u32>>,
-	pub accepts_for_rule: Vec<Option<RuleIdx>>,
+	pub accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>>,
 	pub ascii_transitions: Vec<SerdeArray<[u16; 0x80]>>,
 	pub non_ascii_transitions: Vec<u16>,
 }
@@ -23,7 +24,7 @@ impl Tdfa {
 	pub fn compress(&self) -> CompressedDfa {
 		use crate::interval_tree::PolicyNoop;
 
-		let tarjan: TarjanSccs = TarjanSccs::tarjan_scc(&self.states, |state| {
+		let tarjan: TarjanSccs = TarjanSccs::tarjan_scc(&self.states, 0..=0, |state| {
 			state
 				.transitions
 				.iter()
@@ -48,7 +49,7 @@ impl Tdfa {
 			}
 		}
 
-		let mut accepts_for_rule: Vec<Option<RuleIdx>> = Vec::with_capacity(self.states.len());
+		let mut accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>> = Vec::with_capacity(self.states.len());
 		let mut ascii_transitions: Vec<SerdeArray<[u16; 0x80]>> = Vec::with_capacity(self.states.len());
 		let mut non_ascii_transitions: Vec<u16> = Vec::with_capacity(self.states.len() * all_intervals.len());
 
@@ -99,9 +100,10 @@ impl CompressedDfa {
 		for (pos, ch) in input.char_indices().chain(std::iter::once((input.len(), '\n'))) {
 			if let Some(next_state) = self.lookup_next_state(current_state, u32::from(ch)) {
 				current_state = next_state.get();
-				if let Some(rule_idx) = self.accepts_for_rule[usize::from(current_state)] {
+				if let Some((rule_idx, maybe_encoding_idx)) = self.accepts_for_rule[usize::from(current_state)] {
 					maybe_backup = Some(BackupState {
 						rule_idx,
+						maybe_encoding_idx,
 						consumed: pos,
 					});
 				}
@@ -114,6 +116,7 @@ impl CompressedDfa {
 
 		Some(MatchedRule {
 			rule_idx: backup.rule_idx,
+			maybe_encoding_idx: backup.maybe_encoding_idx,
 			lexeme: &input[..backup.consumed],
 		})
 	}
