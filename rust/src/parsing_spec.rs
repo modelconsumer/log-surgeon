@@ -33,7 +33,7 @@ pub struct ParsingSpecBuilder {
 	encodings: Vec<Arc<Encoding>>,
 
 	/// Cached (canonicalized) DFA for [`ParsingSpec::main_dfa`].
-	maybe_cached_dfa: Option<Tdfa>,
+	maybe_cached_dfa: Option<CompressedDfa>,
 
 	delimiters: String,
 }
@@ -219,8 +219,8 @@ impl ParsingSpecBuilder {
 		Ok(self)
 	}
 
-	pub fn set_cached_dfa(&mut self, mut cached: Tdfa) -> &mut Self {
-		cached.initialize_ascii_cache();
+	pub fn set_cached_dfa(&mut self, cached: CompressedDfa) -> &mut Self {
+		// cached.initialize_ascii_cache();
 		self.maybe_cached_dfa = Some(cached);
 		self
 	}
@@ -243,7 +243,7 @@ impl ParsingSpecBuilder {
 			}
 		}
 
-		let dfa_for_parsing: Tdfa = self.maybe_cached_dfa.unwrap_or_else(|| {
+		let compressed_dfa_for_parsing: CompressedDfa = self.maybe_cached_dfa.unwrap_or_else(|| {
 			debug!("[dfa] determinizing main dfa for parsing...");
 			now!(t0);
 			let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
@@ -252,13 +252,12 @@ impl ParsingSpecBuilder {
 			let minimized: Tdfa = main_dfa.canonicalize();
 			now!(t2);
 			debug!("[dfa] canonicalizing took {} ms.", millis!(t1, t2));
-			minimized
+			now!(t3);
+			let compressed_dfa_for_parsing: CompressedDfa = minimized.compress();
+			now!(t4);
+			debug!("[dfa] compressing main dfa for parsing took {} ms.", millis!(t3, t4));
+			compressed_dfa_for_parsing
 		});
-
-		now!(t3);
-		let compressed_dfa_for_parsing: CompressedDfa = dfa_for_parsing.compress();
-		now!(t4);
-		debug!("[dfa] compressing main dfa for parsing took {} ms.", millis!(t3, t4));
 
 		let nfa_for_search: Tnfa = Tnfa::for_rules(&rules, &self.delimiters, &self.encodings);
 
@@ -279,7 +278,7 @@ impl ParsingSpecBuilder {
 			placeholders: self.placeholders,
 			delimiters: self.delimiters,
 			encodings: self.encodings,
-			dfa_for_parsing,
+			dfa_for_parsing: Tdfa::BLANK,
 			compressed_dfa_for_parsing,
 			nfa_for_search,
 			ascii_delimiters,

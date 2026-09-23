@@ -46,6 +46,19 @@ fn insert_across_multiple_intervals() {
 }
 
 #[test]
+fn serde_roundtrip() {
+	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
+	tree.insert(Interval::new(0, 10), 1, PolicyAdd);
+	tree.insert(Interval::new(20, 30), 2, PolicyAdd);
+
+	let json: String = serde_json::to_string(&tree).unwrap();
+	assert_eq!(json, r#"[{"start":0,"end":10,"value":1},{"start":20,"end":30,"value":2}]"#);
+
+	let roundtripped: IntervalTree<u32, u64> = serde_json::from_str(&json).unwrap();
+	assert_eq!(tree, roundtripped);
+}
+
+#[test]
 fn complement_multiple_intervals() {
 	let intervals: &mut [Interval<u32>] = &mut [
 		Interval { start: 10, end: 15 },

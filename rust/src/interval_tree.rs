@@ -9,7 +9,7 @@ mod test_generated;
 ///
 /// Internally, just an ordered list of non-overlapping intervals;
 /// lookups are `O(log(n))` with binary search.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct IntervalTree<T: Number, V: Clone> {
 	intervals: Vec<(Interval<T>, V)>,
 }
@@ -378,5 +378,75 @@ where
 {
 	fn combine(&mut self, existing: &mut T, new: T) {
 		self.0(existing, new);
+	}
+}
+
+mod serde {
+	use ::serde::Deserialize;
+	use ::serde::Deserializer;
+	use ::serde::Serialize;
+	use ::serde::Serializer;
+
+	use super::*;
+
+	impl<T: Number, V: Clone> Serialize for IntervalTree<T, V>
+	where
+		T: Serialize,
+		V: Serialize,
+	{
+		fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+		where
+			S: Serializer,
+		{
+			use ::serde::ser::SerializeSeq;
+
+			/// One entry of an [`IntervalTree`], serialized as a map.
+			#[derive(Serialize)]
+			struct Entry<'a, T, V> {
+				start: T,
+				end: T,
+				value: &'a V,
+			}
+
+			let mut seq = serializer.serialize_seq(Some(self.intervals.len()))?;
+			for (interval, value) in self.intervals.iter() {
+				seq.serialize_element(&Entry {
+					start: interval.start(),
+					end: interval.end(),
+					value,
+				})?;
+			}
+			seq.end()
+		}
+	}
+
+	impl<'de, T: Number, V: Clone> Deserialize<'de> for IntervalTree<T, V>
+	where
+		T: Deserialize<'de>,
+		V: Deserialize<'de>,
+	{
+		fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+		where
+			D: Deserializer<'de>,
+		{
+			/// One entry of an [`IntervalTree`], deserialized from a map.
+			#[derive(Deserialize)]
+			struct Entry<T, V> {
+				start: T,
+				end: T,
+				value: V,
+			}
+
+			let entries: Vec<Entry<T, V>> = Deserialize::deserialize(deserializer)?;
+			let intervals: Vec<(Interval<T>, V)> = Vec::from_iter(
+				entries
+					.into_iter()
+					.map(|entry| (Interval::new(entry.start, entry.end), entry.value)),
+			);
+			let tree: Self = Self { intervals };
+			#[cfg(debug_assertions)]
+			tree.check_invariants();
+			Ok(tree)
+		}
 	}
 }

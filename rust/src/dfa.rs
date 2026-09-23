@@ -86,6 +86,7 @@ pub struct MatchedCapture {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DfaState {
+	#[serde(skip, default = "Kernel::empty")]
 	kernel: Kernel,
 	transitions: IntervalTree<u32, Transition>,
 	/// If this is a final state (the kernel contains an accepting NFA state),
@@ -129,6 +130,7 @@ struct Kernel(Vec<Configuration>);
 
 /// A "configuration" is essentially an augmented NFA state (as documented per field).
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
 struct Configuration {
 	nfa_state: NfaIdx,
 	/// A mapping "tag (by ID/index) -> register"; answers "which register holds this tag?".
@@ -141,6 +143,7 @@ struct Configuration {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
 struct Transition {
 	/// `usize::MAX` is used as an "invalid/empty" marker value.
 	/// See [`NfaIdx`] for a note on why this is "safe".
@@ -1075,6 +1078,10 @@ impl TdfaExecution {
 }
 
 impl Kernel {
+	fn empty() -> Self {
+		Self(Vec::new())
+	}
+
 	/// There should be no duplicate NFA states; see comment above on [`Kernel`].
 	fn invariants(configurations: &[(Configuration, Vec<(CaptureTag, SymbolicPosition)>)]) {
 		let states: Vec<NfaIdx> = configurations
