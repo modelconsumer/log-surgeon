@@ -1,4 +1,3 @@
-use std::str::Chars;
 use std::sync::Arc;
 
 use crate::dfa::Jit;
@@ -9,6 +8,7 @@ use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
+use crate::utils::utf8::Utf8Chars;
 
 #[derive(Debug, Clone)]
 pub struct Lexer {
@@ -59,46 +59,19 @@ impl Lexer {
 	/// It should be created via [`TdfaExecution::new`].
 	pub fn next_token<'spec, 'input>(
 		&'spec self,
-		input: &'input str,
+		input: &'input [u8],
 		pos: &mut usize,
 		dfa_execution: &mut TdfaExecution,
 	) -> Token<'spec, 'input> {
 		let start: usize = *pos;
 
-		/*
-		for (offset, ch) in input[start..].char_indices() {
-			if let Some(MatchedRule { rule_idx, lexeme }) =
-				self.execute_dfa(input, pos + offset, last_was_delimited)
-			{
-				let rule: &RootRule = &self[rule_idx];
-				let has_captures: bool = rule.has_captures();
-				data.clear();
-				if has_captures {
-					let matched: bool = rule.dfa.execute_with_captures(lexeme, data, rule.idx);
-					assert!(matched);
-				}
-				*pos += offset + lexeme.len();
-				return Token::Variable {
-					rule,
-					lexeme,
-					has_captures,
-				};
-			} else if ch == '\n' {
-				*pos += ch.len_utf8();
-				return Token::Newline;
-			}
-		}
-		*pos = input.len();
-		return Token::EndOfInput;
-		*/
-
 		if start == input.len() {
 			return Token::EndOfInput;
 		}
 
-		let (input_before, input_remaining): (&str, &str) = input.split_at(start);
+		let (input_before, input_remaining): (&[u8], &[u8]) = input.split_at(start);
 
-		let char_before: u32 = u32::from(input_before.chars().rev().next().unwrap_or('\n'));
+		let char_before: u32 = u32::from(Utf8Chars::new(input_before).next_back().unwrap_or('\n'));
 
 		if let Some(MatchedRule {
 			rule_idx,
@@ -126,7 +99,7 @@ impl Lexer {
 				has_captures,
 			}
 		} else {
-			let mut chars: Chars<'_> = input[start..].chars();
+			let mut chars: Utf8Chars<'_> = Utf8Chars::new(&input[start..]);
 			// We checked for `start == input.len()` above.
 			let first: char = chars.next().unwrap();
 			*pos += first.len_utf8();
@@ -135,18 +108,21 @@ impl Lexer {
 			} else if !self.is_delimiter(first) {
 				self.glob_static_text(input, pos);
 			}
-			Token::StaticText(&input[start..*pos])
+			// SAFETY: `[start..*pos]` spans whole UTF-8 scalars, decoded and validated above
+			// (the first via `Utf8Chars::next`, the rest via `glob_static_text`).
+			let static_text: &'input str = unsafe { std::str::from_utf8_unchecked(&input[start..*pos]) };
+			Token::StaticText(static_text)
 		}
 	}
 
 	/// Uniform "interface" to executing a TDFA via the JIT-ed or Rust implementation.
 	fn execute_dfa<'input, const JIT: bool>(
 		&self,
-		input: &'input str,
+		input: &'input [u8],
 		char_before: u32,
 	) -> Option<MatchedRule<'input>> {
 		if JIT {
-			let input: std::ops::Range<*const u8> = input.as_bytes().as_ptr_range();
+			let input: std::ops::Range<*const u8> = input.as_ptr_range();
 			let mut end: *const u8 = std::ptr::null();
 			let mut maybe_encoding_idx: Option<EncodingIdx> = None;
 
@@ -175,8 +151,8 @@ impl Lexer {
 	}
 
 	/// See the [document on parsing](docs/parsing.md).
-	fn glob_static_text(&self, input: &str, pos: &mut usize) {
-		for ch in input[*pos..].chars() {
+	fn glob_static_text(&self, input: &[u8], pos: &mut usize) {
+		for ch in Utf8Chars::new(&input[*pos..]) {
 			if ch == '\n' {
 				break;
 			}

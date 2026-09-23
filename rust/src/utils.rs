@@ -6,6 +6,7 @@ mod convert;
 mod escaping;
 mod nom;
 mod serde;
+pub mod utf8;
 
 pub use convert::LocalTryInto;
 pub use escaping::Escaped;

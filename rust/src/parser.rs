@@ -87,7 +87,12 @@ impl Parser {
 	/// Return the next log event;
 	/// update `*pos` to the position after the returned event.
 	/// Returns `None` iff `*pos == input.len()`.
-	pub fn next_event(&mut self, input: &str, pos: &mut usize) -> Option<LogEvent<'_>> {
+	pub fn next_event<AsBytes>(&mut self, input: &AsBytes, pos: &mut usize) -> Option<LogEvent<'_>>
+	where
+		AsBytes: AsRef<[u8]> + ?Sized,
+	{
+		let input: &[u8] = input.as_ref();
+
 		if *pos == input.len() {
 			return None;
 		}
@@ -204,7 +209,10 @@ impl Parser {
 			previous_was_newline = false;
 		};
 
-		self.current_log.message.push_str(&input[pos_after_header..pos_end]);
+		self.current_log.message.push_str(unsafe {
+			// SAFETY: validated by the lexer.
+			std::str::from_utf8_unchecked(&input[pos_after_header..pos_end])
+		});
 
 		let matches_base: *const Match = self.current_log.all_matches.as_ptr();
 		for (i, mat) in self.current_log.all_matches.iter_mut().enumerate() {

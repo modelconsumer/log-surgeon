@@ -354,9 +354,7 @@ impl Tdfa {
 			if let Some(parent_id) = captures[i].parent_id {
 				// Linear scan (backwards) since it should usually be small.
 				for j in (0..i).rev() {
-					if captures[j].capture_id == parent_id
-						&& (captures[i].range.end <= captures[j].range.end)
-					{
+					if (captures[j].capture_id == parent_id) && (captures[i].range.end <= captures[j].range.end) {
 						assert!(captures[j].range.start <= captures[i].range.start);
 						captures[i].parent_index = 1 + j;
 						break;

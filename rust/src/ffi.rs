@@ -142,8 +142,14 @@ impl<'lifetime> CCharArray<'lifetime> {
 	}
 
 	pub fn as_utf8(&self) -> Result<&'lifetime str, Utf8Error> {
-		let bytes: &[u8] = unsafe { std::slice::from_raw_parts(self.pointer.cast::<u8>(), self.length) };
-		str::from_utf8(bytes)
+		str::from_utf8(self.as_bytes())
+	}
+
+	pub fn as_bytes(&self) -> &'lifetime [u8] {
+		unsafe {
+			// SAFETY: `u8` and `i8` are ABI compatible.
+			std::slice::from_raw_parts(self.pointer.cast::<u8>(), self.length)
+		}
 	}
 }
 

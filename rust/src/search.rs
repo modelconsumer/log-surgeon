@@ -925,7 +925,7 @@ impl SubQuery {
 			if my_part.is_empty() {
 				continue;
 			}
-			let Some(other_part): Option<&[SymbolicChar]> = other_parts.get(i).copied() else {
+			let Some(other_part): Option<&&[SymbolicChar]> = other_parts.get(i) else {
 				return false;
 			};
 			if let Some(suffix) = other_part.strip_prefix(my_part) {

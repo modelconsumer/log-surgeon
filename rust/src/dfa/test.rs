@@ -1,4 +1,5 @@
 use super::*;
+use crate::parsing_spec::ParsingSpecBuilder;
 use crate::regex::AnchoredRegex;
 
 #[test]
@@ -327,4 +328,66 @@ fn captures_of(rule: &RootRule, input: &str) -> Vec<(u16, usize, usize)> {
 			.iter()
 			.map(|cap| (cap.capture_id.get(), cap.range.start, cap.range.end)),
 	)
+}
+
+/// The compressed parsing DFA for a spec with a single rule.
+#[track_caller]
+fn compressed_for_pattern(pattern: &str) -> CompressedDfa {
+	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
+	builder.add_rule("rule", pattern).unwrap();
+	builder.build().compressed_dfa_for_parsing
+}
+
+/// The compressed DFA must decode non-ASCII scalars identically to the char iterator it replaced:
+/// both must consume a whole multi-byte scalar and report its full byte length as the lexeme.
+#[test]
+fn compressed_execute_non_ascii_scalars() {
+	let compressed: CompressedDfa = compressed_for_pattern("a.b");
+
+	// 2-byte scalar in the middle of an otherwise-ASCII lexeme.
+	let input: &str = "a\u{e9}b";
+	let matched: MatchedRule<'_> = compressed.execute(input.as_bytes(), u32::from('\n')).unwrap();
+	assert_eq!(&*matched.lexeme, input);
+
+	// 3-byte and 4-byte scalars in the wildcard position.
+	for input in ["a\u{4e16}b", "a\u{1f600}b"] {
+		let matched: MatchedRule<'_> = compressed.execute(input.as_bytes(), u32::from('\n')).unwrap();
+		assert_eq!(&*matched.lexeme, input, "input={input:?}");
+	}
+
+	// A non-nullable any-char repetition consumes the entire non-ASCII input, exercising every
+	// scalar width as the *first* byte decoded.
+	let any: CompressedDfa = compressed_for_pattern(".+");
+	let input: &str = "\u{e9}\u{4e16}\u{1f600}";
+	let matched: MatchedRule<'_> = any.execute(input.as_bytes(), u32::from('\n')).unwrap();
+	assert_eq!(&*matched.lexeme, input);
+}
+
+/// Invalid UTF-8 in the input must panic (the parser only ever sees pre-validated `&str`, so this
+/// is a programming error, not a recoverable condition).
+#[test]
+#[should_panic(expected = "invalid UTF-8")]
+fn compressed_execute_rejects_invalid_utf8() {
+	let compressed: CompressedDfa = compressed_for_pattern("a.b");
+	// A lone continuation byte, which is not a valid scalar.
+	let input: &[u8] = b"a\x80b";
+	let _ = compressed.execute(input, u32::from('\n'));
+}
+
+/// A non-ASCII scalar at the very end of the input (and a truncated lead byte) must not read past
+/// the slice; the truncated case panics as invalid UTF-8 rather than panicking on an index.
+#[test]
+fn compressed_execute_non_ascii_at_end() {
+	let compressed: CompressedDfa = compressed_for_pattern("a.b");
+
+	let input: &str = "a\u{e9}b";
+	assert_eq!(
+		compressed.execute(input.as_bytes(), u32::from('\n')).unwrap().lexeme,
+		input
+	);
+
+	// A 3-byte lead with no continuation bytes is invalid UTF-8.
+	let truncated: &[u8] = b"a\xe4";
+	let result = std::panic::catch_unwind(|| compressed.execute(truncated, u32::from('\n')));
+	assert!(result.is_err());
 }

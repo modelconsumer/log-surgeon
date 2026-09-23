@@ -101,19 +101,18 @@ impl CompressedDfa {
 		non_ascii_transitions: Vec::new(),
 	};
 
-	pub fn execute<'input>(&self, input: &'input str, last_was_delimited: u32) -> Option<MatchedRule<'input>> {
+	pub fn execute<'input>(&self, input: &'input [u8], last_was_delimited: u32) -> Option<MatchedRule<'input>> {
 		// The anchor transition's target may itself be accepting, but (matching
 		// [`Tdfa::execute_without_captures`]) acceptance is only recorded while consuming input.
 		let mut current_state: u16 = self.lookup_next_state(0, last_was_delimited)? & STATE_MASK;
 
 		let mut maybe_backup: Option<BackupState> = None;
 
-		let bytes: &[u8] = input.as_bytes();
 		let ascii_transitions: &[u16] = &self.ascii_transitions;
 		let mut i: usize = 0;
-		while i < bytes.len() {
-			let b: u8 = bytes[i];
-			// `consumed` is recorded *before* advancing `i`, so it holds the position of the
+		while i < input.len() {
+			let b: u8 = input[i];
+			// `consumed` is recorded *before* advancing, so it holds the position of the
 			// character that led to the accepting state (matching `Tdfa::execute_without_captures`).
 			let (encoded, advance): (u16, usize) = if b < 0x80 {
 				// Fast path: ASCII bytes map directly into the per-state table,
@@ -125,10 +124,14 @@ impl CompressedDfa {
 					unsafe { *ascii_transitions.get_unchecked(usize::from(current_state) * 0x80 + usize::from(b)) };
 				(encoded, 1)
 			} else {
-				let ch: char = input[i..].chars().next().unwrap();
+				// Non-ASCII: decode a single UTF-8 scalar. [`decode_scalar`] validates only the
+				// bytes of that scalar, so the cost does not depend on the remaining input length.
+				let (ch, len): (char, usize) = crate::utils::utf8::decode_scalar(&input[i..]);
 				match self.lookup_next_state(current_state, u32::from(ch)) {
-					Some(encoded) => (encoded, ch.len_utf8()),
-					None => break,
+					Some(encoded) => (encoded, len),
+					None => {
+						break;
+					},
 				}
 			};
 
@@ -150,7 +153,7 @@ impl CompressedDfa {
 		// Treat end-of-input as if a newline followed.
 		// (Note: skipped if the loop broke early on a failed transition,
 		// matching the `chain`-based iteration in [`Tdfa::execute_without_captures`].)
-		if i == bytes.len()
+		if (i == input.len())
 			&& let Some(encoded) = self.lookup_next_state(current_state, u32::from('\n'))
 		{
 			current_state = encoded & STATE_MASK;
@@ -166,10 +169,15 @@ impl CompressedDfa {
 
 		let backup: BackupState = maybe_backup?;
 
+		// SAFETY: the loop only advances past ASCII bytes (valid UTF-8 by definition) and past
+		// non-ASCII scalars that were just validated via [`crate::utils::utf8::decode_scalar`], so
+		// `input[..consumed]` is valid UTF-8.
+		let lexeme: &'input str = unsafe { std::str::from_utf8_unchecked(&input[..backup.consumed]) };
+
 		Some(MatchedRule {
 			rule_idx: backup.rule_idx,
 			maybe_encoding_idx: backup.maybe_encoding_idx,
-			lexeme: &input[..backup.consumed],
+			lexeme,
 		})
 	}
 
@@ -177,7 +185,7 @@ impl CompressedDfa {
 	fn lookup_next_state(&self, current_state: u16, ch: u32) -> Option<u16> {
 		let current_state: usize = usize::from(current_state);
 		let encoded: u16 = if ch < 0x80 {
-			self.ascii_transitions[current_state * 0x80 + ch as usize]
+			self.ascii_transitions[(current_state * 0x80) + (ch as usize)]
 		} else {
 			let char_class: usize = self.char_to_class(ch);
 			if char_class == usize::MAX {

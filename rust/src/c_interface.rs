@@ -152,7 +152,7 @@ mod parser {
 		pos: &mut usize,
 		out: &mut LogEvent<'parser>,
 	) -> bool {
-		let input: &str = unsafe { input.as_utf8().unwrap_unchecked() };
+		let input: &[u8] = input.as_bytes();
 		if let Some(event) = parser.next_event(input, pos) {
 			*out = event;
 			true
