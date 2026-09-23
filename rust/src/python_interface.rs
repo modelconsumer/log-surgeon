@@ -55,7 +55,7 @@ struct PyLogEvent {
 struct PyMatch {
 	#[pyo3(get)]
 	root_rule_id: Py<PyInt>,
-	/// [`SubRule`](crate::parsing_spec::SubRule) ID; `0` iff this match is a root rule.
+	/// Capture ID within [`RuleInfo`](crate::parsing_spec::RuleInfo); `0` iff this match is a root rule.
 	#[pyo3(get)]
 	sub_rule_id: Py<PyInt>,
 
@@ -160,10 +160,7 @@ impl PyParser {
 			let rule_info: &RuleInfo = &rule[mat.sub_rule_id];
 			let (name, maybe_parent): (&str, Option<Py<PyMatch>>) = if mat.parent_index < i {
 				assert!(!rule_info.is_root());
-				(
-					rule_info.sub_rule_name(),
-					Some(all_matches[mat.parent_index].clone().unbind()),
-				)
+				(&*rule_info.name, Some(all_matches[mat.parent_index].clone().unbind()))
 			} else {
 				assert!(rule_info.is_root());
 				(&rule.name, None)

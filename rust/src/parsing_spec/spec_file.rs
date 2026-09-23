@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use nom::Err as NomErr;
 use nom::IResult;
 use nom::Parser;
@@ -153,13 +155,15 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(pattern, &mut builder)
-						.map_err(|e| ParsingSpecFileError {
-							line_offset,
-							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
-						})?;
+					let regex: AnchoredRegex =
+						AnchoredRegex::from_pattern_with_placeholders(pattern, Arc::from(name), &mut builder).map_err(
+							|e| ParsingSpecFileError {
+								line_offset,
+								kind: ParsingSpecFileErrorKind::InvalidPattern(e),
+							},
+						)?;
 
-					let Ok(_) = builder.add_rule_with_priority(priority, name, regex);
+					let _ = builder.add_rule_parsed(priority, name, regex);
 				},
 			}
 		}

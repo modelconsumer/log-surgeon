@@ -115,7 +115,7 @@ impl Lexer {
 
 			let has_captures: bool = rule.has_captures();
 			if has_captures {
-				let matched: bool = rule.dfa.execute_with_captures(lexeme, dfa_execution, rule.idx);
+				let matched: bool = rule.dfa.execute_with_captures(lexeme, dfa_execution, rule);
 				assert!(matched);
 			}
 			*pos += lexeme.len();

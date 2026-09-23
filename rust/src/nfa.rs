@@ -12,7 +12,6 @@ mod test;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 pub use search_decomposition::Path;
 pub use search_decomposition::PathComponent;
@@ -22,9 +21,8 @@ use crate::graph::TarjanSccs;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::interval_tree::PolicyUnique;
-use crate::parsing_spec::Encoding;
+use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RuleIdx;
-use crate::parsing_spec::SubRule;
 
 #[derive(Debug, Clone)]
 pub struct Tnfa {
@@ -37,8 +35,9 @@ pub struct NfaState {
 	/// ID and also an index into an [`Nfa`]'s list of states.
 	pub idx: NfaIdx,
 	pub transitions: Transitions,
-	pub maybe_accepts_for_rule: Option<RuleIdx>,
-	pub maybe_encoding: Option<Arc<Encoding>>,
+	/// If this is an accepting state: the rule it accepts for, and the encoding (if any) of
+	/// the matched lexeme.
+	pub maybe_accepting_data: Option<(RuleIdx, Option<EncodingIdx>)>,
 	/// Not strictly needed, but useful for debugging (including DOT output).
 	///
 	/// Note 2026-09-16 (0d98b9b9a09fa072fc676a069e55a3a07bdf5c74):
@@ -78,11 +77,12 @@ pub enum Transitions {
 	},
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct CaptureTag {
+	/// The root rule this capture belongs to; a capture ID is local to its rule.
 	pub rule_idx: RuleIdx,
-	pub sub_rule: Arc<SubRule>,
-	pub maybe_encoding: Option<Arc<Encoding>>,
+	pub capture_id: u16,
+	pub maybe_encoding_idx: Option<EncodingIdx>,
 	/// "Open" before "close" in the derived ordering.
 	pub is_close: bool,
 }
@@ -142,8 +142,7 @@ impl Tnfa {
 				idx: NfaIdx::BEGIN,
 				name: Cow::Borrowed("begin"),
 				transitions: Transitions::Interval(IntervalTree::new()),
-				maybe_accepts_for_rule: None,
-				maybe_encoding: None,
+				maybe_accepting_data: None,
 			}],
 			tags: BTreeSet::new(),
 		}
@@ -167,8 +166,7 @@ impl Tnfa {
 			idx,
 			name: name.into(),
 			transitions: Transitions::Interval(IntervalTree::new()),
-			maybe_accepts_for_rule: None,
-			maybe_encoding: None,
+			maybe_accepting_data: None,
 		};
 		self.states.push(state);
 		idx
@@ -234,17 +232,16 @@ impl Tnfa {
 				idx: NfaIdx::BEGIN,
 				name: Cow::Borrowed("begin"),
 				transitions: Transitions::Spontaneous(Vec::new()),
-				maybe_accepts_for_rule: None,
-				maybe_encoding: None,
+				maybe_accepting_data: None,
 			}],
 			tags: BTreeSet::new(),
 		};
 
 		while let Some((pair, state)) = stack.pop() {
-			if let Some(rule) = pair.state1().maybe_accepts_for_rule
+			if let Some(accepting_data) = pair.state1().maybe_accepting_data
 				&& pair.state2().is_accepting()
 			{
-				intersection[state].maybe_accepts_for_rule = Some(rule);
+				intersection[state].maybe_accepting_data = Some(accepting_data);
 				assert_eq!(intersection[state].transitions.len(), 0);
 				continue;
 			}
@@ -439,17 +436,16 @@ impl Tnfa {
 			.collect::<Vec<_>>();
 
 		for my_state in new_states[..self.states.len()].iter_mut() {
-			if let Some(rule_idx) = my_state.maybe_accepts_for_rule {
+			if let Some((rule_idx, _)) = my_state.maybe_accepting_data {
 				assert_eq!(rule_idx, RuleIdx::NIL);
 				assert_eq!(my_state.transitions.len(), 0);
-				my_state.maybe_accepts_for_rule = None;
-				my_state.maybe_encoding = None;
+				my_state.maybe_accepting_data = None;
 				my_state.transitions = Transitions::Spontaneous(vec![NfaIdx(self.states.len())]);
 			}
 		}
 
 		for other_state in new_states[self.states.len()..].iter_mut() {
-			if let Some(rule_idx) = other_state.maybe_accepts_for_rule {
+			if let Some((rule_idx, _)) = other_state.maybe_accepting_data {
 				assert_eq!(rule_idx, RuleIdx::NIL);
 			}
 		}
@@ -480,16 +476,14 @@ impl Tnfa {
 			idx: NfaIdx::BEGIN,
 			name: Cow::Borrowed("begin"),
 			transitions: Transitions::Spontaneous(vec![NfaIdx(2), NfaIdx(2 + self.states.len())]),
-			maybe_accepts_for_rule: None,
-			maybe_encoding: None,
+			maybe_accepting_data: None,
 		});
 
 		new_states.push(NfaState {
 			idx: end_idx,
 			name: Cow::Borrowed("end"),
 			transitions: Transitions::Interval(IntervalTree::new()),
-			maybe_accepts_for_rule: Some(RuleIdx::NIL),
-			maybe_encoding: None,
+			maybe_accepting_data: Some((RuleIdx::NIL, None)),
 		});
 
 		new_states.extend(my_states.into_iter());
@@ -498,8 +492,7 @@ impl Tnfa {
 		for state in new_states[2..].iter_mut() {
 			if state.is_accepting() {
 				assert_eq!(state.transitions.len(), 0);
-				state.maybe_accepts_for_rule = None;
-				state.maybe_encoding = None;
+				state.maybe_accepting_data = None;
 				state.transitions = Transitions::Spontaneous(vec![end_idx]);
 			}
 		}
@@ -535,8 +528,7 @@ impl NfaState {
 				};
 				transitions
 			},
-			maybe_accepts_for_rule: self.maybe_accepts_for_rule,
-			maybe_encoding: self.maybe_encoding.clone(),
+			maybe_accepting_data: self.maybe_accepting_data,
 		}
 	}
 }
@@ -557,7 +549,7 @@ impl std::ops::IndexMut<NfaIdx> for Tnfa {
 
 impl NfaState {
 	pub fn is_accepting(&self) -> bool {
-		self.maybe_accepts_for_rule.is_some()
+		self.maybe_accepting_data.is_some()
 	}
 }
 

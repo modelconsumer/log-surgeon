@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::num::NonZero;
 use std::str::Chars;
 use std::sync::Arc;
 
@@ -10,15 +9,14 @@ use nom::error::ErrorKind as NomErrorKind;
 use nom::error::FromExternalError;
 use nom::error::ParseError;
 
-use crate::parsing_spec::RuleIdx;
-use crate::parsing_spec::SubRule;
 use crate::regex::AnchoredRegex;
+use crate::regex::Capture;
+use crate::regex::CaptureInfo;
 use crate::regex::Regex;
 use crate::regex::RegexError;
 use crate::regex::RegexErrorKind;
 use crate::regex::SPECIAL_CHARACTERS;
 use crate::regex::SPECIAL_CHARACTERS_IN_BRACKETED_RANGES;
-use crate::utils::DeepClone;
 use crate::utils::NomUtils;
 
 /// A helper trait for filling in placeholders when parsing regex patterns.
@@ -95,7 +93,15 @@ impl<'a> RegexParsingError<'a> {
 
 impl AnchoredRegex {
 	/// Like [`Regex::from_pattern_with_placeholders`], but for a (potentially) anchored regex/pattern.
-	pub fn from_pattern_with_placeholders<T>(mut pattern: &str, lookup: &mut T) -> Result<Self, RegexError>
+	///
+	/// The parsed expression is implicitly wrapped in a [`Regex::Capture`] named `base_name`
+	/// (the root rule name), so that captures are numbered uniformly and the root rule itself
+	/// has a [`CaptureInfo`] entry (id `0`).
+	pub fn from_pattern_with_placeholders<T>(
+		mut pattern: &str,
+		base_name: Arc<str>,
+		lookup: &mut T,
+	) -> Result<Self, RegexError>
 	where
 		T: RegexPlaceholderLookup,
 	{
@@ -137,23 +143,27 @@ impl AnchoredRegex {
 			},
 		};
 
-		let mut regex: Regex = regex.ensure_not_nullable(pattern)?;
+		let regex: Regex = regex.ensure_not_nullable(pattern)?;
 
-		let mut total_captures: NonZero<u16> = NonZero::<u16>::MIN;
+		let mut regex: Regex = Regex::Capture(Capture::new(base_name, Box::new(regex)));
 
-		regex
-			.initialize_captures(&mut total_captures, &mut Vec::new())
-			.ok_or(RegexError {
+		let mut captures: Vec<CaptureInfo> = Vec::new();
+		if regex
+			.initialize_captures(&mut 0, &mut captures, &mut Vec::new())
+			.is_none()
+		{
+			return Err(RegexError {
 				consumed: pattern.to_owned(),
 				remaining: String::new(),
 				kind: RegexErrorKind::TooManyCaptures,
-			})?;
+			});
+		}
 
 		Ok(Self {
 			anchor_before,
 			anchor_after,
 			regex,
-			total_captures,
+			captures,
 		})
 	}
 }
@@ -173,10 +183,8 @@ impl AnchoredRegex {
 /// [parsing-spec-file]: https://github.com/y-scope/log-surgeon/tree/log-mechanic/rust/docs/parsing-specification.md
 impl Regex {
 	/// Parse an unanchored regex pattern.
-	/// Replaces placeholders with their subexpressions,
-	/// but does not call [`Regex::initialize_captures`],
-	/// since the ID numbering is per-root rule/pattern
-	/// (i.e. it is done at the [`AnchoredRegex`] level).
+	/// Replaces placeholders with their subexpressions and numbers captures starting at `1`
+	/// (`0` is reserved for the implicit root capture of an [`AnchoredRegex`]).
 	pub fn from_pattern_with_placeholders<T>(pattern: &str, lookup: &mut T) -> Result<Self, RegexError>
 	where
 		T: RegexPlaceholderLookup,
@@ -190,6 +198,17 @@ impl Regex {
 					remaining: String::new(),
 					kind,
 				})?;
+
+				if regex
+					.initialize_captures(&mut 1, &mut Vec::new(), &mut Vec::new())
+					.is_none()
+				{
+					return Err(RegexError {
+						consumed: pattern.to_owned(),
+						remaining: String::new(),
+						kind: RegexErrorKind::TooManyCaptures,
+					});
+				}
 
 				Ok(regex)
 			},
@@ -213,10 +232,7 @@ impl Regex {
 	{
 		match self {
 			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => Ok(()),
-			Self::Capture(sub_rule) => Arc::get_mut(sub_rule)
-				.unwrap()
-				.regex
-				.replace_with_placeholders(placeholder_lookup),
+			Self::Capture(capture) => capture.item.replace_with_placeholders(placeholder_lookup),
 			Self::Placeholder { name, item } => {
 				let Some(placeholder): Option<Regex> = placeholder_lookup.lookup(name) else {
 					return Err(RegexErrorKind::UndefinedPlaceholder(name.to_string()));
@@ -242,49 +258,62 @@ impl Regex {
 		Self::from_pattern_with_placeholders(pattern, &mut ())?.ensure_not_nullable(pattern)
 	}
 
-	/// Initializes sub-rule data for capture expressions.
-	/// Should be called with `next_id == NonZero::<u16>::MAX`.
-	/// Returns 1 plus the number of sub-rules; i.e. the root rule plus sub-rules.
+	/// Initializes [`Capture::id`] and appends the corresponding [`CaptureInfo`] for each capture.
 	///
-	/// [`SubRule::id`] defaults to [`NonZero::<u16>::MAX`];
-	/// this max value isn't otherwise a valid value ID
-	/// since if we were to assign a sub-rule ID with the max value here,
-	/// `next_id` would overflow (and we would return `None`).
+	/// Captures are numbered in pre-order. When `next_id` starts at `0` and the expression is a
+	/// root [`Regex::Capture`], `id == index` in `captures`, and `parent_id < id`; the root capture
+	/// gets id `0` at index `0`. `ancestors` carries the enclosing `(id, qualified_name)` chain and
+	/// is initially empty.
 	///
-	/// Invariant: `parent_id < id`.
+	/// Returns the number of nested captures, or `None` if there are more than `u16::MAX` captures.
 	fn initialize_captures(
 		&mut self,
-		next_id: &mut NonZero<u16>,
-		ancestors: &mut Vec<(NonZero<u16>, Arc<str>)>,
-	) -> Option<usize> {
-		let mut total: usize = 0;
+		next_id: &mut u16,
+		captures: &mut Vec<CaptureInfo>,
+		ancestors: &mut Vec<(u16, Arc<str>)>,
+	) -> Option<u16> {
+		let mut total: u16 = 0;
 		match self {
 			Self::AnyChar | Self::Literal(..) | Self::BracketedRanges { .. } => (),
-			Self::Capture(sub_rule) => {
-				let sub_rule: &mut SubRule = Arc::get_mut(sub_rule).unwrap();
-				let maybe_parent: Option<&(NonZero<u16>, Arc<str>)> = ancestors.last();
-				sub_rule.parent_id = maybe_parent.map(|(id, _)| *id);
-				sub_rule.id = *next_id;
-				sub_rule.qualified_name = Arc::from(format!(
-					"{}.{}",
-					maybe_parent.map_or("", |(_, name)| name),
-					sub_rule.name
-				));
-				ancestors.push((sub_rule.id, sub_rule.qualified_name.clone()));
+			Self::Capture(capture) => {
+				let id: u16 = *next_id;
+				capture.id = id;
 				*next_id = next_id.checked_add(1)?;
-				sub_rule.descendants = sub_rule.regex.initialize_captures(next_id, ancestors)?;
-				total = 1 + sub_rule.descendants;
+
+				let maybe_parent: Option<&(u16, Arc<str>)> = ancestors.last();
+				let parent_id: u16 = maybe_parent.map_or(0, |(id, _)| *id);
+				// The root capture is qualified by the empty string, so that the fully-qualified
+				// name of a (sub-)rule is `root_name + qualified_name`.
+				let qualified_name: Arc<str> = match maybe_parent {
+					Some((_, parent_name)) => Arc::from(format!("{parent_name}.{}", capture.name)),
+					None => Arc::<str>::default(),
+				};
+
+				ancestors.push((id, qualified_name.clone()));
+				let index: usize = captures.len();
+				captures.push(CaptureInfo {
+					name: capture.name.clone(),
+					id,
+					parent_id,
+					descendants: 0,
+					qualified_name,
+				});
+
+				let descendants: u16 = capture.item.initialize_captures(next_id, captures, ancestors)?;
+				captures[index].descendants = descendants;
 				ancestors.pop();
+
+				total = descendants.checked_add(1)?;
 			},
 			Self::KleeneClosure(item)
 			| Self::KleenePlus(item)
 			| Self::BoundedRepetition { item, .. }
 			| Self::Placeholder { item, .. } => {
-				total += item.initialize_captures(next_id, ancestors)?;
+				total = item.initialize_captures(next_id, captures, ancestors)?;
 			},
 			Self::Sequence(items) | Self::Alternation(items) => {
 				for sub_item in items.iter_mut() {
-					total += sub_item.initialize_captures(next_id, ancestors)?;
+					total = total.checked_add(sub_item.initialize_captures(next_id, captures, ancestors)?)?;
 				}
 			},
 		}
@@ -561,22 +590,7 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 	} else {
 		let (input, regex): (&str, Regex) = parse_alternation(input)?;
 
-		Ok((
-			input,
-			Regex::Capture(DeepClone::new(Arc::new(SubRule {
-				name,
-				regex,
-				root_rule_idx: RuleIdx::NIL,
-				// [`Regex::initialize_captures`], called after the AST is parsed, sets these next 4 values;
-				// see also its comment on why this `MAX` is a valid temporary value.
-				id: NonZero::<u16>::MAX,
-				parent_id: None,
-				descendants: 0,
-				// `Arc::default()` special-cases ZSTs; no allocation needed.
-				qualified_name: Arc::<str>::default(),
-				fully_qualified_name: Arc::<str>::default(),
-			}))),
-		))
+		Ok((input, Regex::Capture(Capture::new(name, Box::new(regex)))))
 	}
 }
 

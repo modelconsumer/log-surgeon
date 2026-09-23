@@ -39,9 +39,7 @@
 #[cfg(test)]
 mod test;
 
-use std::sync::Arc;
-
-use crate::parsing_spec::SubRule;
+use crate::parsing_spec::ResolvedCapture;
 use crate::search::SymbolicChar;
 use crate::search::decompose::Placeholder;
 use crate::search::decompose::ShapeModel;
@@ -60,7 +58,7 @@ pub enum Fragment {
 	Static(Vec<SymbolicChar>),
 	/// Query text matched against a placeholder, i.e. a capture of that rule.
 	Capture {
-		sub_rule: Arc<SubRule>,
+		capture: ResolvedCapture,
 		contents: Vec<SymbolicChar>,
 	},
 }
@@ -534,10 +532,10 @@ impl<'a> Solver<'a> {
 				},
 				Prepend::Capture(placeholder, contents) => {
 					// One decomposition per alternative this name resolves to.
-					for sub_rule in placeholder.alternatives.iter() {
+					for capture in placeholder.alternatives.iter() {
 						let mut fragments: Vec<Fragment> = Vec::with_capacity(tail.len() + 1);
 						fragments.push(Fragment::Capture {
-							sub_rule: sub_rule.clone(),
+							capture: capture.clone(),
 							contents: contents.to_vec(),
 						});
 						fragments.extend(tail.iter().cloned());

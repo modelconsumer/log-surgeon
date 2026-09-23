@@ -18,13 +18,11 @@
 #[cfg(test)]
 mod test;
 
-use std::num::NonZero;
-use std::sync::Arc;
-
+use crate::parsing_spec::CaptureRef;
 use crate::parsing_spec::LogShapeFragment;
 use crate::parsing_spec::ParsingSpec;
+use crate::parsing_spec::ResolvedCapture;
 use crate::parsing_spec::RuleInfo;
-use crate::parsing_spec::SubRule;
 use crate::regex::Regex;
 use crate::search::decompose::Charset;
 
@@ -73,11 +71,11 @@ pub struct Placeholder {
 	pub name: String,
 	/// A superset of the characters any match of this placeholder can contain.
 	pub charset: Charset,
-	/// The alternatives this name resolves to, each with the sub-rule to attribute a capture to.
+	/// The alternatives this name resolves to, each with the capture to attribute a capture to.
 	///
 	/// A name can resolve to several rules (same name, different definitions), so a single
 	/// placeholder may be reported as any one of them.
-	pub alternatives: Vec<Arc<SubRule>>,
+	pub alternatives: Vec<ResolvedCapture>,
 	/// Whether some alternative can match the empty string.
 	///
 	/// A nullable placeholder can stand entirely aside, so a part *before* it can still be the first
@@ -184,7 +182,7 @@ impl Placeholder {
 		);
 
 		let mut charset: Charset = Charset::empty();
-		let mut alternatives: Vec<Arc<SubRule>> = Vec::with_capacity(rows.len());
+		let mut alternatives: Vec<ResolvedCapture> = Vec::with_capacity(rows.len());
 		let mut can_match_empty: bool = false;
 
 		for &(info, regex) in rows.iter() {
@@ -193,37 +191,20 @@ impl Placeholder {
 			// the placeholder is treated as able to stand aside.
 			can_match_empty |= regex.is_nullable().is_some();
 
-			if let Some(sub_rule) = &info.maybe_sub_rule {
-				assert!(
-					sub_rule.is_leaf(),
-					"log shape {shape:?} references non-leaf rule {name:?}: a rule with nested \
-					 captures cannot be decomposed and must be referenced by one of its leaf captures \
-					 instead (e.g. `%{name}.<capture>%`). Note this applies to log shapes; \
-					 `search_by_name` accepts non-leaf names"
-				);
-				alternatives.push(sub_rule.clone());
-			} else {
-				// A root rule reference. `automata_for_shape` wraps a capture-less root rule in an
-				// implicit capture of the whole rule; mirror that here so a decomposition can name it.
-				let root: &crate::parsing_spec::RootRule = &spec[info.root_idx];
-				assert!(
-					!root.has_captures(),
-					"log shape {shape:?} references non-leaf rule {name:?}: a rule with nested \
-					 captures cannot be decomposed and must be referenced by one of its leaf captures \
-					 instead. Note this applies to log shapes; `search_by_name` accepts non-leaf names"
-				);
-				alternatives.push(Arc::new(SubRule {
-					name: info.root_name.clone(),
-					regex: regex.clone(),
-					root_rule_idx: info.root_idx,
-					// Matches the placeholder `automata_for_shape` uses for an implicit root capture.
-					id: NonZero::<u16>::MAX,
-					parent_id: None,
-					descendants: 0,
-					qualified_name: info.root_name.clone(),
-					fully_qualified_name: info.root_name.clone(),
-				}));
-			}
+			assert!(
+				info.is_leaf(),
+				"log shape {shape:?} references non-leaf rule {name:?}: a rule with nested \
+				 captures cannot be decomposed and must be referenced by one of its leaf captures \
+				 instead (e.g. `%{name}.<capture>%`). Note this applies to log shapes; \
+				 `search_by_name` accepts non-leaf names"
+			);
+			alternatives.push(ResolvedCapture {
+				capture: CaptureRef {
+					rule_idx: info.root_idx,
+					capture_id: info.id,
+				},
+				fully_qualified_name: info.fully_qualified_name.clone(),
+			});
 		}
 
 		Self {

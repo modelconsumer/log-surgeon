@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use super::Regex;
-use crate::parsing_spec::SubRule;
 use crate::search::SearchString;
 use crate::search::SymbolicChar;
 
@@ -13,8 +12,8 @@ use crate::search::SymbolicChar;
 pub enum SymbolicOutput {
 	Literal(char),
 	Wildcard,
-	StartCapture(Arc<SubRule>),
-	StopCapture(Arc<SubRule>),
+	StartCapture(Arc<str>),
+	StopCapture(Arc<str>),
 }
 
 impl std::fmt::Display for SymbolicOutput {
@@ -30,8 +29,8 @@ impl std::fmt::Display for SymbolicOutput {
 				ch.fmt(fmt)
 			},
 			Self::Wildcard => fmt.write_str("*"),
-			Self::StartCapture(sub_rule) => fmt.write_fmt(format_args!("(?<{}>", sub_rule.fully_qualified_name)),
-			Self::StopCapture(_sub_rule) => fmt.write_str(")"),
+			Self::StartCapture(name) => fmt.write_fmt(format_args!("(?<{name}>")),
+			Self::StopCapture(_name) => fmt.write_str(")"),
 		}
 	}
 }
@@ -121,11 +120,11 @@ impl Regex {
 				.iter()
 				.flat_map(|item| item.derivative_step(input))
 				.collect::<Vec<_>>(),
-			Self::Capture(sub_rule) => {
-				let mut inner: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = sub_rule.regex.derivative_step(input);
-				for (processed, to_process) in inner.iter_mut() {
-					processed.insert(0, SymbolicOutput::StartCapture((**sub_rule).clone()));
-					processed.push(SymbolicOutput::StartCapture((**sub_rule).clone()));
+			Self::Capture(capture) => {
+				let mut inner: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = capture.item.derivative_step(input);
+				for (processed, _to_process) in inner.iter_mut() {
+					processed.insert(0, SymbolicOutput::StartCapture(capture.name.clone()));
+					processed.push(SymbolicOutput::StartCapture(capture.name.clone()));
 				}
 				inner
 			},
@@ -225,8 +224,8 @@ impl Regex {
 	fn is_valid(&self) -> Result<Self, ()> {
 		match self {
 			Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => Ok(self.clone()),
-			Regex::Capture(sub_rule) => {
-				sub_rule.regex.is_valid()?;
+			Regex::Capture(capture) => {
+				capture.item.is_valid()?;
 				Ok(self.clone())
 			},
 			Regex::KleeneClosure(item)

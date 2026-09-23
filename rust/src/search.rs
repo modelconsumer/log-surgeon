@@ -624,7 +624,7 @@ impl<'a> SearchStringView<'a> {
 			return Vec::new();
 		}
 
-		let paths: Vec<Path> = intersection.compute_paths();
+		let paths: Vec<Path> = intersection.compute_paths(_spec);
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -636,9 +636,9 @@ impl<'a> SearchStringView<'a> {
 					PathComponent::Literal(contents) => {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
-					PathComponent::Capture { sub_rule, contents } => {
+					PathComponent::Capture { capture, contents } => {
 						sub_queries.push(SubQuery::new_rule(
-							sub_rule.fully_qualified_name.clone(),
+							capture.fully_qualified_name.clone(),
 							contents.clone(),
 						));
 					},
@@ -732,7 +732,7 @@ impl<'a> SearchStringView<'a> {
 
 		let intersection: Tnfa = nfa.intersect::<true>(&search_nfa);
 
-		let paths: Vec<Path> = intersection.compute_paths();
+		let paths: Vec<Path> = intersection.compute_paths(spec);
 
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
@@ -752,9 +752,8 @@ impl<'a> SearchStringView<'a> {
 
 				let mut implicit_capture: SubQuery = SubQuery::new_rule(rule.name.clone(), contents.clone());
 
-				if let Some(sub_rule) = &rule_info.maybe_sub_rule {
-					assert!(!sub_rule.is_leaf());
-
+				if !rule_info.is_root() {
+					assert!(!rule_info.is_leaf());
 					let mut static_text: SubQuery = SubQuery::new_static_text(contents.clone());
 
 					implicit_capture.surround_with_wildcards();
@@ -780,9 +779,9 @@ impl<'a> SearchStringView<'a> {
 					PathComponent::Literal(contents) => {
 						sub_queries.push(SubQuery::new_static_text(contents.clone()));
 					},
-					PathComponent::Capture { sub_rule, contents } => {
+					PathComponent::Capture { capture, contents } => {
 						sub_queries.push(SubQuery::new_rule(
-							sub_rule.fully_qualified_name.clone(),
+							capture.fully_qualified_name.clone(),
 							contents.clone(),
 						));
 					},

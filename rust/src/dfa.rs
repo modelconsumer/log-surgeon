@@ -34,7 +34,7 @@ use crate::parsing_spec::Encoding;
 use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
-use crate::parsing_spec::SubRule;
+use crate::parsing_spec::RuleInfo;
 use crate::regex::Regex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,7 +208,15 @@ impl Tdfa {
 	};
 
 	pub fn execute(&self, input: &str) -> bool {
-		self.execute_with_captures(input, &mut self.execution_data(), RuleIdx::NIL)
+		let mut current_state: usize = 0;
+		for (_pos, ch) in input.char_indices() {
+			if let Some(transition) = self.lookup_transition(current_state, u32::from(ch)) {
+				current_state = transition.target;
+			} else {
+				return false;
+			}
+		}
+		true
 	}
 
 	/// Used for determining which rule matched.
@@ -263,7 +271,8 @@ impl Tdfa {
 	///
 	/// 1. left-to-right (lexicographically with respect to the input),
 	/// 2. top-down; parent captures first (lexicographically with respect to the regex pattern).
-	pub fn execute_with_captures(&self, input: &str, execution_data: &mut TdfaExecution, rule_idx: RuleIdx) -> bool {
+	pub fn execute_with_captures(&self, input: &str, execution_data: &mut TdfaExecution, rule: &RootRule) -> bool {
+		let rule_idx: RuleIdx = rule.idx;
 		let mut current_state: usize = 0;
 
 		// Err on the side of safety and clear the data here;
@@ -301,17 +310,22 @@ impl Tdfa {
 			&self.states[current_state].tag_for_register,
 		);
 
-		// TODO: explain rev, it's heuristic since we push ends up in reverse?
 		for (open, close) in self
 			.tag_pairs
 			.iter()
 			.copied()
 			.enumerate()
-			.rev()
-			.filter(|&(_open, corresponding)| self.tags[corresponding].is_close)
+			// Skip close tags.
+			.step_by(2)
 		{
-			let sub_rule: &SubRule = &self.tags[open].sub_rule;
-			let maybe_encoding: Option<&Arc<Encoding>> = self.tags[open].maybe_encoding.as_ref();
+			let tag: &CaptureTag = &self.tags[open];
+
+			assert_ne!(tag.capture_id, 0);
+
+			assert!(self.tags[close].is_close);
+			assert_eq!(self.tags[close].capture_id, tag.capture_id);
+
+			let capture: &RuleInfo = &rule[tag.capture_id];
 
 			let mut maybe_open: Option<NonZero<usize>> = registers[self.tags.len() + open];
 			let mut maybe_close: Option<NonZero<usize>> = registers[self.tags.len() + close];
@@ -323,11 +337,12 @@ impl Tdfa {
 				let end: usize = prefix_tree[close_node].lexeme_position;
 				captures.push(MatchedCapture {
 					rule_idx,
-					capture_id: sub_rule.id,
-					maybe_encoding_idx: maybe_encoding.map(|enc| enc.idx),
-					parent_id: sub_rule.parent_id,
+					// `NonZero`; see the corresponding note in `MatchedCapture`.
+					capture_id: NonZero::new(tag.capture_id).unwrap(),
+					maybe_encoding_idx: tag.maybe_encoding_idx,
+					parent_id: NonZero::new(capture.parent_id),
 					parent_index: usize::MAX,
-					is_leaf: sub_rule.is_leaf(),
+					is_leaf: capture.is_leaf(),
 					range: Range { start, end },
 				});
 				maybe_open = prefix_tree[open_node].maybe_predecessor;
@@ -337,12 +352,12 @@ impl Tdfa {
 		captures.sort_unstable_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
 		for i in 0..captures.len() {
 			if let Some(parent_id) = captures[i].parent_id {
-				// Linear search (backwards) since it should usually be small.
+				// Linear scan (backwards) since it should usually be small.
 				for j in (0..i).rev() {
 					if captures[j].capture_id == parent_id
-						&& (captures[j].range.start <= captures[i].range.start)
 						&& (captures[i].range.end <= captures[j].range.end)
 					{
+						assert!(captures[j].range.start <= captures[i].range.start);
 						captures[i].parent_index = 1 + j;
 						break;
 					}
@@ -436,8 +451,9 @@ impl Tdfa {
 		let mut tag_pairs: Vec<usize> = Vec::with_capacity(tags.len());
 		// XXX: use array_chunks when stable.
 		for (i, chunk) in tags.chunks_exact(2).enumerate() {
-			assert_eq!(chunk[0].sub_rule, chunk[1].sub_rule);
-			assert_eq!(chunk[0].maybe_encoding, chunk[1].maybe_encoding);
+			assert_eq!(chunk[0].rule_idx, chunk[1].rule_idx);
+			assert_eq!(chunk[0].capture_id, chunk[1].capture_id);
+			assert_eq!(chunk[0].maybe_encoding_idx, chunk[1].maybe_encoding_idx);
 			tag_pairs.push((i * 2) + 1);
 			tag_pairs.push(i * 2);
 		}
@@ -543,9 +559,9 @@ impl Tdfa {
 		for config in kernel.0.iter() {
 			let nfa_state: &NfaState = &nfa[config.nfa_state];
 			if accepting_rule.is_none()
-				&& let Some(rule) = nfa_state.maybe_accepts_for_rule
+				&& let Some(accepting_data) = nfa_state.maybe_accepting_data
 			{
-				accepting_rule = Some((rule, nfa_state.maybe_encoding.as_ref().map(|e| e.idx)));
+				accepting_rule = Some(accepting_data);
 				final_operations = self.final_operations(&config.register_for_tag, &config.tag_path_in_closure);
 			}
 			for (tag_idx, &register) in config.register_for_tag.iter().enumerate() {

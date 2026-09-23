@@ -170,7 +170,7 @@ impl Charset {
 		match regex {
 			Regex::AnyChar => self.insert_interval(Self::universe()),
 			Regex::Literal(c) => self.insert(*c),
-			Regex::Capture(sub_rule) => self.add_regex(&sub_rule.regex),
+			Regex::Capture(capture) => self.add_regex(&capture.item),
 			Regex::BracketedRanges { negated, items } => {
 				let mut intervals: Vec<Interval<u32>> = items
 					.iter()

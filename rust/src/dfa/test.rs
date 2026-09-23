@@ -17,10 +17,11 @@ fn bracketed_expression_with_overlapping_range() {
 
 #[test]
 fn submatch_precedence() {
-	let dfa: Tdfa = for_pattern("(?<foo>a|aa)(?<bar>a|aa)");
+	let rule: RootRule = for_rule("(?<foo>a|aa)(?<bar>a|aa)");
+	let dfa: &Tdfa = &rule.dfa;
 	let mut data: TdfaExecution = dfa.execution_data();
 
-	let b: bool = dfa.execute_with_captures("aaa", &mut data, RuleIdx::NIL);
+	let b: bool = dfa.execute_with_captures("aaa", &mut data, &rule);
 	assert!(b);
 
 	assert_eq!(data.captures.len(), 2);
@@ -139,16 +140,16 @@ fn ip_address_like_pattern() {
 
 #[test]
 fn captures_in_sequence() {
-	let dfa: Tdfa = for_pattern("(?<a>x)(?<b>y)");
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, "xy");
+	let rule: RootRule = for_rule("(?<a>x)(?<b>y)");
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, "xy");
 
 	assert_eq!(captures, vec![(1, 0, 1), (2, 1, 2)]);
 }
 
 #[test]
 fn captures_of_leaf_values() {
-	let dfa: Tdfa = for_pattern(r"(?<num>\d+)\.(?<frac>\d+)");
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, "12.345");
+	let rule: RootRule = for_rule(r"(?<num>\d+)\.(?<frac>\d+)");
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, "12.345");
 
 	assert_eq!(captures, vec![(1, 0, 2), (2, 3, 6)]);
 }
@@ -156,12 +157,12 @@ fn captures_of_leaf_values() {
 /// Repeated captures are reported once per iteration, left to right.
 #[test]
 fn repeated_capture_reports_each_iteration() {
-	let dfa: Tdfa = for_pattern("(?<a>x)+");
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, "xxx");
+	let rule: RootRule = for_rule("(?<a>x)+");
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, "xxx");
 
 	assert_eq!(captures, vec![(1, 0, 1), (1, 1, 2), (1, 2, 3)]);
 
-	let bounded: Tdfa = for_pattern("(?<a>b){2,3}");
+	let bounded: RootRule = for_rule("(?<a>b){2,3}");
 	assert_eq!(captures_of(&bounded, "bb"), vec![(1, 0, 1), (1, 1, 2)]);
 	assert_eq!(captures_of(&bounded, "bbb"), vec![(1, 0, 1), (1, 1, 2), (1, 2, 3)]);
 }
@@ -169,10 +170,11 @@ fn repeated_capture_reports_each_iteration() {
 /// Captures are sorted left to right, then parent before child.
 #[test]
 fn nested_captures() {
-	let dfa: Tdfa = for_pattern("(?<outer>a(?<inner>b)c)");
+	let rule: RootRule = for_rule("(?<outer>a(?<inner>b)c)");
+	let dfa: &Tdfa = &rule.dfa;
 	let mut data: TdfaExecution = dfa.execution_data();
 
-	assert!(dfa.execute_with_captures("abc", &mut data, RuleIdx::NIL));
+	assert!(dfa.execute_with_captures("abc", &mut data, &rule));
 	assert_eq!(data.captures.len(), 2);
 
 	let outer: &MatchedCapture = &data.captures[0];
@@ -193,13 +195,13 @@ fn nested_captures() {
 
 #[test]
 fn nested_repeated_captures() {
-	let dfa: Tdfa = for_pattern("(?<a>(?<b>x)+)");
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, "xxx");
+	let rule: RootRule = for_rule("(?<a>(?<b>x)+)");
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, "xxx");
 
 	assert_eq!(captures, vec![(1, 0, 3), (2, 0, 1), (2, 1, 2), (2, 2, 3)]);
 
-	let mut data: TdfaExecution = dfa.execution_data();
-	assert!(dfa.execute_with_captures("xxx", &mut data, RuleIdx::NIL));
+	let mut data: TdfaExecution = rule.dfa.execution_data();
+	assert!(rule.dfa.execute_with_captures("xxx", &mut data, &rule));
 	// All inner captures point at the single outer capture.
 	assert_eq!(
 		Vec::from_iter(data.captures.iter().map(|cap| cap.parent_index)),
@@ -210,8 +212,8 @@ fn nested_repeated_captures() {
 /// Each alternative gets a distinct capture ID, even with the same name.
 #[test]
 fn alternation_captures_have_distinct_ids() {
-	let dfa: Tdfa = for_pattern("(?<a>(?<b>x)|(?<c>y))+");
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, "xyx");
+	let rule: RootRule = for_rule("(?<a>(?<b>x)|(?<c>y))+");
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, "xyx");
 
 	assert_eq!(
 		captures,
@@ -222,8 +224,8 @@ fn alternation_captures_have_distinct_ids() {
 /// Repetition operators are greedy; the first capture takes as much as it can.
 #[test]
 fn greedy_repetition_captures() {
-	let dfa: Tdfa = for_pattern("(?<a>a+)(?<b>a+)");
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, "aaaa");
+	let rule: RootRule = for_rule("(?<a>a+)(?<b>a+)");
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, "aaaa");
 
 	assert_eq!(captures, vec![(1, 0, 3), (2, 3, 4)]);
 }
@@ -231,11 +233,11 @@ fn greedy_repetition_captures() {
 /// A capture that doesn't participate in the match isn't reported.
 #[test]
 fn skipped_capture_is_not_reported() {
-	let optional: Tdfa = for_pattern("a(?<a>b)?c");
+	let optional: RootRule = for_rule("a(?<a>b)?c");
 	assert_eq!(captures_of(&optional, "ac"), vec![]);
 	assert_eq!(captures_of(&optional, "abc"), vec![(1, 1, 2)]);
 
-	let kleene: Tdfa = for_pattern("x(?<a>y)*z");
+	let kleene: RootRule = for_rule("x(?<a>y)*z");
 	assert_eq!(captures_of(&kleene, "xz"), vec![]);
 	assert_eq!(captures_of(&kleene, "xyyz"), vec![(1, 1, 2), (1, 2, 3)]);
 }
@@ -243,9 +245,9 @@ fn skipped_capture_is_not_reported() {
 /// Capture ranges are byte offsets into the input.
 #[test]
 fn capture_ranges_are_byte_offsets() {
-	let dfa: Tdfa = for_pattern("(?<a>.)(?<b>.)");
+	let rule: RootRule = for_rule("(?<a>.)(?<b>.)");
 	let input: &str = "\u{e9}b";
-	let captures: Vec<(u16, usize, usize)> = captures_of(&dfa, input);
+	let captures: Vec<(u16, usize, usize)> = captures_of(&rule, input);
 
 	assert_eq!(captures, vec![(1, 0, 2), (2, 2, 3)]);
 	assert_eq!(&input[0..2], "\u{e9}");
@@ -253,17 +255,18 @@ fn capture_ranges_are_byte_offsets() {
 
 #[test]
 fn execution_data_is_reusable() {
-	let dfa: Tdfa = for_pattern(r"(?<a>\d+)-(?<b>\d+)");
+	let rule: RootRule = for_rule(r"(?<a>\d+)-(?<b>\d+)");
+	let dfa: &Tdfa = &rule.dfa;
 	let mut data: TdfaExecution = dfa.execution_data();
 
-	assert!(dfa.execute_with_captures("12-34", &mut data, RuleIdx::NIL));
+	assert!(dfa.execute_with_captures("12-34", &mut data, &rule));
 	let first: Vec<(usize, usize)> = Vec::from_iter(data.captures.iter().map(|c| (c.range.start, c.range.end)));
 
 	// A failed execution shouldn't leave stale captures behind.
-	assert!(!dfa.execute_with_captures("12+34", &mut data, RuleIdx::NIL));
+	assert!(!dfa.execute_with_captures("12+34", &mut data, &rule));
 	assert_eq!(data.captures, vec![]);
 
-	assert!(dfa.execute_with_captures("12-34", &mut data, RuleIdx::NIL));
+	assert!(dfa.execute_with_captures("12-34", &mut data, &rule));
 	let second: Vec<(usize, usize)> = Vec::from_iter(data.captures.iter().map(|c| (c.range.start, c.range.end)));
 
 	assert_eq!(first, second);
@@ -272,10 +275,11 @@ fn execution_data_is_reusable() {
 #[test]
 fn captures_carry_rule_idx() {
 	let rule_idx: RuleIdx = RuleIdx::new(NonZero::new(7).unwrap());
-	let dfa: Tdfa = for_pattern("(?<a>x)");
+	let rule: RootRule = for_rule_with_idx(rule_idx, "(?<a>x)");
+	let dfa: &Tdfa = &rule.dfa;
 	let mut data: TdfaExecution = dfa.execution_data();
 
-	assert!(dfa.execute_with_captures("x", &mut data, rule_idx));
+	assert!(dfa.execute_with_captures("x", &mut data, &rule));
 	assert_eq!(data.captures.len(), 1);
 	assert_eq!(data.captures[0].rule_idx, rule_idx);
 }
@@ -294,21 +298,30 @@ fn full_match(dfa: &Tdfa, input: &str) -> bool {
 }
 
 /// We need to go through [`AnchoredRegex::from_pattern_with_placeholders`]
-/// which assigns [`SubRule`] IDs.
+/// which assigns capture IDs.
+#[track_caller]
+fn for_rule(pattern: &str) -> RootRule {
+	for_rule_with_idx(RuleIdx::NIL, pattern)
+}
+
+#[track_caller]
+fn for_rule_with_idx(rule_idx: RuleIdx, pattern: &str) -> RootRule {
+	let anchored: AnchoredRegex =
+		AnchoredRegex::from_pattern_with_placeholders(pattern, "test".into(), &mut ()).unwrap();
+	RootRule::new(rule_idx, "test".into(), 0, anchored, &[])
+}
+
 #[track_caller]
 fn for_pattern(pattern: &str) -> Tdfa {
-	let regex: Regex = AnchoredRegex::from_pattern_with_placeholders(pattern, &mut ())
-		.unwrap()
-		.regex;
-	Tdfa::for_single_rule(RuleIdx::NIL, &regex, &[])
+	for_rule(pattern).dfa
 }
 
 /// Returns captures as `(capture ID, start, end)` triples.
 /// Panics if no match.
 #[track_caller]
-fn captures_of(dfa: &Tdfa, input: &str) -> Vec<(u16, usize, usize)> {
-	let mut data: TdfaExecution = dfa.execution_data();
-	assert!(dfa.execute_with_captures(input, &mut data, RuleIdx::NIL));
+fn captures_of(rule: &RootRule, input: &str) -> Vec<(u16, usize, usize)> {
+	let mut data: TdfaExecution = rule.dfa.execution_data();
+	assert!(rule.dfa.execute_with_captures(input, &mut data, rule));
 	Vec::from_iter(
 		data.captures
 			.iter()

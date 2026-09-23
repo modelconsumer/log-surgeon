@@ -218,11 +218,7 @@ impl Parser {
 			mat.ffi_pointers.lexeme = UncheckedCArray::new(&self.current_log.message[mat.range.start..mat.range.end]);
 
 			let rule_info: &RuleInfo = &self.spec[mat.rule_idx][mat.sub_rule_id];
-			mat.ffi_pointers.rule_name = UncheckedCArray::new(if let Some(sub_rule) = &rule_info.maybe_sub_rule {
-				&sub_rule.name
-			} else {
-				&rule_info.root_name
-			});
+			mat.ffi_pointers.rule_name = UncheckedCArray::new(&rule_info.name);
 			mat.ffi_pointers.fully_qualified_name = UncheckedCArray::new(&rule_info.fully_qualified_name);
 		}
 

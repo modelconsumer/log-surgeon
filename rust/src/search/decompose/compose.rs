@@ -152,8 +152,8 @@ impl Composition {
 				// A name can resolve to several rules, but they occupy the same position, so emitting more
 				// than one would duplicate the slot and break the positional correspondence.
 				ShapePart::Placeholder(placeholder) => {
-					if let Some(sub_rule) = placeholder.alternatives.first() {
-						sub_queries.push(SubQuery::new_rule(sub_rule.fully_qualified_name.clone(), part.value));
+					if let Some(capture) = placeholder.alternatives.first() {
+						sub_queries.push(SubQuery::new_rule(capture.fully_qualified_name.clone(), part.value));
 					}
 				},
 				ShapePart::Static(_) => sub_queries.push(SubQuery::new_static_text(part.value)),

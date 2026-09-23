@@ -60,9 +60,9 @@ fn rendered(outcome: &Outcome) -> Vec<String> {
 				.iter()
 				.map(|fragment| match fragment {
 					Fragment::Static(contents) => contents.iter().map(ToString::to_string).collect::<String>(),
-					Fragment::Capture { sub_rule, contents } => format!(
+					Fragment::Capture { capture, contents } => format!(
 						"{}{{{}}}",
-						sub_rule.fully_qualified_name,
+						capture.fully_qualified_name,
 						contents.iter().map(ToString::to_string).collect::<String>()
 					),
 				})

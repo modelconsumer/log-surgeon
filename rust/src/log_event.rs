@@ -38,9 +38,9 @@ pub struct LogEvent<'parser> {
 #[repr(C)]
 pub struct Match {
 	pub rule_idx: RuleIdx,
-	/// SubRule ID, local to the containing rule/variable/regex pattern;
+	/// Capture ID, local to the containing rule/variable/regex pattern;
 	/// `None`/`0` for a root rule,
-	/// See [`SubRule`](crate::parsing_spec::SubRule).
+	/// See [`RuleInfo`](crate::parsing_spec::RuleInfo).
 	pub sub_rule_id: Option<NonZero<u16>>,
 
 	/// Index of the parent in the full list of matches (including variables/root rules).

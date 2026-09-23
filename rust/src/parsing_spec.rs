@@ -8,16 +8,18 @@ use std::sync::Arc;
 
 pub use encoding::Encoding;
 pub use encoding::EncodingIdx;
+pub use rule::CaptureRef;
+pub use rule::ResolvedCapture;
 pub use rule::RootRule;
 pub use rule::RuleIdx;
 pub use rule::RuleInfo;
-pub use rule::SubRule;
 
 use crate::dfa::CompressedDfa;
 use crate::dfa::Tdfa;
 use crate::nfa::Tnfa;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
+use crate::regex::RegexError;
 use crate::regex::RegexPlaceholderLookup;
 
 #[derive(Debug, Clone)]
@@ -108,16 +110,11 @@ impl ParsingSpecBuilder {
 	///
 	/// - `"delimiters"`
 	///
-	pub fn add_rule<LikeString, RegexOrPattern>(
-		&mut self,
-		name: LikeString,
-		regex: RegexOrPattern,
-	) -> Result<&mut Self, RegexOrPattern::Error>
+	pub fn add_rule<LikeString>(&mut self, name: LikeString, pattern: &str) -> Result<&mut Self, RegexError>
 	where
 		LikeString: Into<Arc<str>>,
-		RegexOrPattern: TryInto<AnchoredRegex>,
 	{
-		self.add_rule_with_priority(0, name, regex)
+		self.add_rule_with_priority(0, name, pattern)
 	}
 
 	/// Adds a rule with the given priority; larger integer value has higher priority.
@@ -127,32 +124,38 @@ impl ParsingSpecBuilder {
 	///
 	/// - `"delimiters"`
 	///
-	pub fn add_rule_with_priority<LikeString, RegexOrPattern>(
+	pub fn add_rule_with_priority<LikeString>(
 		&mut self,
 		priority: i32,
 		name: LikeString,
-		regex: RegexOrPattern,
-	) -> Result<&mut Self, RegexOrPattern::Error>
+		pattern: &str,
+	) -> Result<&mut Self, RegexError>
 	where
 		LikeString: Into<Arc<str>>,
-		RegexOrPattern: TryInto<AnchoredRegex>,
 	{
 		let name: Arc<str> = name.into();
 		assert!(!name.is_empty());
 		assert_ne!(&*name, "delimiters");
 
-		let mut regex: AnchoredRegex = regex.try_into()?;
-		regex.regex.for_each_capture_mut(&mut |sub_rule| {
-			sub_rule.fully_qualified_name = Arc::from(format!("{}{}", name, sub_rule.qualified_name));
-			Ok::<(), std::convert::Infallible>(())
-		});
+		let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(pattern, name.clone(), self)?;
+		Ok(self.add_rule_parsed(priority, name, regex))
+	}
+
+	/// Adds an already-parsed rule; see [`ParsingSpecBuilder::add_rule_with_priority`].
+	pub fn add_rule_parsed<LikeString>(&mut self, priority: i32, name: LikeString, regex: AnchoredRegex) -> &mut Self
+	where
+		LikeString: Into<Arc<str>>,
+	{
+		let name: Arc<str> = name.into();
+		assert!(!name.is_empty());
+		assert_ne!(&*name, "delimiters");
 
 		let rules: &mut Vec<(Arc<str>, AnchoredRegex)> =
 			self.rules_by_priority.entry(priority).or_insert_with(Vec::new);
 
 		rules.push((name, regex));
 
-		Ok(self)
+		self
 	}
 
 	/// Panics if `name` is empty or one of the reserved words:
@@ -296,7 +299,12 @@ impl ParsingSpec {
 				if &*root_rule.name != rule_name {
 					continue;
 				}
-				root_rule.find_capture(&root_rule.regex.regex, first, &capture_names[1..], &mut possibilities);
+				root_rule.find_capture(
+					root_rule.regex.root_item(),
+					first,
+					&capture_names[1..],
+					&mut possibilities,
+				);
 			}
 			possibilities
 		} else {
@@ -347,27 +355,7 @@ impl ParsingSpec {
 
 					let branches: Tnfa = rules
 						.iter()
-						.map(|&(info, regex)| {
-							let regex: &Regex = if info.is_root() && !self[info.root_idx].has_captures() {
-								&Regex::Capture(
-									Arc::new(SubRule {
-										name: info.root_name.clone(),
-										regex: regex.clone(),
-										root_rule_idx: info.root_idx,
-										// TODO
-										id: NonZero::<u16>::MAX,
-										parent_id: None,
-										descendants: 0,
-										qualified_name: info.root_name.clone(),
-										fully_qualified_name: info.root_name.clone(),
-									})
-									.into(),
-								)
-							} else {
-								regex
-							};
-							Tnfa::for_single_rule(info.root_idx, regex, &[])
-						})
+						.map(|&(info, regex)| Tnfa::for_single_rule(info.root_idx, regex, &[]))
 						.fold(Tnfa::BLANK, |accum, x| accum.or(&x));
 					sequence.push(branches);
 				},
@@ -443,6 +431,22 @@ impl std::ops::Index<RuleIdx> for ParsingSpec {
 
 	fn index(&self, idx: RuleIdx) -> &Self::Output {
 		&self.rules[usize::from(u16::from(idx)) - 1]
+	}
+}
+
+impl ParsingSpec {
+	/// The root rule for `idx`, or `None` if `idx` is out of range
+	/// (e.g. [`RuleIdx::NIL`], used for search/encoding automata).
+	pub fn maybe_root_rule(&self, idx: RuleIdx) -> Option<&RootRule> {
+		let i: usize = usize::from(u16::from(idx)).checked_sub(1)?;
+		self.rules.get(i)
+	}
+
+	/// Resolve a [`CaptureRef`] (whose tag carried its root rule) against this spec.
+	pub fn resolve_capture(&self, capture: CaptureRef) -> Option<(&RuleInfo, Arc<str>)> {
+		let rule: &RootRule = self.maybe_root_rule(capture.rule_idx)?;
+		let info: &RuleInfo = rule.rule_info.get(usize::from(capture.capture_id))?;
+		Some((info, info.fully_qualified_name.clone()))
 	}
 }
 

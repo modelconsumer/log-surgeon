@@ -11,7 +11,7 @@ use crate::nfa::Transitions;
 use crate::parsing_spec::Encoding;
 use crate::parsing_spec::RootRule;
 use crate::parsing_spec::RuleIdx;
-use crate::parsing_spec::SubRule;
+use crate::regex::Capture;
 use crate::regex::Regex;
 
 impl Tnfa {
@@ -24,7 +24,7 @@ impl Tnfa {
 		let rule_end: NfaIdx = nfa.new_state("end");
 
 		let tags: BTreeSet<CaptureTag> = nfa.build_regex_nfa(rule_idx, regex, encodings, rule_start, rule_end);
-		nfa[rule_end].maybe_accepts_for_rule = Some(rule_idx);
+		nfa[rule_end].maybe_accepting_data = Some((rule_idx, None));
 
 		nfa.tags = tags;
 
@@ -61,7 +61,8 @@ impl Tnfa {
 
 			if !rule.has_captures() {
 				for enc in encodings.iter() {
-					let leaf_nfa: Tnfa = Tnfa::for_regex(&rule.regex.regex);
+					// Intersect the plain expression; `splice` cannot copy tagged transitions.
+					let leaf_nfa: Tnfa = Tnfa::for_regex(rule.regex.root_item());
 					let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
 
 					if !intersection.can_accept() {
@@ -84,8 +85,7 @@ impl Tnfa {
 					nfa[encoded_rule_end_pre_anchor].transitions =
 						lookaround_transitions(rule.regex.anchor_after, delimiters, encoded_rule_end_post_anchor);
 
-					nfa[encoded_rule_end_post_anchor].maybe_accepts_for_rule = Some(rule.idx);
-					nfa[encoded_rule_end_post_anchor].maybe_encoding = Some(enc.clone());
+					nfa[encoded_rule_end_post_anchor].maybe_accepting_data = Some((rule.idx, Some(enc.idx)));
 				}
 			}
 
@@ -110,8 +110,7 @@ impl Tnfa {
 			nfa[unencoded_rule_end_pre_anchor].transitions =
 				lookaround_transitions(rule.regex.anchor_after, delimiters, unencoded_rule_end_post_anchor);
 
-			nfa[unencoded_rule_end_post_anchor].maybe_accepts_for_rule = Some(rule.idx);
-			nfa[unencoded_rule_end_post_anchor].maybe_encoding = None;
+			nfa[unencoded_rule_end_post_anchor].maybe_accepting_data = Some((rule.idx, None));
 		}
 
 		nfa[NfaIdx::BEGIN].transitions = Transitions::Spontaneous(anchored_rule_starts);
@@ -123,7 +122,7 @@ impl Tnfa {
 
 	/// Build the sub-TNFA for `regex` from `current` to `target` state.
 	/// `rule_idx` is used to track the containing root rule,
-	/// since regex capture [`SubRule`]s are agnostic to the external parsing specification.
+	/// since regex capture IDs are local to their root rule.
 	///
 	/// This follows standard regex to NFA construction,
 	/// augmented with tags as per the TDFA paper.
@@ -159,7 +158,7 @@ impl Tnfa {
 				))));
 				BTreeSet::new()
 			},
-			Regex::Capture(sub_rule) => self.capture(rule_idx, sub_rule, encodings, current, target),
+			Regex::Capture(capture) => self.capture(rule_idx, capture, encodings, current, target),
 			Regex::BracketedRanges { negated, items } => {
 				let intervals: Vec<Interval<u32>> = if *negated {
 					let mut intervals: Vec<Interval<u32>> = Vec::with_capacity(items.len());
@@ -267,10 +266,14 @@ impl Tnfa {
 	}
 
 	/// Build the sub-TNFA for a regex capture expression.
+	///
+	/// The root capture is never split by encoding here: for a capture-less root rule,
+	/// [`Tnfa::for_rules`] already splits the rule by encodings at its accepting states,
+	/// which is where the lexer reads them from.
 	fn capture(
 		&mut self,
 		rule: RuleIdx,
-		sub_rule: &Arc<SubRule>,
+		capture: &Capture,
 		encodings: &[Arc<Encoding>],
 		current: NfaIdx,
 		target: NfaIdx,
@@ -280,10 +283,10 @@ impl Tnfa {
 		let mut encoding_variants: Vec<NfaIdx> = Vec::new();
 		let mut intermediate_states: Vec<(NfaIdx, Vec<CaptureTag>)> = Vec::new();
 
-		let description: String = format!("capture '{}'", sub_rule.qualified_name.escape_default());
+		let description: String = format!("capture '{}'", capture.name.escape_default());
 
-		if sub_rule.is_leaf() {
-			let leaf_nfa: Self = Self::for_regex(&sub_rule.regex);
+		if capture.is_leaf() && !capture.is_a_root() {
+			let leaf_nfa: Self = Self::for_regex(&capture.item);
 
 			for enc in encodings.iter() {
 				let intersection: Tnfa = leaf_nfa.intersect::<false>(&enc.nfa);
@@ -301,17 +304,17 @@ impl Tnfa {
 
 				let start_tag: CaptureTag = CaptureTag {
 					rule_idx: rule,
-					sub_rule: sub_rule.clone(),
-					maybe_encoding: Some(enc.clone()),
+					capture_id: capture.id,
+					maybe_encoding_idx: Some(enc.idx),
 					is_close: false,
 				};
 				let end_tag = CaptureTag {
 					is_close: true,
-					..start_tag.clone()
+					..start_tag
 				};
 
 				self[start_outside_capture].transitions = Transitions::Tagged {
-					tag: start_tag.clone(),
+					tag: start_tag,
 					positive: true,
 					target: start_inside_capture,
 				};
@@ -319,13 +322,13 @@ impl Tnfa {
 				self.splice(&intersection, start_inside_capture, end_inside_capture);
 
 				self[end_inside_capture].transitions = Transitions::Tagged {
-					tag: end_tag.clone(),
+					tag: end_tag,
 					positive: true,
 					target: end_outside_capture,
 				};
 
 				encoding_variants.push(start_outside_capture);
-				intermediate_states.push((end_outside_capture, vec![start_tag.clone(), end_tag.clone()]));
+				intermediate_states.push((end_outside_capture, vec![start_tag, end_tag]));
 
 				tags.insert(start_tag);
 				tags.insert(end_tag);
@@ -343,39 +346,34 @@ impl Tnfa {
 
 			let start_tag: CaptureTag = CaptureTag {
 				rule_idx: rule,
-				sub_rule: sub_rule.clone(),
-				maybe_encoding: None,
+				capture_id: capture.id,
+				maybe_encoding_idx: None,
 				is_close: false,
 			};
 			let end_tag = CaptureTag {
 				is_close: true,
-				..start_tag.clone()
+				..start_tag
 			};
 
 			self[start_outside_capture].transitions = Transitions::Tagged {
-				tag: start_tag.clone(),
+				tag: start_tag,
 				positive: true,
 				target: start_inside_capture,
 			};
 
-			let inner_tags: BTreeSet<CaptureTag> = self.build_regex_nfa(
-				rule,
-				&sub_rule.regex,
-				encodings,
-				start_inside_capture,
-				end_inside_capture,
-			);
+			let inner_tags: BTreeSet<CaptureTag> =
+				self.build_regex_nfa(rule, &capture.item, encodings, start_inside_capture, end_inside_capture);
 
 			tags = &tags | &inner_tags;
 
 			self[end_inside_capture].transitions = Transitions::Tagged {
-				tag: end_tag.clone(),
+				tag: end_tag,
 				positive: true,
 				target: end_outside_capture,
 			};
 
 			encoding_variants.push(start_outside_capture);
-			intermediate_states.push((end_outside_capture, vec![start_tag.clone(), end_tag.clone()]));
+			intermediate_states.push((end_outside_capture, vec![start_tag, end_tag]));
 
 			tags.insert(start_tag);
 			tags.insert(end_tag);

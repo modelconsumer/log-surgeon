@@ -75,10 +75,11 @@ impl Tnfa {
 					let src_scc: usize = tarjan.vertices[state.idx.0].scc;
 					let dst_scc: usize = tarjan.vertices[target.0].scc;
 					let colour: &str = if src_scc == dst_scc { " [color=\"red\"]" } else { "" };
+					let location: String = format!("rule {} capture {}", tag.rule_idx, tag.capture_id);
 					let mut capture: String = if !tag.is_close {
-						format!("start({})", tag.sub_rule.qualified_name)
+						format!("start({location})")
 					} else {
-						format!("stop({})", tag.sub_rule.qualified_name)
+						format!("stop({location})")
 					};
 					if !positive {
 						capture = format!("-{capture}");

@@ -1,14 +1,11 @@
 mod derivative_decomposition;
 mod pattern_parsing;
 
-use std::num::NonZero;
 use std::sync::Arc;
 
 use nom::error::ErrorKind as NomErrorKind;
 pub use pattern_parsing::RegexPlaceholderLookup;
 
-use crate::parsing_spec::SubRule;
-use crate::utils::DeepClone;
 use crate::utils::Escaped;
 
 /// Meta-characters that must be escaped, aside from inside bracketed ranges.
@@ -21,10 +18,11 @@ const SPECIAL_CHARACTERS_IN_BRACKETED_RANGES: &str = r"\[]";
 pub struct AnchoredRegex {
 	pub anchor_before: bool,
 	pub anchor_after: bool,
+	/// The regex, whose top-level item is an implicit [`Regex::Capture`] of the entire regex.
 	pub regex: Regex,
-	/// Total "captures" in the regex - total [`Regex::Capture`]s **plus 1**
-	/// for the implicit capture of the entire regex.
-	pub total_captures: NonZero<u16>,
+	/// Metadata for each [`Regex::Capture`], indexed by [`Capture::id`].
+	/// The first entry (id `0`) is the implicit root capture of the entire regex.
+	pub captures: Vec<CaptureInfo>,
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -33,10 +31,7 @@ pub enum Regex {
 	/// Any character, including newline.
 	AnyChar,
 	Literal(char),
-	/// If a placeholder contains a regex capture/[`SubRule`],
-	/// each substitution of the placeholder should be a unique sub-rule.
-	/// In other words, we must deep clone the regex of the placeholder when substituting.
-	Capture(DeepClone<Arc<SubRule>>),
+	Capture(Capture),
 	BracketedRanges {
 		negated: bool,
 		items: Vec<(char, char)>,
@@ -64,6 +59,57 @@ pub enum Regex {
 		name: Arc<str>,
 		item: Box<Regex>,
 	},
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct Capture {
+	pub name: Arc<str>,
+	pub item: Box<Regex>,
+
+	/// ID statically assigned left-to-right (pre-order) based on the regex pattern.
+	/// Indexes into [`AnchoredRegex::captures`] (and, later, `RootRule::rule_info`).
+	pub id: u16,
+}
+
+impl Capture {
+	pub fn new(name: Arc<str>, item: Box<Regex>) -> Self {
+		Self { name, item, id: 0 }
+	}
+
+	pub fn is_a_root(&self) -> bool {
+		self.id == 0
+	}
+
+	/// Whether this capture contains no nested captures; see [`Regex::contains_capture`].
+	pub fn is_leaf(&self) -> bool {
+		!self.item.contains_capture()
+	}
+}
+
+/// Per-[`Capture`] metadata, computed once the whole pattern is known;
+/// see [`AnchoredRegex::captures`].
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CaptureInfo {
+	pub name: Arc<str>,
+	pub id: u16,
+	/// ID of the parent capture; `0` for the root capture (which is its own parent).
+	pub parent_id: u16,
+	/// Total number of nested captures (recursively/arbitrarily deep);
+	/// `0` iff this is a "leaf" capture.
+	pub descendants: u16,
+	/// Qualified name w.r.t captures including the leading dot;
+	/// a top-level capture is ".a", a second-level capture is ".a.b".
+	pub qualified_name: Arc<str>,
+}
+
+impl CaptureInfo {
+	pub fn is_root(&self) -> bool {
+		self.id == self.parent_id
+	}
+
+	pub fn is_leaf(&self) -> bool {
+		self.descendants == 0
+	}
 }
 
 impl std::fmt::Debug for Regex {
@@ -147,14 +193,6 @@ impl std::fmt::Display for Regex {
 	}
 }
 
-impl TryFrom<&str> for AnchoredRegex {
-	type Error = RegexError;
-
-	fn try_from(pattern: &str) -> Result<Self, Self::Error> {
-		AnchoredRegex::from_pattern_with_placeholders(pattern, &mut ())
-	}
-}
-
 impl From<AnchoredRegex> for String {
 	fn from(regex: AnchoredRegex) -> Self {
 		regex.to_pattern()
@@ -162,8 +200,19 @@ impl From<AnchoredRegex> for String {
 }
 
 impl AnchoredRegex {
+	/// The underlying expression, without the implicit root capture;
+	/// see [`AnchoredRegex::regex`].
+	pub fn root_item(&self) -> &Regex {
+		match &self.regex {
+			Regex::Capture(capture) => &capture.item,
+			regex => regex,
+		}
+	}
+
+	/// The pattern of the underlying regex, without the implicit root capture;
+	/// see [`AnchoredRegex::regex`].
 	pub fn to_pattern(&self) -> String {
-		let pattern: String = self.regex.to_pattern();
+		let pattern: String = self.root_item().to_pattern();
 		let anchor_before: &str = if self.anchor_before { "^" } else { "" };
 		let anchor_after: &str = if self.anchor_after { "$" } else { "" };
 
@@ -250,8 +299,8 @@ impl Regex {
 				});
 				format!("[{negation}{serialized}]")
 			},
-			Self::Capture(sub_rule) => {
-				format!("(?<{}>{})", sub_rule.name, sub_rule.regex.to_pattern_internal())
+			Self::Capture(capture) => {
+				format!("(?<{}>{})", capture.name, capture.item.to_pattern_internal())
 			},
 			Self::Placeholder { name, .. } => {
 				format!("(?<{}>)", name)
@@ -325,6 +374,19 @@ impl Regex {
 		Self::Sequence(vec![self.clone(), Self::KleeneClosure(Box::new(self.clone()))])
 	}
 
+	/// Whether this regex contains any [`Regex::Capture`] anywhere in its subtree.
+	pub fn contains_capture(&self) -> bool {
+		match self {
+			Self::AnyChar | Self::Literal(_) | Self::BracketedRanges { .. } => false,
+			Self::Capture(_) => true,
+			Self::KleeneClosure(item)
+			| Self::KleenePlus(item)
+			| Self::BoundedRepetition { item, .. }
+			| Self::Placeholder { item, .. } => item.contains_capture(),
+			Self::Sequence(items) | Self::Alternation(items) => items.iter().any(Self::contains_capture),
+		}
+	}
+
 	/// Whether this regex accepts an empty string;
 	/// if so, return the first (minimal) child that is nullable,
 	/// for diagnostics/reporting.
@@ -346,7 +408,7 @@ impl Regex {
 	pub fn is_nullable(&self) -> Option<&Self> {
 		match self {
 			Self::AnyChar | Self::Literal(_) | Self::BracketedRanges { .. } => None,
-			Self::Capture(sub_rule) => sub_rule.regex.is_nullable(),
+			Self::Capture(capture) => capture.item.is_nullable(),
 			Self::KleeneClosure(item) => Some(item.is_nullable().unwrap_or(self)),
 			Self::KleenePlus(item) => item.is_nullable(),
 			Self::BoundedRepetition { min, item, .. } => {
@@ -373,35 +435,6 @@ impl Regex {
 				None
 			},
 		}
-	}
-}
-
-impl Regex {
-	// Post-order DFS; visit children first.
-	pub fn for_each_capture_mut<E, F>(&mut self, func: &mut F) -> Result<(), E>
-	where
-		F: FnMut(&mut SubRule) -> Result<(), E>,
-	{
-		match self {
-			Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
-			Regex::Capture(sub_rule) => {
-				let sub_rule: &mut SubRule = Arc::get_mut(sub_rule).unwrap();
-				sub_rule.regex.for_each_capture_mut(func)?;
-				func(sub_rule)?;
-			},
-			Regex::KleeneClosure(item)
-			| Regex::KleenePlus(item)
-			| Regex::BoundedRepetition { item, .. }
-			| Regex::Placeholder { item, .. } => {
-				item.for_each_capture_mut(func)?;
-			},
-			Regex::Sequence(items) | Regex::Alternation(items) => {
-				for child in items.iter_mut() {
-					child.for_each_capture_mut(func)?;
-				}
-			},
-		}
-		Ok(())
 	}
 }
 

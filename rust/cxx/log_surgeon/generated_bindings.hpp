@@ -86,9 +86,9 @@ struct MatchFfiPointers {
 /// `Match`es are exposed to FFI, so they need to be `#[repr(C)]`.
 struct Match {
     RuleIdx rule_idx;
-    /// SubRule ID, local to the containing rule/variable/regex pattern;
+    /// Capture ID, local to the containing rule/variable/regex pattern;
     /// `None`/`0` for a root rule,
-    /// See [`SubRule`](crate::parsing_spec::SubRule).
+    /// See [`RuleInfo`](crate::parsing_spec::RuleInfo).
     uint16_t sub_rule_id;
     /// Index of the parent in the full list of matches (including variables/root rules).
     /// For a variable, the parent index equals its own index.

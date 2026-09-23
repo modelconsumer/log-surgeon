@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
 
@@ -8,8 +7,10 @@ use crate::nfa::NfaIdx;
 use crate::nfa::NfaState;
 use crate::nfa::Tnfa;
 use crate::nfa::Transitions;
+use crate::parsing_spec::CaptureRef;
+use crate::parsing_spec::ParsingSpec;
+use crate::parsing_spec::ResolvedCapture;
 use crate::parsing_spec::RuleIdx;
-use crate::parsing_spec::SubRule;
 use crate::search::SymbolicChar;
 
 const PATH_TIMEOUT_MILLIS: u128 = 2 * 1000;
@@ -24,7 +25,7 @@ pub struct Path {
 pub enum PathComponent {
 	Literal(Vec<SymbolicChar>),
 	Capture {
-		sub_rule: Arc<SubRule>,
+		capture: ResolvedCapture,
 		contents: Vec<SymbolicChar>,
 	},
 }
@@ -32,7 +33,7 @@ pub enum PathComponent {
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum PathEdge {
 	Literal(char),
-	Capture { sub_rule: Arc<SubRule>, is_open: bool },
+	Capture { capture: ResolvedCapture, is_open: bool },
 	Wildcard,
 }
 
@@ -43,8 +44,8 @@ impl std::hash::Hash for PathEdge {
 			Self::Literal(ch) => {
 				ch.hash(state);
 			},
-			Self::Capture { sub_rule, is_open } => {
-				sub_rule.name.hash(state);
+			Self::Capture { capture, is_open } => {
+				capture.hash(state);
 				is_open.hash(state);
 			},
 			Self::Wildcard => (),
@@ -66,9 +67,9 @@ impl std::fmt::Display for PathEdge {
 				}
 				ch.fmt(fmt)
 			},
-			Self::Capture { sub_rule, is_open } => {
+			Self::Capture { capture, is_open } => {
 				if *is_open {
-					fmt.write_fmt(format_args!("(?<{}>", sub_rule.fully_qualified_name))
+					fmt.write_fmt(format_args!("(?<{}>", capture.fully_qualified_name))
 				} else {
 					fmt.write_str(")")
 				}
@@ -136,7 +137,7 @@ impl PartialPath {
 	/// nothing, when the search pins it to the empty string.
 	fn finish(self, rule_idx: RuleIdx) -> Path {
 		let mut components: Vec<PathComponent> = Vec::new();
-		let mut maybe_active_capture: Option<Arc<SubRule>> = None;
+		let mut maybe_active_capture: Option<ResolvedCapture> = None;
 		let mut symbols: Vec<SymbolicChar> = Vec::new();
 
 		for edge in self.edges.iter() {
@@ -144,18 +145,18 @@ impl PartialPath {
 				&PathEdge::Literal(ch) => {
 					symbols.push(SymbolicChar::Literal(ch));
 				},
-				PathEdge::Capture { sub_rule, is_open } => {
-					if let Some(active_rule) = maybe_active_capture {
+				PathEdge::Capture { capture, is_open } => {
+					if let Some(active_capture) = maybe_active_capture {
 						// Closing capture.
 						assert!(!is_open);
-						assert_eq!(sub_rule, &active_rule);
+						assert_eq!(capture, &active_capture);
 						// `symbols` may be empty: a rule such as `(?<leaf>[a-z]*)` can match nothing, and
 						// an end-anchored query pins it to exactly that. The empty capture is the precise
 						// answer -- it says the rule produced no text -- so it is reported as-is rather than
 						// widened to `*`, which would claim the opposite.
 
 						components.push(PathComponent::Capture {
-							sub_rule: active_rule,
+							capture: active_capture,
 							contents: symbols,
 						});
 						symbols = Vec::new();
@@ -169,7 +170,7 @@ impl PartialPath {
 							components.push(PathComponent::Literal(symbols));
 						}
 						symbols = Vec::new();
-						maybe_active_capture = Some(sub_rule.clone());
+						maybe_active_capture = Some(capture.clone());
 					}
 				},
 				PathEdge::Wildcard => {
@@ -279,9 +280,9 @@ impl std::fmt::Display for PathComponent {
 					}
 				}
 			},
-			Self::Capture { sub_rule, contents } => {
+			Self::Capture { capture, contents } => {
 				// TODO
-				fmt.write_fmt(format_args!("(?<{:?}>{:?})", sub_rule.name, contents))?;
+				fmt.write_fmt(format_args!("(?<{:?}>{:?})", capture.fully_qualified_name, contents))?;
 			},
 		}
 		Ok(())
@@ -295,7 +296,7 @@ impl PathEdge {
 }
 
 impl Tnfa {
-	pub fn compute_paths(&self) -> Vec<Path> {
+	pub fn compute_paths(&self, spec: &ParsingSpec) -> Vec<Path> {
 		let tarjan: TarjanSccs = self.sccs();
 
 		trace!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
@@ -312,7 +313,7 @@ impl Tnfa {
 			seen[NfaIdx::BEGIN.0] = true;
 			let mut stack: Vec<&NfaState> = vec![&self[NfaIdx::BEGIN]];
 			while let Some(state) = stack.pop() {
-				let paths: &[(PartialPath, NfaIdx)] = self.compute_path_for_vertex(state, &tarjan, &mut cache);
+				let paths: &[(PartialPath, NfaIdx)] = self.compute_path_for_vertex(state, spec, &tarjan, &mut cache);
 				for (_path, next) in paths.iter() {
 					if !seen[next.0] {
 						seen[next.0] = true;
@@ -340,7 +341,7 @@ impl Tnfa {
 					todo!();
 				}
 
-				if let Some(rule_idx) = current.maybe_accepts_for_rule {
+				if let Some((rule_idx, _)) = current.maybe_accepting_data {
 					finished.push(prefix_path.finish(rule_idx));
 					continue;
 				}
@@ -366,6 +367,7 @@ impl Tnfa {
 	fn compute_path_for_vertex<'a>(
 		&self,
 		entry: &NfaState,
+		spec: &ParsingSpec,
 		tarjan: &TarjanSccs,
 		cache: &'a mut Vec<Option<Vec<(PartialPath, NfaIdx)>>>,
 	) -> &'a [(PartialPath, NfaIdx)] {
@@ -416,11 +418,27 @@ impl Tnfa {
 				Transitions::Tagged { tag, positive, target } => {
 					assert!(tarjan.vertices[target.0].scc > tarjan.vertices[entry.idx.0].scc);
 
-					if *positive && tag.sub_rule.is_leaf() {
-						let is_open: bool = !tag.is_close;
+					let maybe_capture: Option<ResolvedCapture> = if *positive {
+						spec.resolve_capture(CaptureRef {
+							rule_idx: tag.rule_idx,
+							capture_id: tag.capture_id,
+						})
+						.filter(|(info, _)| info.is_leaf())
+						.map(|(_, fully_qualified_name)| ResolvedCapture {
+							capture: CaptureRef {
+								rule_idx: tag.rule_idx,
+								capture_id: tag.capture_id,
+							},
+							fully_qualified_name,
+						})
+					} else {
+						None
+					};
+
+					if let Some(capture) = maybe_capture {
 						let edge: PathEdge = PathEdge::Capture {
-							sub_rule: tag.sub_rule.clone(),
-							is_open,
+							capture,
+							is_open: !tag.is_close,
 						};
 						paths.push((PartialPath::new(vec![edge]), *target));
 					} else {
@@ -429,7 +447,7 @@ impl Tnfa {
 				},
 			}
 		} else {
-			self.compute_scc_path(entry, tarjan, paths);
+			self.compute_scc_path(entry, spec, tarjan, paths);
 			for (path, _next) in paths.iter_mut() {
 				path.condense();
 			}
@@ -439,7 +457,13 @@ impl Tnfa {
 		paths
 	}
 
-	fn compute_scc_path(&self, entry: &NfaState, tarjan: &TarjanSccs, finished: &mut Vec<(PartialPath, NfaIdx)>) {
+	fn compute_scc_path(
+		&self,
+		entry: &NfaState,
+		spec: &ParsingSpec,
+		tarjan: &TarjanSccs,
+		finished: &mut Vec<(PartialPath, NfaIdx)>,
+	) {
 		// 2026-09-15: no noticeable improvement replacing `BTreeSet` with `FxHashSet` here.
 		let mut stack: Vec<(&NfaState, PartialPath, BTreeSet<NfaIdx>)> = vec![(
 			entry,
@@ -519,9 +543,18 @@ impl Tnfa {
 					assert!(inserted);
 
 					if *positive {
-						if tag.sub_rule.is_leaf() {
+						let capture_ref: CaptureRef = CaptureRef {
+							rule_idx: tag.rule_idx,
+							capture_id: tag.capture_id,
+						};
+						if let Some((_, fully_qualified_name)) =
+							spec.resolve_capture(capture_ref).filter(|(info, _)| info.is_leaf())
+						{
 							path.push(PathEdge::Capture {
-								sub_rule: tag.sub_rule.clone(),
+								capture: ResolvedCapture {
+									capture: capture_ref,
+									fully_qualified_name,
+								},
 								is_open: !tag.is_close,
 							});
 							stack.push((&self[*target], path, seen));
@@ -538,24 +571,23 @@ impl Tnfa {
 #[cfg(test)]
 mod test {
 	use super::*;
+	use crate::parsing_spec::ParsingSpec;
+	use crate::parsing_spec::ParsingSpecBuilder;
 	use crate::regex::Regex;
 
 	#[test]
 	fn nfa_decomp() {
-		// let paths = nfa_for("abc(?<hello>(foo*|bar|ba*z)(qux|quux))def").to_wildcard_string();
-		// let paths = nfa_for("abc((?<var>foo*|bar|ba*z)0(qux|quux)*)def").to_wildcard_string();
-		let nfa = nfa_for(r"(?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+)");
-		let search = nfa_for("abc@.*mail.*example.*");
-		// nfa.to_wildcard_string();
-		// search.to_wildcard_string();
-		// let nfa = nfa_for(r"@((?<parts>\w+)\.)*(?<tld>\w+)");
-		// let nfa = nfa_for(r"@\.(?<tld>\w+)");
-		// let search = nfa_for("@.*mail.*example.*");
-		// let nfa = nfa_for(r"(?<hello>a.)*");
-		// let search = nfa_for("(ab)*");
-		// println!("{}", nfa.intersect(&search).to_dot_output());
-		// return;
-		let paths = nfa.intersect::<true>(&search).compute_paths();
+		let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
+		builder
+			.add_rule("rule", r"(?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+)")
+			.unwrap();
+		let spec: ParsingSpec = builder.build();
+
+		let rule: &crate::parsing_spec::RootRule = &spec.rules[0];
+		let nfa: Tnfa = Tnfa::for_single_rule(rule.idx, &rule.regex.regex, &[]);
+		let search: Tnfa = nfa_for("abc@.*mail.*example.*");
+
+		let paths = nfa.intersect::<true>(&search).compute_paths(&spec);
 		let mut paths = paths.iter().map(ToString::to_string).collect::<Vec<_>>();
 		paths.sort();
 		paths.dedup();

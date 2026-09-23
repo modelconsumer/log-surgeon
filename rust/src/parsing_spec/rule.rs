@@ -9,9 +9,29 @@ use crate::regex::Regex;
 /// Index in the parsing specification, offset by/starting at 1.
 /// `Option<RuleIdx>` is ABI equivalent to `u16` (for FFI);
 /// `None`/`0` represents static text fragments.
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct RuleIdx(NonZero<u16>);
+
+/// A handle to a [`Regex::Capture`] within a rule.
+///
+/// A capture ID is local to its root rule, so both are needed to resolve one;
+/// see [`ParsingSpec::index`](crate::parsing_spec::ParsingSpec).
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct CaptureRef {
+	pub rule_idx: RuleIdx,
+	pub capture_id: u16,
+}
+
+/// A [`CaptureRef`] together with the fully-qualified name resolved for it.
+///
+/// Carrying the name makes the value usable without a [`ParsingSpec`] in scope
+/// (e.g. when rendering a path, or as a stable `Hash` key).
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Hash)]
+pub struct ResolvedCapture {
+	pub capture: CaptureRef,
+	pub fully_qualified_name: Arc<str>,
+}
 
 #[derive(Debug, Clone)]
 pub struct RootRule {
@@ -36,42 +56,27 @@ impl PartialEq for RootRule {
 	}
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-pub struct SubRule {
-	pub name: Arc<str>,
-	pub regex: Regex,
+/// The metadata of a (root or sub-) rule, i.e. of the corresponding [`Regex::Capture`].
+///
+/// The root rule/capture has id `0` and is its own parent.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct RuleInfo {
+	pub root_idx: RuleIdx,
 
-	pub root_rule_idx: RuleIdx,
-	/// ID statically assigned left-to-right based on the regex pattern.
-	/// For example, the pattern `(?<start>[a-z]+(?<rest>\.[a-z]+)*)|(?<start>[0-9]+)` has three non-zero capture IDs.
-	/// When the pattern is actually matched,
-	/// there may be multiple instances of capture ID 2 (corresponding to `"rest"`).
-	/// The capture ID also differentiates between different captures with the same text name,
-	/// e.g. the two instances of `"start"` in the pattern above.
-	pub id: NonZero<u16>,
-	/// ID of the parent capture, if any.
-	pub parent_id: Option<NonZero<u16>>,
+	/// The capture ID of this (sub-)rule within `root_idx`; see [`CaptureRef`].
+	pub id: u16,
+	/// The name as written in the pattern.
+	pub name: Arc<str>,
+	/// ID of the parent capture; `0` for the root rule (which is its own parent).
+	pub parent_id: u16,
 	/// Total number of nested captures (recursively/arbitrarily deep);
 	/// `0` iff this is a "leaf" capture.
-	pub descendants: usize,
+	pub descendants: u16,
 
 	/// Qualified name w.r.t captures including the leading dot;
 	/// a top-level capture is ".a", a second-level capture is ".a.b".
 	pub qualified_name: Arc<str>,
-
-	// TODO
-	pub fully_qualified_name: Arc<str>,
-}
-
-/// Common info for both root rules and sub-rules.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct RuleInfo {
-	pub root_idx: RuleIdx,
-	pub root_name: Arc<str>,
-
-	/// If this is not a root rule, additional sub-rule info.
-	pub maybe_sub_rule: Option<Arc<SubRule>>,
-
+	/// Qualified name including the root rule, e.g. "root.a.b".
 	pub fully_qualified_name: Arc<str>,
 }
 
@@ -81,6 +86,14 @@ impl std::ops::Index<Option<NonZero<u16>>> for RootRule {
 	fn index(&self, i: Option<NonZero<u16>>) -> &Self::Output {
 		let i: usize = usize::from(i.map_or(0, NonZero::get));
 		&self.rule_info[i]
+	}
+}
+
+impl std::ops::Index<u16> for RootRule {
+	type Output = RuleInfo;
+
+	fn index(&self, i: u16) -> &Self::Output {
+		&self.rule_info[usize::from(i)]
 	}
 }
 
@@ -121,65 +134,21 @@ impl RootRule {
 	/// Construct a new root rule;
 	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
 	pub fn new(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, encodings: &[Arc<Encoding>]) -> Self {
-		let mut rule_info: Vec<RuleInfo> = Vec::with_capacity(usize::from(regex.total_captures.get()));
-		rule_info.push(RuleInfo {
+		let rule_info: Vec<RuleInfo> = Vec::from_iter(regex.captures.iter().map(|capture| RuleInfo {
 			root_idx: idx,
-			root_name: name.clone(),
-			maybe_sub_rule: None,
-			fully_qualified_name: name.clone(),
-		});
+			id: capture.id,
+			name: capture.name.clone(),
+			parent_id: capture.parent_id,
+			descendants: capture.descendants,
+			qualified_name: capture.qualified_name.clone(),
+			fully_qualified_name: Arc::from(format!("{}{}", name, capture.qualified_name)),
+		}));
 
-		/*
-		regex.regex.for_each_capture(&mut |sub_rule| {
-			{
-				sub_rule.fully_qualified_name = Arc::from(format!("{}{}", name, sub_rule.qualified_name));
-			}
-			// let i: usize = sub_rule.id_as_usize();
-			// assert_eq!(rule_info.len(), i);
-			// rule_info.push(RuleInfo {
-			// 	root_idx: idx,
-			// 	root_name: name.clone(),
-			// 	maybe_sub_rule: Some(sub_rule.clone()),
-			// 	fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
-			// });
-			Ok::<(), std::convert::Infallible>(())
-		});
-		*/
-
-		let mut stack: Vec<&Regex> = vec![&regex.regex];
-		while let Some(regex) = stack.pop() {
-			match regex {
-				Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
-				Regex::Capture(sub_rule) => {
-					let i: usize = sub_rule.id_as_usize();
-					assert_eq!(rule_info.len(), i);
-					stack.push(&sub_rule.regex);
-					rule_info.push(RuleInfo {
-						root_idx: idx,
-						root_name: name.clone(),
-						// Note: `sub_rule` has type `&DeepClone<Arc<SubRule>>`;
-						// `(*sub_rule)` has type `DeepClone<Arc<SubRule>>`,
-						// and so `(**sub_rule)` has type `Arc<SubRule>`.
-						maybe_sub_rule: Some((**sub_rule).clone()),
-						fully_qualified_name: Arc::from(format!("{}{}", name, sub_rule.qualified_name)),
-					});
-				},
-				Regex::KleeneClosure(item)
-				| Regex::KleenePlus(item)
-				| Regex::BoundedRepetition { item, .. }
-				| Regex::Placeholder { item, .. } => {
-					stack.push(item);
-				},
-				Regex::Sequence(items) | Regex::Alternation(items) => {
-					// Push on to stack in reverse to mirror DFS.
-					for sub_item in items.iter().rev() {
-						stack.push(sub_item);
-					}
-				},
-			}
-		}
-
-		let dfa: Tdfa = Tdfa::for_single_rule(idx, &regex.regex, encodings);
+		// The parsing DFA is built from the pattern *without* the implicit root capture: the
+		// parser synthesizes the root match itself, so the root's tags/registers would be pure
+		// per-rule overhead here. Shape/search automata build from `regex.regex` and do keep it,
+		// so a capture-less root rule can be reported under its own name.
+		let dfa: Tdfa = Tdfa::for_single_rule(idx, regex.root_item(), encodings);
 
 		Self {
 			idx,
@@ -201,12 +170,12 @@ impl RootRule {
 	) {
 		match current_regex {
 			Regex::AnyChar | Regex::Literal(..) | Regex::BracketedRanges { .. } => (),
-			Regex::Capture(sub_rule) => {
-				if &*sub_rule.name == first {
+			Regex::Capture(capture) => {
+				if &*capture.name == first {
 					if let Some(first) = rest.first().copied() {
-						self.find_capture(&sub_rule.regex, first, &rest[1..], collect);
+						self.find_capture(&capture.item, first, &rest[1..], collect);
 					} else {
-						collect.push((&self[Some(sub_rule.id)], current_regex));
+						collect.push((&self[capture.id], current_regex));
 					}
 				}
 			},
@@ -232,27 +201,12 @@ impl RootRule {
 	}
 }
 
-impl SubRule {
-	/// Convenience conversion to `usize`.
-	pub fn id_as_usize(&self) -> usize {
-		usize::from(self.id.get())
+impl RuleInfo {
+	pub fn is_root(&self) -> bool {
+		self.parent_id == self.id
 	}
 
 	pub fn is_leaf(&self) -> bool {
 		self.descendants == 0
-	}
-}
-
-impl RuleInfo {
-	pub fn sub_rule_name(&self) -> &str {
-		if let Some(sub_rule) = &self.maybe_sub_rule {
-			&sub_rule.name
-		} else {
-			""
-		}
-	}
-
-	pub fn is_root(&self) -> bool {
-		self.maybe_sub_rule.is_none()
 	}
 }
