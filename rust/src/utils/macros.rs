@@ -58,7 +58,7 @@ mod test {
 
 			let spec: ParsingSpec = $crate::spec! { definition };
 
-			Parser::new(Arc::new(spec))
+			Arc::new(spec).create_parser()
 		}};
 	}
 }

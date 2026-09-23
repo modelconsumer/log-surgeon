@@ -117,8 +117,7 @@ impl PyParser {
 
 	fn compile(&mut self) -> PyResult<()> {
 		let spec: ParsingSpec = self.spec_builder.clone().build();
-		let spec: Arc<ParsingSpec> = Arc::new(spec);
-		self.maybe_parser = Some(Parser::new(spec));
+		self.maybe_parser = Some(Arc::new(spec).create_parser());
 		Ok(())
 	}
 
@@ -220,11 +219,10 @@ impl PyParser {
 		match ParsingSpecBuilder::from_parsing_spec_definition(definition) {
 			Ok(builder) => {
 				let spec: ParsingSpec = builder.build();
-				let spec: Arc<ParsingSpec> = Arc::new(spec);
 				Ok(Self {
 					input: Python::attach(|py| py.None()),
 					spec_builder: ParsingSpecBuilder::new(),
-					maybe_parser: Some(Parser::new(spec)),
+					maybe_parser: Some(Arc::new(spec).create_parser()),
 					buffer: String::new(),
 					pos: 0,
 					debug,

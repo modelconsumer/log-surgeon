@@ -179,9 +179,6 @@ extern "C" {
 
     void log_surgeon_parser_drop(Box<Parser> value);
 
-    /// Consume the (boxed) [`ParsingSpec`] to construct a [`Parser`].
-    Box<Parser> log_surgeon_parser_new(Box<ParsingSpec> parsing_spec);
-
     /// See [`Parser::next_event`].
     bool log_surgeon_parser_next(Parser* parser, CCharArray input, size_t* pos, LogEvent* out);
 
@@ -210,8 +207,12 @@ extern "C" {
             CCharArray pattern
     );
 
-    /// Consume the (boxed) [`ParsingSpecBuilder`] to construct a [`ParsingSpec`].
-    Box<ParsingSpec> log_surgeon_parsing_spec_builder_build(Box<ParsingSpecBuilder> builder);
+    /// Consume the (boxed) [`ParsingSpecBuilder`] to construct a shared [`ParsingSpec`].
+    ///
+    /// The spec is returned behind an [`Arc`] so it can outlive any single [`Parser`] and back
+    /// several of them (see [`log_surgeon_parsing_spec_create_parser`]) and/or be searched
+    /// directly.
+    Box<Arc<ParsingSpec>> log_surgeon_parsing_spec_builder_build(Box<ParsingSpecBuilder> builder);
 
     Box<ParsingSpecBuilder> log_surgeon_parsing_spec_builder_clone(ParsingSpecBuilder const* value);
 
@@ -231,14 +232,21 @@ extern "C" {
             CCharArray delimiters
     );
 
+    Box<Arc<ParsingSpec>> log_surgeon_parsing_spec_clone(Arc<ParsingSpec> const* value);
+
+    /// Create an owned [`Parser`] sharing the given [`ParsingSpec`].
+    Box<Parser> log_surgeon_parsing_spec_create_parser(Arc<ParsingSpec> const* spec);
+
+    void log_surgeon_parsing_spec_drop(Box<Arc<ParsingSpec>> value);
+
     Box<Vec<Vec<Interpretation>>> log_surgeon_search_by_log_shapes(
-            Parser const* parser,
+            Arc<ParsingSpec> const* spec,
             CCharArray input,
             CArray<CCharArray> log_shapes
     );
 
     Box<Vec<Interpretation>>
-    log_surgeon_search_by_name(Parser const* parser, CCharArray input, CCharArray name);
+    log_surgeon_search_by_name(Arc<ParsingSpec> const* spec, CCharArray input, CCharArray name);
 
     Interpretation const*
     log_surgeon_search_get_interpretation(Vec<Interpretation> const* interpretations, size_t i);

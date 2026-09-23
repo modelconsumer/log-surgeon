@@ -27,6 +27,9 @@ template <typename T>
 struct Vec;
 
 template <typename T>
+struct Arc;
+
+template <typename T>
 requires std::is_trivial_v<T> && std::is_standard_layout_v<T>
 struct CArray {
     T const* pointer;

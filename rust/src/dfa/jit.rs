@@ -62,6 +62,50 @@ impl std::fmt::Debug for Jit {
 	}
 }
 
+/// A [`Jit`] together with the (optional) function it compiled for a specific [`Tdfa`].
+///
+/// Owning the [`Jit`] is what keeps the JIT-ed code mapped; the [`JittedDfa`] is a raw function
+/// pointer into that code, so an engine must outlive every use of its pointer. A [`ParsingSpec`]
+/// holds this behind a shared/`OnceLock` field so a spec JIT-compiles its parsing DFA at most once
+/// and can hand the same compiled code to every [`crate::parser::Parser`] it creates.
+///
+/// [`ParsingSpec`]: crate::parsing_spec::ParsingSpec
+pub struct JitEngine {
+	/// Kept solely to keep the JIT-ed code (and thus [`Self::maybe_jitted_dfa`]) mapped.
+	#[allow(dead_code)]
+	jit: Jit,
+	maybe_jitted_dfa: Option<JittedDfa>,
+}
+
+unsafe impl Send for JitEngine {}
+unsafe impl Sync for JitEngine {}
+
+impl std::fmt::Debug for JitEngine {
+	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		fmt.debug_struct("JitEngine").finish()
+	}
+}
+
+impl JitEngine {
+	/// JIT-compile `dfa` if the `jit` feature is enabled.
+	pub fn new(dfa: &Tdfa) -> Self {
+		let mut jit: Jit = Jit::new();
+
+		let maybe_jitted_dfa: Option<JittedDfa> = if cfg!(feature = "jit") {
+			Some(jit.jit(dfa).unwrap())
+		} else {
+			None
+		};
+
+		Self { jit, maybe_jitted_dfa }
+	}
+
+	/// The compiled function for `dfa`, or `None` if the `jit` feature is disabled.
+	pub fn maybe_jitted_dfa(&self) -> Option<JittedDfa> {
+		self.maybe_jitted_dfa
+	}
+}
+
 struct Compilation<'ctx> {
 	module: &'ctx mut JITModule,
 	asm: FunctionBuilder<'ctx>,

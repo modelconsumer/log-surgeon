@@ -35,18 +35,16 @@ concepts.
 
 ```rust
 pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>>
-pub fn search_by_log_shapes_cached(
-    &self, spec: &ParsingSpec, cache: &ShapeModelCache, log_shapes: &[&str],
-) -> Vec<Vec<Interpretation>>
 ```
 
 The result is **positional**: `result[i]` holds the interpretations for `log_shapes[i]`, so a caller
 can zip the two. Each inner vector is a canonical, duplicate-free set.
 
-`_cached` takes a long-lived [`ShapeModelCache`][shape-model-cache]; it exists because building a
-shape's model walks and resolves the whole shape, and callers such as
-[`Parser`][parser] search the same shapes for many queries. `search_by_log_shapes` is the convenience
-form that allocates a throwaway cache. Both funnel into the private `search_by_log_shapes_with`.
+Shape models are cached in the spec's [`ShapeModelCache`][shape-model-cache], because building a
+shape's model walks and resolves the whole shape and callers typically search the same shapes for
+many queries; searching the same shape twice reuses its model. A spec is the long-lived owner
+(`ParsingSpec::shape_models`), so the cache is shared by every [`Parser`][parser] created from it
+and by direct searches on the spec.
 
 Two further methods expose the engine directly and exist for tests, not users:
 

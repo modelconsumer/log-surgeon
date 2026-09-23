@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 pub use compressed::CompressedDfa;
 pub use jit::Jit;
+pub use jit::JitEngine;
 pub use jit::JittedDfa;
 
 use crate::graph::Csr;
@@ -814,7 +815,7 @@ impl Tdfa {
 impl Tdfa {
 	/// Compute the canonical (minimal) DFA;
 	/// should not be used with a TDFA (DFA with tagged transitions).
-	#[tracing::instrument(skip_all, level = "debug")]
+	#[tracing::instrument(skip_all, level = "trace")]
 	pub fn canonicalize(&self) -> Tdfa {
 		let partitions: Vec<Vec<usize>> = self.partition_states();
 
@@ -887,7 +888,7 @@ impl Tdfa {
 	}
 
 	/// Hopcroft's DFA minimization algorithm.
-	#[tracing::instrument(skip_all, level = "debug")]
+	#[tracing::instrument(skip_all, level = "trace")]
 	fn partition_states(&self) -> Vec<Vec<usize>> {
 		use crate::interval_tree::PolicyNoop;
 

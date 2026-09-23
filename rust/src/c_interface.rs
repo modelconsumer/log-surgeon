@@ -9,6 +9,10 @@
 //! Therefore, even though it's possible for a foreign caller to pass an invalid [`CCharArray`]
 //! to a function below, those functions would not be (are not) marked `unsafe`.
 //!
+// We deliberately pass shared handles such as `Box<Arc<ParsingSpec>>` across the FFI boundary:
+// `Box` is the opaque-handle convention here (see `log_surgeon.hpp`), and the extra indirection is
+// not a mistake.
+#![allow(clippy::redundant_allocation)]
 
 use std::sync::Arc;
 
@@ -30,7 +34,7 @@ unsafe extern "C" fn log_surgeon_enable_tracing() {
 	crate::enable_tracing();
 }
 
-mod parsing_spec {
+mod parsing_spec_builder {
 	use super::*;
 
 	/// Create a new [`ParsingSpecBuilder`].
@@ -112,10 +116,13 @@ mod parsing_spec {
 		true
 	}
 
-	/// Consume the (boxed) [`ParsingSpecBuilder`] to construct a [`ParsingSpec`].
+	/// Consume the (boxed) [`ParsingSpecBuilder`] to construct a shared [`ParsingSpec`].
+	///
+	/// The spec is returned behind an [`Arc`] so it can outlive any single [`Parser`] and back
+	/// several of them (see [`log_surgeon_parsing_spec_create_parser`]) and/or be searched directly.
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_builder_build(builder: Box<ParsingSpecBuilder>) -> Box<ParsingSpec> {
-		Box::new(builder.build())
+	extern "C" fn log_surgeon_parsing_spec_builder_build(builder: Box<ParsingSpecBuilder>) -> Box<Arc<ParsingSpec>> {
+		Box::new(Arc::new(builder.build()))
 	}
 
 	/// See [`ParsingSpecBuilder::from_parsing_spec_definition`].
@@ -134,15 +141,18 @@ mod parsing_spec {
 	}
 }
 
-mod parser {
+mod parsing_spec {
 	use super::*;
 
-	/// Consume the (boxed) [`ParsingSpec`] to construct a [`Parser`].
+	/// Create an owned [`Parser`] sharing the given [`ParsingSpec`].
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parser_new(parsing_spec: Box<ParsingSpec>) -> Box<Parser> {
-		let parser: Parser = Parser::new(Arc::new(*parsing_spec));
-		Box::new(parser)
+	extern "C" fn log_surgeon_parsing_spec_create_parser(spec: &Arc<ParsingSpec>) -> Box<Parser> {
+		Box::new(spec.create_parser())
 	}
+}
+
+mod parser {
+	use super::*;
 
 	/// See [`Parser::next_event`].
 	#[unsafe(no_mangle)]
@@ -200,7 +210,7 @@ mod search {
 
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_search_by_log_shapes(
-		parser: &Parser,
+		spec: &Arc<ParsingSpec>,
 		input: CCharArray<'_>,
 		log_shapes: CArray<'_, CCharArray<'_>>,
 	) -> Box<Vec<Vec<Interpretation>>> {
@@ -209,21 +219,19 @@ mod search {
 			.iter()
 			.map(|shape| shape.as_utf8().unwrap())
 			.collect::<Vec<_>>();
-		// The parser outlives individual queries, so reuse its shape models across them.
-		let interpretations_by_shapes: Vec<Vec<Interpretation>> =
-			input.search_by_log_shapes_cached(&parser.spec, parser.shape_models(), &log_shapes);
+		let interpretations_by_shapes: Vec<Vec<Interpretation>> = input.search_by_log_shapes(spec, &log_shapes);
 		Box::new(interpretations_by_shapes)
 	}
 
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_search_by_name(
-		parser: &Parser,
+		spec: &Arc<ParsingSpec>,
 		input: CCharArray<'_>,
 		name: CCharArray<'_>,
 	) -> Box<Vec<Interpretation>> {
 		let input: SearchString = SearchString::parse(input.as_utf8().unwrap()).unwrap();
 		let name: &str = name.as_utf8().unwrap();
-		let interpretations: Vec<Interpretation> = input.search_by_name(&parser.spec, name);
+		let interpretations: Vec<Interpretation> = input.search_by_name(spec, name);
 		Box::new(interpretations)
 	}
 
@@ -274,6 +282,11 @@ mod clone_impls {
 	}
 
 	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_parsing_spec_clone(value: &Arc<ParsingSpec>) -> Box<Arc<ParsingSpec>> {
+		Box::new(value.clone())
+	}
+
+	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parser_clone(value: &Parser) -> Box<Parser> {
 		Box::new(value.clone())
 	}
@@ -291,6 +304,11 @@ mod destructor_impls {
 
 	#[unsafe(no_mangle)]
 	extern "C" fn log_surgeon_parsing_spec_builder_drop(value: Box<ParsingSpecBuilder>) {
+		std::mem::drop(value);
+	}
+
+	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_parsing_spec_drop(value: Box<Arc<ParsingSpec>>) {
 		std::mem::drop(value);
 	}
 

@@ -6,7 +6,8 @@
 //! once-per-shape cost instead.
 //!
 //! Uses interior mutability so it can sit behind a shared reference on a long-lived owner such as
-//! [`crate::parser::Parser`], and so that filling it does not require `&mut` on the search path.
+//! [`crate::parsing_spec::ParsingSpec`], and so that filling it does not require `&mut` on the
+//! search path.
 
 #[cfg(test)]
 mod test;
@@ -25,6 +26,15 @@ pub struct ShapeModelCache {
 }
 
 impl ShapeModelCache {
+	/// An empty cache, as a `const` so [`crate::parsing_spec::BLANK`] can use it.
+	///
+	/// The interior mutability lint is about reading this `const` by value; here it is only used
+	/// to initialize a `static`, so no shared mutable temporary is created.
+	#[allow(clippy::declare_interior_mutable_const)]
+	pub const BLANK: Self = Self {
+		models: Mutex::new(BTreeMap::new()),
+	};
+
 	#[must_use]
 	pub fn new() -> Self {
 		Self::default()

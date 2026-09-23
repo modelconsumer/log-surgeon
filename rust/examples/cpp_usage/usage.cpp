@@ -16,7 +16,8 @@ int main() {
 
     builder.add_rule_with_priority("hello", "abc|d(?<foo>[a-z])f");
 
-    Parser parser{builder.build()};
+    ParsingSpec spec{builder.build()};
+    Parser parser{spec.create_parser()};
 
     CArray<char> const input{"def foobarbaz\n"_rust};
     size_t pos{0};
@@ -42,9 +43,7 @@ int main() {
         assert(mat.get_rule_name() == "foo");
     }
 
-    {
-        assert(!event.get_leaf_match(1).has_value());
-    }
+    { assert(!event.get_leaf_match(1).has_value()); }
 
     try_interpretations();
 
@@ -58,18 +57,20 @@ static void try_interpretations() {
 
     builder.add_rule_with_priority("email"_rust, R"((?<user>\w+)@((?<parts>\w+)\.)+(?<tld>\w+))");
 
-    Parser parser{builder.build()};
+    ParsingSpec spec{builder.build()};
 
-    std::vector<std::vector<SubQuery>> interpretations{parser.search_by_name("a*@*com"_rust, "email"_rust)};
+    std::vector<std::vector<SubQuery>> interpretations{
+            spec.search_by_name("a*@*com"_rust, "email"_rust)
+    };
 
     std::cout << "== Interpretations" << std::endl;
     for (std::vector<SubQuery> const& sub_queries : interpretations) {
         std::cout << "- ";
         for (SubQuery const& sub_query : sub_queries) {
-            if (sub_query.qualified_name.empty()) {
+            if (sub_query.name.empty()) {
                 std::cout << sub_query.value;
             } else {
-                std::cout << "(?<" << sub_query.qualified_name << ">" << sub_query.value << ")";
+                std::cout << "(?<" << sub_query.name << ">" << sub_query.value << ")";
             }
         }
         std::cout << std::endl;

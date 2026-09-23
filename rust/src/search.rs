@@ -271,31 +271,11 @@ impl SearchString {
 		self.view(0, self.symbols.len()).interpretations_for_name(spec, &rows)
 	}
 
+	/// Shape models are cached on `spec` (see [`ParsingSpec::shape_models`]), so searching the
+	/// same shapes more than once reuses each built model instead of rebuilding it per query.
 	pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>> {
-		self.search_by_log_shapes_with(spec, Some(&ShapeModelCache::new()), log_shapes)
-	}
-
-	/// As [`Self::search_by_log_shapes`], reusing `cache`'s shape models.
-	///
-	/// Prefer this when searching the same shapes more than once, e.g. via
-	/// [`crate::parser::Parser::shape_models`]: building a shape's model is otherwise repeated
-	/// for every query.
-	pub fn search_by_log_shapes_cached(
-		&self,
-		spec: &ParsingSpec,
-		cache: &ShapeModelCache,
-		log_shapes: &[&str],
-	) -> Vec<Vec<Interpretation>> {
-		self.search_by_log_shapes_with(spec, Some(cache), log_shapes)
-	}
-
-	fn search_by_log_shapes_with(
-		&self,
-		spec: &ParsingSpec,
-		cache: Option<&ShapeModelCache>,
-		log_shapes: &[&str],
-	) -> Vec<Vec<Interpretation>> {
 		let anchored: AnchoredQuery<'_> = self.anchored();
+		let cache: &ShapeModelCache = spec.shape_models();
 
 		// The query's runs and their fits are shared across every shape: this is where the composition
 		// path gets its leverage, since a corpus mentions the same few rules over and over, and a rule's
@@ -309,10 +289,7 @@ impl SearchString {
 
 		// Resolve every shape before searching any, so an unsupported shape fails the call outright
 		// rather than after some shapes have already been processed. See [`ShapeModel::new`].
-		let models: Vec<Arc<ShapeModel>> = Vec::from_iter(log_shapes.iter().map(|&shape| match cache {
-			Some(cache) => cache.get(spec, shape),
-			None => Arc::new(ShapeModel::new(spec, shape)),
-		}));
+		let models: Vec<Arc<ShapeModel>> = Vec::from_iter(log_shapes.iter().map(|&shape| cache.get(spec, shape)));
 
 		std::iter::zip(&models, log_shapes)
 			.map(|(model, &shape)| {

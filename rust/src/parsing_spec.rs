@@ -5,6 +5,7 @@ mod spec_file;
 use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 pub use encoding::Encoding;
 pub use encoding::EncodingIdx;
@@ -15,12 +16,15 @@ pub use rule::RuleIdx;
 pub use rule::RuleInfo;
 
 use crate::dfa::CompressedDfa;
+use crate::dfa::JitEngine;
 use crate::dfa::Tdfa;
 use crate::nfa::Tnfa;
+use crate::parser::Parser;
 use crate::regex::AnchoredRegex;
 use crate::regex::Regex;
 use crate::regex::RegexError;
 use crate::regex::RegexPlaceholderLookup;
+use crate::search::decompose::ShapeModelCache;
 
 #[derive(Debug, Clone)]
 pub struct ParsingSpecBuilder {
@@ -58,6 +62,20 @@ pub struct ParsingSpec {
 	/// Derived from `delimiters`.
 	pub ascii_delimiters: [bool; 0x80],
 	pub non_ascii_delimiters: String,
+
+	/// JIT-compiled [`Self::dfa_for_parsing`], built on first use and shared by every
+	/// [`Parser`] created from this spec.
+	///
+	/// Behind an [`Arc`] because [`JitEngine`] is not [`Clone`] (`JITModule` can't be cloned),
+	/// while a cloned spec should share the already-compiled code rather than compile again.
+	maybe_jit_engine: OnceLock<Arc<JitEngine>>,
+
+	/// Prefilter models for log-shape search, built on demand and shared across
+	/// [`Parser`]s created from this spec.
+	///
+	/// A spec is long-lived and typically searched repeatedly against the same set of shapes,
+	/// so this turns a per-query cost into a per-shape one. See [`ShapeModelCache`].
+	shape_models: ShapeModelCache,
 }
 
 impl Eq for ParsingSpec {}
@@ -226,17 +244,21 @@ impl ParsingSpecBuilder {
 		}
 
 		let dfa_for_parsing: Tdfa = self.maybe_cached_dfa.unwrap_or_else(|| {
+			debug!("[dfa] determinizing main dfa for parsing...");
 			now!(t0);
 			let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
 			now!(t1);
-			debug!("[minimizing dfa] building dfa ({} ms)...", millis!(t0, t1));
+			debug!("[dfa] determinizing took {} ms. canonicalizing...", millis!(t0, t1));
 			let minimized: Tdfa = main_dfa.canonicalize();
 			now!(t2);
-			debug!("[minimizing dfa] canonicalizing dfa {} ms.", millis!(t1, t2));
+			debug!("[dfa] canonicalizing took {} ms.", millis!(t1, t2));
 			minimized
 		});
 
+		now!(t3);
 		let compressed_dfa_for_parsing: CompressedDfa = dfa_for_parsing.compress();
+		now!(t4);
+		debug!("[dfa] compressing main dfa for parsing took {} ms.", millis!(t3, t4));
 
 		let nfa_for_search: Tnfa = Tnfa::for_rules(&rules, &self.delimiters, &self.encodings);
 
@@ -262,6 +284,8 @@ impl ParsingSpecBuilder {
 			nfa_for_search,
 			ascii_delimiters,
 			non_ascii_delimiters,
+			maybe_jit_engine: OnceLock::new(),
+			shape_models: ShapeModelCache::new(),
 		}
 	}
 }
@@ -272,20 +296,46 @@ impl RegexPlaceholderLookup for ParsingSpecBuilder {
 	}
 }
 
-impl ParsingSpec {
-	pub const DEFAULT_DELIMITERS: &str = " \t\r\n:,!;%";
+/// A blank [`ParsingSpec`], used for default values that require a `'static` spec reference.
+///
+/// A `static` rather than an associated `const` because the caches are interior-mutable, so a
+/// borrow of a `const` temporary (as in [`crate::log_event::LogEvent::BLANK`]) is not allowed.
+pub static BLANK: ParsingSpec = ParsingSpec {
+	rules: Vec::new(),
+	placeholders: BTreeMap::new(),
+	delimiters: String::new(),
+	encodings: Vec::new(),
+	dfa_for_parsing: Tdfa::BLANK,
+	compressed_dfa_for_parsing: CompressedDfa::BLANK,
+	nfa_for_search: Tnfa::BLANK,
+	ascii_delimiters: [false; 0x80],
+	non_ascii_delimiters: String::new(),
+	maybe_jit_engine: OnceLock::new(),
+	shape_models: ShapeModelCache::BLANK,
+};
 
-	pub const BLANK: Self = Self {
-		rules: Vec::new(),
-		placeholders: BTreeMap::new(),
-		delimiters: String::new(),
-		encodings: Vec::new(),
-		dfa_for_parsing: Tdfa::BLANK,
-		compressed_dfa_for_parsing: CompressedDfa::BLANK,
-		nfa_for_search: Tnfa::BLANK,
-		ascii_delimiters: [false; 0x80],
-		non_ascii_delimiters: String::new(),
-	};
+impl ParsingSpec {
+	/// The JIT engine for [`Self::dfa_for_parsing`].
+	pub fn jit_engine(&self) -> &Arc<JitEngine> {
+		self.maybe_jit_engine
+			.get_or_init(|| Arc::new(JitEngine::new(&self.dfa_for_parsing)))
+	}
+
+	/// The shape-model cache backing
+	/// [`crate::search::SearchString::search_by_log_shapes`].
+	pub fn shape_models(&self) -> &ShapeModelCache {
+		&self.shape_models
+	}
+
+	/// Create a new [`Parser`] that shares this spec.
+	///
+	/// Parsers are cheap to create once the spec has been built (and its DFA JIT-compiled), and
+	/// each caller owns a mutable parser; there may be many parsers per spec.
+	pub fn create_parser(self: &Arc<Self>) -> Parser {
+		Parser::new(self.clone())
+	}
+
+	pub const DEFAULT_DELIMITERS: &str = " \t\r\n:,!;%";
 
 	/// (Sub)rules with the exact fully qualified name match.
 	pub fn rules_for_name(&self, name: &str) -> Vec<(&RuleInfo, &Regex)> {
@@ -478,7 +528,7 @@ mod test {
 		let spec: ParsingSpec = builder.build();
 		assert_eq!(spec.rules.len(), 2);
 
-		let mut parser: Parser = Parser::new(Arc::new(spec));
+		let mut parser: Parser = Arc::new(spec).create_parser();
 
 		let event: LogEvent<'_> = parser.next_event("a1b", &mut 0).unwrap();
 		assert_eq!(event.all_matches.len(), 1);

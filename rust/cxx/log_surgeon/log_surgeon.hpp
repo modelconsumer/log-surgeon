@@ -21,11 +21,11 @@ namespace log_surgeon {
 using imp::CRange;
 using imp::Interpretation;
 using imp::Match;
-using imp::ParsingSpec;
 using imp::RuleIdx;
 using imp::UncheckedCArray;
 
 class ParsingSpecBuilder;
+class ParsingSpec;
 class Parser;
 class LogEvent;
 struct SubQuery;
@@ -54,10 +54,10 @@ public:
     friend auto swap(ParsingSpecBuilder& first, ParsingSpecBuilder& second) noexcept -> void;
 
     /**
-     * Construct the parsing specification and parser from the parsing specification.
+     * Construct the parsing specification from the parsing specification builder.
      * Afterwards, this builder is in a well-defined but invalid state.
      */
-    auto build() -> Parser;
+    auto build() -> ParsingSpec;
 
     auto set_delimiters(std::string_view delimiters) -> void;
 
@@ -73,15 +73,86 @@ private:
     imp::ParsingSpecBuilder* m_builder{};
 };
 
+/**
+ * A reference-counted, immutable parsing specification.
+ *
+ * This is the main entry point: a spec can create any number of independent `Parser`s, and
+ * searches (`search_by_name`, `search_by_log_shapes`) are performed directly on the spec. The
+ * underlying Rust `ParsingSpec` is shared via `Arc`; copies of this handle share it.
+ */
+class ParsingSpec {
+public:
+    ~ParsingSpec();
+    ParsingSpec(ParsingSpec const& other);
+    ParsingSpec(ParsingSpec&& other) noexcept;
+    auto operator=(ParsingSpec other) noexcept -> ParsingSpec&;
+    auto operator=(ParsingSpec&& other) noexcept -> ParsingSpec&;
+
+    /**
+     * Conventional `swap` function, declared using `friend` for ADL.
+     * Also the second critical piece for the copy-and-swap idiom.
+     *
+     * @param first
+     * @param second
+     */
+    friend auto swap(ParsingSpec& first, ParsingSpec& second) noexcept -> void;
+
+    /**
+     * Create a new, independently mutable `Parser` sharing this spec.
+     */
+    [[nodiscard]] auto create_parser() const -> Parser;
+
+    /**
+     * Computes interpretations for a named query.
+     *
+     * @param query
+     * @param name
+     */
+    [[nodiscard]] auto search_by_name(std::string_view query, std::string_view name) const
+            -> std::vector<std::vector<SubQuery>>;
+
+    /**
+     * Computes interpretations for full-log search.
+     *
+     * @param query
+     * @param log_shapes
+     */
+    [[nodiscard]] auto
+    search_by_log_shapes(std::string_view query, std::span<CCharArray const> log_shapes) const
+            -> std::vector<std::vector<std::vector<SubQuery>>>;
+
+private:
+    friend class ParsingSpecBuilder;
+
+    Arc<imp::ParsingSpec>* m_spec{};
+
+    /**
+     * Last piece of copy-and-swap;
+     * private since we only want this for copy-and-swap.
+     */
+    ParsingSpec() noexcept = default;
+
+    /**
+     * Takes ownership of the given shared spec handle.
+     */
+    explicit ParsingSpec(Arc<imp::ParsingSpec>* spec) noexcept;
+
+    /**
+     * Conversion of FFI compatible Rust type to native C++ type.
+     */
+    [[nodiscard]] static auto convert_interpretations(
+            Vec<Interpretation> const* rust_interpretation
+    ) -> std::vector<std::vector<SubQuery>>;
+
+    /**
+     * Conversion of FFI compatible Rust type to native C++ type.
+     */
+    [[nodiscard]] static auto convert_interpretation(Interpretation const* interpretation)
+            -> std::vector<SubQuery>;
+};
+
 class Parser {
 public:
-    /**
-     * Creates a parser (handle) for the given parsing spec.
-     *
-     * @param spec An owned`ParsingSpec*` (takes ownership).
-     */
-    Parser(ParsingSpec* spec);
-
     ~Parser();
     Parser(Parser const& other);
     Parser(Parser&& other) noexcept;
@@ -114,47 +185,24 @@ public:
      */
     auto reset();
 
-    /**
-     * Computes interpretations for a named query.
-     *
-     * @param query
-     * @param name
-     */
-    [[nodiscard]] auto search_by_name(std::string_view query, std::string_view name)
-            -> std::vector<std::vector<SubQuery>>;
-
-    /**
-     * Computes interpretations for full-log search.
-     *
-     * @param query
-     * @param log_shapes
-     */
-    [[nodiscard]] auto
-    search_by_log_shapes(std::string_view query, std::span<CCharArray const> log_shapes)
-            -> std::vector<std::vector<std::vector<SubQuery>>>;
-
 private:
+    friend class ParsingSpec;
+
+    imp::Parser* m_parser{};
+    imp::LogEvent* m_event{};
+
     /**
      * Last piece of copy-and-swap;
      * private since we only want this for copy-and-swap.
      */
     Parser() noexcept = default;
 
-    imp::Parser* m_parser{};
-    imp::LogEvent* m_event{};
-
     /**
-     * Conversion of FFI compatible Rust type to native C++ type.
+     * Creates a parser (handle) for the given parsing spec.
+     *
+     * @param spec The spec to parse with; this parser shares ownership of it.
      */
-    [[nodiscard]] static auto convert_interpretations(
-            Vec<Interpretation> const* rust_interpretation
-    ) -> std::vector<std::vector<SubQuery>>;
-
-    /**
-     * Conversion of FFI compatible Rust type to native C++ type.
-     */
-    [[nodiscard]] static auto convert_interpretation(Interpretation const* interpretation)
-            -> std::vector<SubQuery>;
+    explicit Parser(Arc<imp::ParsingSpec> const* spec);
 };
 
 class LogEvent {
@@ -249,13 +297,13 @@ inline auto swap(ParsingSpecBuilder& first, ParsingSpecBuilder& second) noexcept
     swap(first.m_builder, second.m_builder);
 }
 
-inline auto ParsingSpecBuilder::build() -> Parser {
+inline auto ParsingSpecBuilder::build() -> ParsingSpec {
     if (nullptr == m_builder) {
         throw std::invalid_argument("builder already constructed");
     }
-    Parser parser{imp::log_surgeon_parsing_spec_builder_build(m_builder)};
+    ParsingSpec spec{imp::log_surgeon_parsing_spec_builder_build(m_builder)};
     m_builder = nullptr;
-    return parser;
+    return spec;
 }
 
 inline auto ParsingSpecBuilder::set_delimiters(std::string_view delimiters) -> void {
@@ -305,11 +353,151 @@ inline auto ParsingSpecBuilder::add_encoding(std::string_view name, std::string_
     );
 }
 
-inline Parser::Parser(ParsingSpec* spec) : Parser{} {
+inline ParsingSpec::ParsingSpec(Arc<imp::ParsingSpec>* spec) noexcept : m_spec(spec) {}
+
+inline ParsingSpec::~ParsingSpec() {
+    if (nullptr != m_spec) {
+        imp::log_surgeon_parsing_spec_drop(m_spec);
+    }
+}
+
+inline ParsingSpec::ParsingSpec(ParsingSpec const& other) : ParsingSpec{} {
+    // Copy-and swap idiom: The first "centerpiece";
+    // the "semantics" of this type's resource management must be
+    // bona fide implemented here.
+    m_spec = imp::log_surgeon_parsing_spec_clone(other.m_spec);
+}
+
+inline ParsingSpec::ParsingSpec(ParsingSpec&& other) noexcept : ParsingSpec{} {
+    // Copy-and-swap idiom: The move constructor is handled by the same
+    // `swap` mechanism used to safely implement copy assignment.
+    swap(*this, other);
+}
+
+inline auto ParsingSpec::operator=(ParsingSpec other) noexcept -> ParsingSpec& {
+    // Copy-and-swap idiom: It is important that `other` is taken by value.
+    // This would handle both copy and move assignment;
+    // when called with an rvalue reference,
+    // the compiler would use the move constructor to create `other`,
+    // which we then swap with.
+    // Supposedly, that allows for better optimization opportunities too.
+    swap(*this, other);
+    return *this;
+}
+
+inline auto ParsingSpec::operator=(ParsingSpec&& other) noexcept -> ParsingSpec& {
+    // Copy-and-swap idiom: Duplicate of copy assignment;
+    // lints aren't smart enough to realize that this would be covered as above.
+    swap(*this, other);
+    return *this;
+}
+
+inline auto swap(ParsingSpec& first, ParsingSpec& second) noexcept -> void {
+    using std::swap;
+
+    swap(first.m_spec, second.m_spec);
+}
+
+inline auto ParsingSpec::create_parser() const -> Parser {
+    return Parser{this->m_spec};
+}
+
+inline auto ParsingSpec::search_by_name(std::string_view query, std::string_view name) const
+        -> std::vector<std::vector<SubQuery>> {
+    Box<Vec<Interpretation>> rust_interpretations{imp::log_surgeon_search_by_name(
+            m_spec,
+            CCharArray::from_string_view(query),
+            CCharArray::from_string_view(name)
+    )};
+
+    std::vector<std::vector<SubQuery>> interpretations{
+            ParsingSpec::convert_interpretations(rust_interpretations)
+    };
+
+    imp::log_surgeon_search_interpretations_by_name_drop(rust_interpretations);
+
+    return interpretations;
+}
+
+inline auto ParsingSpec::search_by_log_shapes(
+        std::string_view query,
+        std::span<CCharArray const> log_shapes
+) const -> std::vector<std::vector<std::vector<SubQuery>>> {
+    std::vector<std::vector<std::vector<SubQuery>>> interpretations_by_shapes;
+    interpretations_by_shapes.reserve(log_shapes.size());
+
+    Box<Vec<Vec<Interpretation>>> rust_interpretations{imp::log_surgeon_search_by_log_shapes(
+            m_spec,
+            CCharArray::from_string_view(query),
+            CArray<CCharArray>::from_span(log_shapes)
+    )};
+
+    size_t i{0};
+    while (true) {
+        Vec<Interpretation> const* interpretations{
+                imp::log_surgeon_search_get_interpretations_for_shape(rust_interpretations, i)
+        };
+        if (nullptr == interpretations) {
+            break;
+        }
+
+        interpretations_by_shapes.push_back(ParsingSpec::convert_interpretations(interpretations));
+
+        i++;
+    }
+
+    imp::log_surgeon_search_interpretations_by_log_shapes_drop(rust_interpretations);
+
+    return interpretations_by_shapes;
+}
+
+inline auto ParsingSpec::convert_interpretations(Vec<Interpretation> const* rust_interpretations)
+        -> std::vector<std::vector<SubQuery>> {
+    std::vector<std::vector<SubQuery>> interpretations;
+    size_t i{0};
+    while (true) {
+        Interpretation const* interpretation{
+                imp::log_surgeon_search_get_interpretation(rust_interpretations, i)
+        };
+        if (nullptr == interpretation) {
+            break;
+        }
+
+        interpretations.push_back(ParsingSpec::convert_interpretation(interpretation));
+
+        i++;
+    }
+    return interpretations;
+}
+
+inline auto ParsingSpec::convert_interpretation(Interpretation const* interpretation)
+        -> std::vector<SubQuery> {
+    std::vector<SubQuery> sub_queries;
+    size_t i{0};
+    while (true) {
+        imp::SubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, i)};
+        if (nullptr == sub_query) {
+            break;
+        }
+
+        std::string_view const name{imp::log_surgeon_search_sub_query_get_name(sub_query)};
+        std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
+
+        sub_queries.push_back({
+                .name = std::string{name},
+                .value = std::string{value},
+        });
+
+        i++;
+    }
+    return sub_queries;
+}
+
+inline Parser::Parser(Arc<imp::ParsingSpec> const* spec) : Parser{} {
     if (nullptr == spec) {
         throw std::invalid_argument("spec must not be null");
     }
-    m_parser = imp::log_surgeon_parser_new(spec);
+    m_parser = imp::log_surgeon_parsing_spec_create_parser(spec);
     m_event = imp::log_surgeon_log_event_new();
 }
 
@@ -370,98 +558,6 @@ inline auto Parser::next_event(std::string_view input, size_t* pos) -> std::opti
 
 inline auto Parser::reset() {
     imp::log_surgeon_parser_reset(m_parser);
-}
-
-inline auto Parser::search_by_name(std::string_view query, std::string_view name)
-        -> std::vector<std::vector<SubQuery>> {
-    Box<Vec<Interpretation>> rust_interpretations{imp::log_surgeon_search_by_name(
-            m_parser,
-            CCharArray::from_string_view(query),
-            CCharArray::from_string_view(name)
-    )};
-
-    std::vector<std::vector<SubQuery>> interpretations{
-            Parser::convert_interpretations(rust_interpretations)
-    };
-
-    imp::log_surgeon_search_interpretations_by_name_drop(rust_interpretations);
-
-    return interpretations;
-}
-
-inline auto
-Parser::search_by_log_shapes(std::string_view query, std::span<CCharArray const> log_shapes)
-        -> std::vector<std::vector<std::vector<SubQuery>>> {
-    std::vector<std::vector<std::vector<SubQuery>>> interpretations_by_shapes;
-    interpretations_by_shapes.reserve(log_shapes.size());
-
-    Box<Vec<Vec<Interpretation>>> rust_interpretations{imp::log_surgeon_search_by_log_shapes(
-            m_parser,
-            CCharArray::from_string_view(query),
-            CArray<CCharArray>::from_span(log_shapes)
-    )};
-
-    size_t i{0};
-    while (true) {
-        Vec<Interpretation> const* interpretations{
-                imp::log_surgeon_search_get_interpretations_for_shape(rust_interpretations, i)
-        };
-        if (nullptr == interpretations) {
-            break;
-        }
-
-        interpretations_by_shapes.push_back(Parser::convert_interpretations(interpretations));
-
-        i++;
-    }
-
-    imp::log_surgeon_search_interpretations_by_log_shapes_drop(rust_interpretations);
-
-    return interpretations_by_shapes;
-}
-
-inline auto Parser::convert_interpretations(Vec<Interpretation> const* rust_interpretations)
-        -> std::vector<std::vector<SubQuery>> {
-    std::vector<std::vector<SubQuery>> interpretations;
-    size_t i{0};
-    while (true) {
-        Interpretation const* interpretation{
-                imp::log_surgeon_search_get_interpretation(rust_interpretations, i)
-        };
-        if (nullptr == interpretation) {
-            break;
-        }
-
-        interpretations.push_back(Parser::convert_interpretation(interpretation));
-
-        i++;
-    }
-    return interpretations;
-}
-
-inline auto Parser::convert_interpretation(Interpretation const* interpretation)
-        -> std::vector<SubQuery> {
-    std::vector<SubQuery> sub_queries;
-    size_t i{0};
-    while (true) {
-        imp::SubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, i)};
-        if (nullptr == sub_query) {
-            break;
-        }
-
-        std::string_view const name{
-                imp::log_surgeon_search_sub_query_get_name(sub_query)
-        };
-        std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
-
-        sub_queries.push_back({
-                .name = std::string{name},
-                .value = std::string{value},
-        });
-
-        i++;
-    }
-    return sub_queries;
 }
 
 inline LogEvent::LogEvent(imp::LogEvent const* event) : m_event(event) {

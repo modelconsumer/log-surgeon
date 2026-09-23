@@ -6,10 +6,10 @@ The parsing specification includes:
 - How subrules are extracted.
 - How log events are separated.
 
-Parsing consists of two main stages:
-
-1. A parser that advances through the input and builds structured log events.
-2. A lexer that identifies matches in the input according to the parsing specification.
+The specification is the main entry point: [`ParsingSpec::create_parser`][create-parser] creates a
+parser, and there may be many independent parsers per specification. A parser advances through the
+input and builds structured log events, using a lexer to identify matches in the input according to
+the parsing specification.
 
 ### Index
 - Matching Root Rules
@@ -155,6 +155,7 @@ Explain:
 - leaf ambiguity
 
 [parsing-spec]: parsing-specification.md
+[create-parser]: ../src/parsing_spec.rs
 [search-by-log-shapes]: search-by-log-shapes.md
 [python-regex]: https://docs.python.org/3/howto/regex.html
 [dfa]: https://en.wikipedia.org/wiki/Deterministic_finite_automaton

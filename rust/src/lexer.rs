@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::dfa::Jit;
 use crate::dfa::JittedDfa;
 use crate::dfa::MatchedRule;
 use crate::dfa::TdfaExecution;
@@ -16,8 +15,8 @@ pub struct Lexer {
 	/// `Parser` already has the spec and could pass it every time to `Lexer::next_token`.
 	/// However, it's cheap and cleaner to clone it here for encapsulation.
 	spec: Arc<ParsingSpec>,
-	#[allow(unused)]
-	jit: Arc<Jit>,
+	/// Copied out of [`ParsingSpec::jit_engine`]; that engine (owned by the spec) keeps the
+	/// JIT-ed code mapped for as long as this lexer's `spec` is alive.
 	maybe_jitted_dfa: Option<JittedDfa>,
 }
 
@@ -36,19 +35,9 @@ pub enum Token<'spec, 'input> {
 
 impl Lexer {
 	pub fn new(spec: Arc<ParsingSpec>) -> Self {
-		let mut jit: Jit = Jit::new();
+		let maybe_jitted_dfa: Option<JittedDfa> = spec.jit_engine().maybe_jitted_dfa();
 
-		let maybe_jitted_dfa: Option<JittedDfa> = if cfg!(feature = "jit") {
-			Some(jit.jit(&spec.dfa_for_parsing).unwrap())
-		} else {
-			None
-		};
-
-		Self {
-			spec,
-			jit: Arc::new(jit),
-			maybe_jitted_dfa,
-		}
+		Self { spec, maybe_jitted_dfa }
 	}
 
 	/// Return the next [`Token`] from `input` starting from `*pos`,

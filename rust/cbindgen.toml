@@ -81,6 +81,7 @@ exclude = [
 	"Box",
 	"Option",
 	"Vec",
+	"Arc",
 	"CArray",
 	"CCharArray",
 	"CUtf8",

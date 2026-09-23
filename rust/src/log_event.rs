@@ -124,7 +124,7 @@ impl std::fmt::Debug for LogEvent<'_> {
 impl<'parser> LogEvent<'parser> {
 	/// Blank `LogEvent`; default value required for C FFI.
 	pub const BLANK: Self = Self {
-		spec: &ParsingSpec::BLANK,
+		spec: &crate::parsing_spec::BLANK,
 		message: CUtf8::NULL,
 		all_matches: CArray::null(),
 		leaf_indices: CArray::null(),
