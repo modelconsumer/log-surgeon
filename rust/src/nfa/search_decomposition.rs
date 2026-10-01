@@ -33,7 +33,10 @@ pub enum PathComponent {
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum PathEdge {
 	Literal(char),
-	Capture { capture: ResolvedCapture, is_open: bool },
+	Capture {
+		capture: ResolvedCapture,
+		is_open: bool,
+	},
 	Wildcard,
 }
 
@@ -131,10 +134,12 @@ impl PartialPath {
 
 	/// Renders this path's edges as [`PathComponent`]s.
 	///
-	/// The path runs to an accepting state of the intersection, which means it has consumed the whole
-	/// shape as well as the whole search; nothing is appended or assumed. A capture is therefore always
-	/// closed by an explicit closing tag, and its contents are exactly what the rule produced -- possibly
-	/// nothing, when the search pins it to the empty string.
+	/// The path runs to an accepting state of the intersection,
+	/// which means it has consumed the whole shape as well as the whole search;
+	/// nothing is appended or assumed.
+	/// A capture is therefore always closed by an explicit closing tag,
+	/// and its contents are exactly what the rule produced
+	/// -- possibly nothing, when the search pins it to the empty string.
 	fn finish(self, rule_idx: RuleIdx) -> Path {
 		let mut components: Vec<PathComponent> = Vec::new();
 		let mut maybe_active_capture: Option<ResolvedCapture> = None;
@@ -150,10 +155,12 @@ impl PartialPath {
 						// Closing capture.
 						assert!(!is_open);
 						assert_eq!(capture, &active_capture);
-						// `symbols` may be empty: a rule such as `(?<leaf>[a-z]*)` can match nothing, and
-						// an end-anchored query pins it to exactly that. The empty capture is the precise
-						// answer -- it says the rule produced no text -- so it is reported as-is rather than
-						// widened to `*`, which would claim the opposite.
+					// `symbols` may be empty: a rule such as `(?<leaf>[a-z]*)` can match nothing,
+					// and an end-anchored query pins it to exactly that.
+					// The empty capture is the precise answer
+					// -- it says the rule produced no text --
+					// so it is reported as-is rather than widened to `*`,
+					// which would claim the opposite.
 
 						components.push(PathComponent::Capture {
 							capture: active_capture,
@@ -166,7 +173,10 @@ impl PartialPath {
 						assert!(is_open);
 
 						if !symbols.is_empty() {
-							assert!(!matches!(components.last(), Some(PathComponent::Literal(_))));
+							assert!(!matches!(
+								components.last(),
+								Some(PathComponent::Literal(_))
+							));
 							components.push(PathComponent::Literal(symbols));
 						}
 						symbols = Vec::new();
@@ -178,19 +188,26 @@ impl PartialPath {
 				},
 			}
 		}
-		// Every capture opened on this path was closed: the path reaches an accepting state, so the
-		// automaton walked past each closing tag. A capture left open would mean the path stopped
-		// mid-rule, which no longer happens now that the intersection always runs to the end.
+		// Every capture opened on this path was closed: the path reaches an accepting state,
+		// so the automaton walked past each closing tag.
+		// A capture left open would mean the path stopped mid-rule,
+		// which no longer happens now that the intersection always runs to the end.
 		assert!(
 			maybe_active_capture.is_none(),
 			"path ended inside a capture: {maybe_active_capture:?}"
 		);
 		if !symbols.is_empty() {
-			assert!(!matches!(components.last(), Some(PathComponent::Literal(_))));
+			assert!(!matches!(
+				components.last(),
+				Some(PathComponent::Literal(_))
+			));
 			components.push(PathComponent::Literal(symbols));
 		}
 
-		Path { rule_idx, components }
+		Path {
+			rule_idx,
+			components,
+		}
 	}
 }
 
@@ -282,7 +299,10 @@ impl std::fmt::Display for PathComponent {
 			},
 			Self::Capture { capture, contents } => {
 				// TODO
-				fmt.write_fmt(format_args!("(?<{:?}>{:?})", capture.fully_qualified_name, contents))?;
+				fmt.write_fmt(format_args!(
+					"(?<{:?}>{:?})",
+					capture.fully_qualified_name, contents
+				))?;
 			},
 		}
 		Ok(())
@@ -299,7 +319,11 @@ impl Tnfa {
 	pub fn compute_paths(&self, spec: &ParsingSpec) -> Vec<Path> {
 		let tarjan: TarjanSccs = self.sccs();
 
-		trace!("have {} states, have {} sccs", self.states.len(), tarjan.sccs.len());
+		trace!(
+			"have {} states, have {} sccs",
+			self.states.len(),
+			tarjan.sccs.len()
+		);
 
 		if self[NfaIdx::BEGIN].transitions.len() == 0 {
 			return Vec::new();
@@ -313,7 +337,8 @@ impl Tnfa {
 			seen[NfaIdx::BEGIN.0] = true;
 			let mut stack: Vec<&NfaState> = vec![&self[NfaIdx::BEGIN]];
 			while let Some(state) = stack.pop() {
-				let paths: &[(PartialPath, NfaIdx)] = self.compute_path_for_vertex(state, spec, &tarjan, &mut cache);
+				let paths: &[(PartialPath, NfaIdx)] =
+					self.compute_path_for_vertex(state, spec, &tarjan, &mut cache);
 				for (_path, next) in paths.iter() {
 					if !seen[next.0] {
 						seen[next.0] = true;
@@ -323,7 +348,10 @@ impl Tnfa {
 			}
 		}
 		now!(t1);
-		trace!("done paths for each state {}.", t1.duration_since(t0).as_millis());
+		trace!(
+			"done paths for each state {}.",
+			t1.duration_since(t0).as_millis()
+		);
 
 		now!(t2);
 		trace!("paths...");
@@ -332,7 +360,8 @@ impl Tnfa {
 		let mut seen_prefixes: FxHashSet<(PartialPath, NfaIdx)> = FxHashSet::default();
 		{
 			now!(t_start);
-			let mut stack: Vec<(PartialPath, &NfaState)> = vec![(PartialPath::new(Vec::new()), &self[NfaIdx::BEGIN])];
+			let mut stack: Vec<(PartialPath, &NfaState)> =
+				vec![(PartialPath::new(Vec::new()), &self[NfaIdx::BEGIN])];
 			while let Some((prefix_path, current)) = stack.pop() {
 				now!(t_current);
 
@@ -395,7 +424,10 @@ impl Tnfa {
 
 					#[allow(clippy::never_loop)]
 					for (interval, &target) in transitions.iter() {
-						assert!(tarjan.vertices[target.0].encountered_at > tarjan.vertices[entry.idx.0].encountered_at);
+						assert!(
+							tarjan.vertices[target.0].encountered_at
+								> tarjan.vertices[entry.idx.0].encountered_at
+						);
 						assert!(tarjan.vertices[target.0].scc > tarjan.vertices[entry.idx.0].scc);
 
 						let ch: PathEdge = if interval.start() == interval.end() {
@@ -415,7 +447,11 @@ impl Tnfa {
 						paths.push((PartialPath::new(Vec::new()), target));
 					}
 				},
-				Transitions::Tagged { tag, positive, target } => {
+				Transitions::Tagged {
+					tag,
+					positive,
+					target,
+				} => {
 					assert!(tarjan.vertices[target.0].scc > tarjan.vertices[entry.idx.0].scc);
 
 					let maybe_capture: Option<ResolvedCapture> = if *positive {
@@ -490,7 +526,10 @@ impl Tnfa {
 						.iter()
 						.zip(std::iter::repeat_n((path, seen), transitions.len()))
 					{
-						assert_eq!(tarjan.vertices[target.0].scc, tarjan.vertices[entry.idx.0].scc);
+						assert_eq!(
+							tarjan.vertices[target.0].scc,
+							tarjan.vertices[entry.idx.0].scc
+						);
 
 						let inserted: bool = seen.insert(target);
 						assert!(inserted);
@@ -529,8 +568,15 @@ impl Tnfa {
 						stack.push((&self[target], path, seen));
 					}
 				},
-				Transitions::Tagged { tag, positive, target } => {
-					assert_eq!(tarjan.vertices[target.0].scc, tarjan.vertices[entry.idx.0].scc);
+				Transitions::Tagged {
+					tag,
+					positive,
+					target,
+				} => {
+					assert_eq!(
+						tarjan.vertices[target.0].scc,
+						tarjan.vertices[entry.idx.0].scc
+					);
 
 					if seen.contains(target) {
 						continue;
@@ -547,8 +593,9 @@ impl Tnfa {
 							rule_idx: tag.rule_idx,
 							capture_id: tag.capture_id,
 						};
-						if let Some((_, fully_qualified_name)) =
-							spec.resolve_capture(capture_ref).filter(|(info, _)| info.is_leaf())
+						if let Some((_, fully_qualified_name)) = spec
+							.resolve_capture(capture_ref)
+							.filter(|(info, _)| info.is_leaf())
 						{
 							path.push(PathEdge::Capture {
 								capture: ResolvedCapture {

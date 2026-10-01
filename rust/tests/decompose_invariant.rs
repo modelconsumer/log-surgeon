@@ -49,7 +49,9 @@ fn runs_accounted_for(interpretation: &Interpretation) -> Vec<String> {
 #[test]
 fn invariant_holds_on_corpus() {
 	let spec: String = std::fs::read_to_string("blk_id_full_log_message.spec.cached.txt").unwrap();
-	let spec: ParsingSpec = ParsingSpecBuilder::from_parsing_spec_definition(&spec).unwrap().build();
+	let spec: ParsingSpec = ParsingSpecBuilder::from_parsing_spec_definition(&spec)
+		.unwrap()
+		.build();
 	const LOG_SHAPES: &[&str] = include!("../log_shapes.rs");
 
 	const QUERIES: &[&str] = &[
@@ -60,7 +62,8 @@ fn invariant_holds_on_corpus() {
 		"*10.250.*",
 		"*NameSystem.allocateBlock*",
 		"*terminating*",
-		// End-anchored: no trailing wildcard, so the last run must be the last thing in the message.
+		// End-anchored: no trailing wildcard,
+		// so the last run must be the last thing in the message.
 		"*blk_1073746491_5667",
 		"*terminating",
 		"*Receiving",
@@ -71,8 +74,9 @@ fn invariant_holds_on_corpus() {
 
 	for query_text in QUERIES.iter() {
 		let query: SearchString = SearchString::parse(query_text).unwrap();
-		// Runs come from the raw symbols: a trailing wildcard is exactly what marks the last run as
-		// unanchored, so it must be neither added nor removed here.
+		// Runs come from the raw symbols:
+		// a trailing wildcard is exactly what marks the last run as unanchored,
+		// so it must be neither added nor removed here.
 		let runs: Vec<Run> = runs_of(query.as_slice());
 		let expected: Vec<String> = runs.iter().map(|r| r.text.clone()).collect::<Vec<_>>();
 		let fits: RunFitCache = RunFitCache::new();
@@ -83,7 +87,14 @@ fn invariant_holds_on_corpus() {
 			let Some(table) = PlacementTable::compute(&spec, &model, &runs, &fits) else {
 				continue;
 			};
-			let composed: Composed = compose(&spec, &model, &table, &runs, &fits, ComposeBudget::default());
+			let composed: Composed = compose(
+				&spec,
+				&model,
+				&table,
+				&runs,
+				&fits,
+				ComposeBudget::default(),
+			);
 			let Composed::Compositions(compositions) = composed else {
 				continue;
 			};

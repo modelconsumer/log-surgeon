@@ -63,7 +63,8 @@ pub struct Match {
 
 	/// DANGEROUS fields exposed for FFI.
 	/// But it's not dangerous if you don't look at it (in Rust).
-	/// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`] as necessary.
+	/// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`]
+	/// as necessary.
 	///
 	/// Note: [`LogEvent`] can borrow from [`crate::parser::Parser`] since it's an "external" value,
 	/// but the [`Match`]es of a `LogEvent` live in a `Vec` inside `Parser`,

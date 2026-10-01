@@ -48,31 +48,34 @@ enum SpecFileLine<'a> {
 
 impl ParsingSpec {
 	pub fn to_parsing_spec_definition(&self) -> String {
-		std::iter::once(format!("delimiters: \"{}\"", escape_delimiters(&self.delimiters)))
-			// Empty line, pretty.
-			.chain(std::iter::once(String::new()))
-			// Placeholders.
-			.chain(self.placeholders.iter().map(|(name, regex)| {
-				let pattern: String = regex.to_pattern();
-				format!("!{name}: \"{pattern}\"")
-			}))
-			// Empty line, pretty.
-			.chain(std::iter::once(String::new()))
-			// Rules.
-			.chain(self.rules.iter().map(|rule| {
-				let pattern: String = rule.regex.to_pattern();
-				format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
-			}))
-			.chain(std::iter::once(String::new()))
-			.chain(std::iter::once(format!("===")))
-			.chain(std::iter::once(
-				serde_json::to_string_pretty(&self.compressed_dfa_for_parsing).unwrap(),
-			))
-			.fold(String::new(), |mut accumulated, line| {
-				accumulated.push_str(&line);
-				accumulated.push('\n');
-				accumulated
-			})
+		std::iter::once(format!(
+			"delimiters: \"{}\"",
+			escape_delimiters(&self.delimiters)
+		))
+		// Empty line, pretty.
+		.chain(std::iter::once(String::new()))
+		// Placeholders.
+		.chain(self.placeholders.iter().map(|(name, regex)| {
+			let pattern: String = regex.to_pattern();
+			format!("!{name}: \"{pattern}\"")
+		}))
+		// Empty line, pretty.
+		.chain(std::iter::once(String::new()))
+		// Rules.
+		.chain(self.rules.iter().map(|rule| {
+			let pattern: String = rule.regex.to_pattern();
+			format!("{} ({}): \"{pattern}\"", rule.name, rule.priority)
+		}))
+		.chain(std::iter::once(String::new()))
+		.chain(std::iter::once(format!("===")))
+		.chain(std::iter::once(
+			serde_json::to_string_pretty(&self.compressed_dfa_for_parsing).unwrap(),
+		))
+		.fold(String::new(), |mut accumulated, line| {
+			accumulated.push_str(&line);
+			accumulated.push('\n');
+			accumulated
+		})
 	}
 }
 
@@ -103,10 +106,11 @@ impl ParsingSpecBuilder {
 				continue;
 			}
 
-			let (_remaining, line): (&str, SpecFileLine<'_>) = parse_line(line).map_err(|_| ParsingSpecFileError {
-				line_offset,
-				kind: ParsingSpecFileErrorKind::BadLine,
-			})?;
+			let (_remaining, line): (&str, SpecFileLine<'_>) =
+				parse_line(line).map_err(|_| ParsingSpecFileError {
+					line_offset,
+					kind: ParsingSpecFileErrorKind::BadLine,
+				})?;
 
 			// TODO: validate remaining empty/whitespace
 
@@ -119,10 +123,11 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let delimiters: String = unescape(delimiters).map_err(|err| ParsingSpecFileError {
-						line_offset,
-						kind: ParsingSpecFileErrorKind::InvalidEscape(err),
-					})?;
+					let delimiters: String =
+						unescape(delimiters).map_err(|err| ParsingSpecFileError {
+							line_offset,
+							kind: ParsingSpecFileErrorKind::InvalidEscape(err),
+						})?;
 
 					builder.set_delimiters(delimiters);
 				},
@@ -134,12 +139,11 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let regex: Regex = Regex::from_pattern_with_placeholders(pattern, &mut builder).map_err(|e| {
-						ParsingSpecFileError {
+					let regex: Regex = Regex::from_pattern_with_placeholders(pattern, &mut builder)
+						.map_err(|e| ParsingSpecFileError {
 							line_offset,
 							kind: ParsingSpecFileErrorKind::InvalidPattern(e),
-						}
-					})?;
+						})?;
 
 					builder
 						.add_placeholder(name.to_owned(), regex)
@@ -156,13 +160,15 @@ impl ParsingSpecBuilder {
 						});
 					}
 
-					let regex: AnchoredRegex =
-						AnchoredRegex::from_pattern_with_placeholders(pattern, Arc::from(name), &mut builder).map_err(
-							|e| ParsingSpecFileError {
-								line_offset,
-								kind: ParsingSpecFileErrorKind::InvalidPattern(e),
-							},
-						)?;
+					let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(
+						pattern,
+						Arc::from(name),
+						&mut builder,
+					)
+					.map_err(|e| ParsingSpecFileError {
+						line_offset,
+						kind: ParsingSpecFileErrorKind::InvalidPattern(e),
+					})?;
 
 					let _ = builder.add_rule_parsed(priority, name, regex);
 				},
@@ -329,11 +335,15 @@ mod test {
 		builder.set_delimiters(" .\t");
 
 		builder.add_rule("foo", r"hello world|goodbye").unwrap();
-		builder.add_rule_with_priority(10, "bar", r"[^a-b-]*z").unwrap();
+		builder
+			.add_rule_with_priority(10, "bar", r"[^a-b-]*z")
+			.unwrap();
 		builder
 			.add_rule_with_priority(-10, "baz", r"(?<quux>\.{6,7}){9}")
 			.unwrap();
-		builder.add_rule_with_priority(-10, "foobar", r"^\^\$$").unwrap();
+		builder
+			.add_rule_with_priority(-10, "foobar", r"^\^\$$")
+			.unwrap();
 
 		let spec1: ParsingSpec = builder.build();
 

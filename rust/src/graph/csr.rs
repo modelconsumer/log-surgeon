@@ -29,7 +29,11 @@ impl<T> Csr<T> {
 			// Initially, we store the number of edges for `i` in `offsets[i + 1]`;
 			// the start of `i + 1`'s transitions are offset by (at least) `i`'s transitions.
 			offsets[source + 1] += 1;
-			edges.push(Edge { source, target, value });
+			edges.push(Edge {
+				source,
+				target,
+				value,
+			});
 		}
 
 		// Now, `offsets[i + 1]` includes "just" the contribution from state `i`.

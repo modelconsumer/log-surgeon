@@ -37,16 +37,19 @@ impl std::fmt::Display for SymbolicOutput {
 
 impl Regex {
 	pub fn derivative(&self, input: &[SymbolicChar]) -> Vec<Vec<SymbolicOutput>> {
-		let mut interpretations: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = vec![(Vec::new(), vec![self.clone()])];
+		let mut interpretations: Vec<(Vec<SymbolicOutput>, Vec<Self>)> =
+			vec![(Vec::new(), vec![self.clone()])];
 		let mut done: Vec<Vec<SymbolicOutput>> = Vec::new();
 		for &ch in input.iter() {
 			println!("===== ch {ch}");
 			let mut new_interpretations: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = Vec::new();
 			for (processed, to_process) in interpretations.into_iter() {
-				let step: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = Self::process_sequence(&to_process, ch);
-				for (mut old_processed, (new_processed, new_to_process)) in
-					std::iter::zip(std::iter::repeat_n(processed.clone(), step.len()), step.into_iter())
-				{
+				let step: Vec<(Vec<SymbolicOutput>, Vec<Self>)> =
+					Self::process_sequence(&to_process, ch);
+				for (mut old_processed, (new_processed, new_to_process)) in std::iter::zip(
+					std::iter::repeat_n(processed.clone(), step.len()),
+					step.into_iter(),
+				) {
 					old_processed.extend(new_processed);
 					if new_to_process.is_empty() {
 						done.push(old_processed);
@@ -104,7 +107,8 @@ impl Regex {
 			},
 			Self::KleeneClosure(item) => match input {
 				SymbolicChar::Literal(ch) => {
-					let mut ret: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = item.derivative_step(input);
+					let mut ret: Vec<(Vec<SymbolicOutput>, Vec<Self>)> =
+						item.derivative_step(input);
 					for (processed, to_process) in ret.iter_mut() {
 						to_process.push(self.clone());
 					}
@@ -121,7 +125,8 @@ impl Regex {
 				.flat_map(|item| item.derivative_step(input))
 				.collect::<Vec<_>>(),
 			Self::Capture(capture) => {
-				let mut inner: Vec<(Vec<SymbolicOutput>, Vec<Self>)> = capture.item.derivative_step(input);
+				let mut inner: Vec<(Vec<SymbolicOutput>, Vec<Self>)> =
+					capture.item.derivative_step(input);
 				for (processed, _to_process) in inner.iter_mut() {
 					processed.insert(0, SymbolicOutput::StartCapture(capture.name.clone()));
 					processed.push(SymbolicOutput::StartCapture(capture.name.clone()));
@@ -132,7 +137,10 @@ impl Regex {
 		}
 	}
 
-	fn process_sequence(items: &[Self], input: SymbolicChar) -> Vec<(Vec<SymbolicOutput>, Vec<Self>)> {
+	fn process_sequence(
+		items: &[Self],
+		input: SymbolicChar,
+	) -> Vec<(Vec<SymbolicOutput>, Vec<Self>)> {
 		let Some(first): Option<&Self> = items.first() else {
 			match input {
 				SymbolicChar::Literal(_) => {
@@ -198,7 +206,12 @@ impl Regex {
 		}
 		if let Self::Sequence(lhs) = &lhs {
 			return if let Self::Sequence(rhs) = &rhs {
-				Self::Sequence(lhs.iter().cloned().chain(rhs.iter().cloned()).collect::<Vec<_>>())
+				Self::Sequence(
+					lhs.iter()
+						.cloned()
+						.chain(rhs.iter().cloned())
+						.collect::<Vec<_>>(),
+				)
 			} else {
 				Self::Sequence(
 					lhs.iter()
@@ -242,7 +255,10 @@ impl Regex {
 				Ok(self.clone())
 			},
 			Regex::Alternation(items) => {
-				let items: Vec<Self> = items.iter().filter_map(|item| item.is_valid().ok()).collect::<Vec<_>>();
+				let items: Vec<Self> = items
+					.iter()
+					.filter_map(|item| item.is_valid().ok())
+					.collect::<Vec<_>>();
 				if !items.is_empty() {
 					Ok(Self::Alternation(items))
 				} else {

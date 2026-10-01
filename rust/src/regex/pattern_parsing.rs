@@ -56,7 +56,10 @@ struct RegexParsingError<'a> {
 #[derive(Debug, Clone)]
 enum Term {
 	Char(char),
-	Bracketed { negated: bool, items: Vec<(char, char)> },
+	Bracketed {
+		negated: bool,
+		items: Vec<(char, char)>,
+	},
 }
 
 impl<'a> ParseError<&'a str> for RegexParsingError<'a> {
@@ -92,7 +95,8 @@ impl<'a> RegexParsingError<'a> {
 }
 
 impl AnchoredRegex {
-	/// Like [`Regex::from_pattern_with_placeholders`], but for a (potentially) anchored regex/pattern.
+	/// Like [`Regex::from_pattern_with_placeholders`],
+	/// but for a (potentially) anchored regex/pattern.
 	///
 	/// The parsed expression is implicitly wrapped in a [`Regex::Capture`] named `base_name`
 	/// (the root rule name), so that captures are numbered uniformly and the root rule itself
@@ -122,11 +126,13 @@ impl AnchoredRegex {
 					assert_eq!(remaining, "");
 				}
 
-				regex.replace_with_placeholders(lookup).map_err(|kind| RegexError {
-					consumed: pattern.to_owned(),
-					remaining: String::new(),
-					kind,
-				})?;
+				regex
+					.replace_with_placeholders(lookup)
+					.map_err(|kind| RegexError {
+						consumed: pattern.to_owned(),
+						remaining: String::new(),
+						kind,
+					})?;
 
 				regex
 			},
@@ -171,7 +177,8 @@ impl AnchoredRegex {
 /// See the [Parsing Specification File document][parsing-spec-file]
 /// for more details on regex syntax and semantics.
 ///
-/// In summary, a regular expression is composed of terms ([`parse_term`] and [`parse_parenthesized`])
+/// In summary, a regular expression is composed of terms
+/// ([`parse_term`] and [`parse_parenthesized`])
 /// and operators to recursively combine subexpressions;
 /// from highest to lowest precedence:
 ///
@@ -180,12 +187,16 @@ impl AnchoredRegex {
 /// - alternation ([`parse_alternation`]).
 ///
 /// TODO after merge: update link
-/// [parsing-spec-file]: https://github.com/y-scope/log-surgeon/tree/log-mechanic/rust/docs/parsing-specification.md
+/// [parsing-spec-file]:
+/// https://github.com/y-scope/log-surgeon/tree/log-mechanic/rust/docs/parsing-specification.md
 impl Regex {
 	/// Parse an unanchored regex pattern.
 	/// Replaces placeholders with their subexpressions and numbers captures starting at `1`
 	/// (`0` is reserved for the implicit root capture of an [`AnchoredRegex`]).
-	pub fn from_pattern_with_placeholders<T>(pattern: &str, lookup: &mut T) -> Result<Self, RegexError>
+	pub fn from_pattern_with_placeholders<T>(
+		pattern: &str,
+		lookup: &mut T,
+	) -> Result<Self, RegexError>
 	where
 		T: RegexPlaceholderLookup,
 	{
@@ -193,11 +204,13 @@ impl Regex {
 			Ok((remaining, mut regex)) => {
 				assert_eq!(remaining, "");
 
-				regex.replace_with_placeholders(lookup).map_err(|kind| RegexError {
-					consumed: pattern.to_owned(),
-					remaining: String::new(),
-					kind,
-				})?;
+				regex
+					.replace_with_placeholders(lookup)
+					.map_err(|kind| RegexError {
+						consumed: pattern.to_owned(),
+						remaining: String::new(),
+						kind,
+					})?;
 
 				if regex
 					.initialize_captures(&mut 1, &mut Vec::new(), &mut Vec::new())
@@ -226,7 +239,10 @@ impl Regex {
 		}
 	}
 
-	fn replace_with_placeholders<F>(&mut self, placeholder_lookup: &mut F) -> Result<(), RegexErrorKind>
+	fn replace_with_placeholders<F>(
+		&mut self,
+		placeholder_lookup: &mut F,
+	) -> Result<(), RegexErrorKind>
 	where
 		F: RegexPlaceholderLookup,
 	{
@@ -240,9 +256,9 @@ impl Regex {
 				**item = placeholder.clone();
 				Ok(())
 			},
-			Self::KleeneClosure(item) | Self::KleenePlus(item) | Self::BoundedRepetition { item, .. } => {
-				item.replace_with_placeholders(placeholder_lookup)
-			},
+			Self::KleeneClosure(item)
+			| Self::KleenePlus(item)
+			| Self::BoundedRepetition { item, .. } => item.replace_with_placeholders(placeholder_lookup),
 			Self::Sequence(items) | Self::Alternation(items) => {
 				for sub_item in items.iter_mut() {
 					sub_item.replace_with_placeholders(placeholder_lookup)?;
@@ -299,7 +315,9 @@ impl Regex {
 					qualified_name,
 				});
 
-				let descendants: u16 = capture.item.initialize_captures(next_id, captures, ancestors)?;
+				let descendants: u16 = capture
+					.item
+					.initialize_captures(next_id, captures, ancestors)?;
 				captures[index].descendants = descendants;
 				ancestors.pop();
 
@@ -313,7 +331,8 @@ impl Regex {
 			},
 			Self::Sequence(items) | Self::Alternation(items) => {
 				for sub_item in items.iter_mut() {
-					total = total.checked_add(sub_item.initialize_captures(next_id, captures, ancestors)?)?;
+					total = total
+						.checked_add(sub_item.initialize_captures(next_id, captures, ancestors)?)?;
 				}
 			},
 		}
@@ -378,7 +397,8 @@ fn parse_to_end(input: &str) -> ParsingResult<'_, Regex> {
 ///
 /// `parse_alternation` is called at the top level by [`parse_to_end`],
 /// and inside parentheses by [`parse_parenthesized`].
-/// The former (re)produces [`RegexErrorKind::InvalidTerm`] swallowed inside [`parse_sequence`] if not at end of input,
+/// The former (re)produces [`RegexErrorKind::InvalidTerm`] swallowed inside [`parse_sequence`]
+/// if not at end of input,
 /// and the latter will produce a [`RegexErrorKind::ExpectedClose`] if not terminated properly.
 fn parse_alternation(mut input: &str) -> ParsingResult<'_, Regex> {
 	use nom::combinator::cut;
@@ -418,7 +438,8 @@ fn parse_alternation(mut input: &str) -> ParsingResult<'_, Regex> {
 /// and the error is swallowed.
 ///
 /// Note that we can't "peek" to check if we're at the end of input,
-/// since we don't know if we're inside a parenthesized expression (followed by a closing parentheses)
+/// since we don't know if we're inside a parenthesized expression
+/// (followed by a closing parentheses),
 /// or at the top level (followed by end of input).
 fn parse_sequence(input: &str) -> ParsingResult<'_, Regex> {
 	use nom::combinator::cut;
@@ -564,7 +585,8 @@ fn parse_capture(input: &str) -> ParsingResult<'_, Regex> {
 	let (input, _): (&str, char) = parse_char::<'?'>(input)?;
 
 	// Cut: After seeing a '?', we necessarily are expecting a capture.
-	let (input, name): (&str, &str) = cut(surrounded_cut::<'<', '>', _, _>(parse_capture_name)).parse(input)?;
+	let (input, name): (&str, &str) =
+		cut(surrounded_cut::<'<', '>', _, _>(parse_capture_name)).parse(input)?;
 	let name: Arc<str> = Arc::from(name);
 
 	if input.starts_with(')') {
@@ -652,13 +674,15 @@ fn parse_bracketed_inside(input: &str) -> ParsingResult<'_, (bool, Vec<(char, ch
 fn parse_bracketed_item(original_input: &str) -> ParsingResult<'_, Vec<(char, char)>> {
 	use nom::combinator::opt;
 
-	let (input, maybe_start): (&str, Option<Term>) = parse_literal_char_in_bracketed_expression(original_input)?;
+	let (input, maybe_start): (&str, Option<Term>) =
+		parse_literal_char_in_bracketed_expression(original_input)?;
 
 	let Some(start): Option<Term> = maybe_start else {
 		return Ok((input, Vec::new()));
 	};
 
-	let (input_after_dash, maybe_dash): (&str, Option<char>) = opt(parse_char::<'-'>).parse(input)?;
+	let (input_after_dash, maybe_dash): (&str, Option<char>) =
+		opt(parse_char::<'-'>).parse(input)?;
 
 	if maybe_dash.is_some() {
 		match start {
@@ -673,11 +697,14 @@ fn parse_bracketed_item(original_input: &str) -> ParsingResult<'_, Vec<(char, ch
 				match end {
 					Term::Char(end) => {
 						if start > end {
-							return Err(RegexErrorKind::InvalidBracketRange(start, end).fail(input_after_dash));
+							return Err(RegexErrorKind::InvalidBracketRange(start, end)
+								.fail(input_after_dash));
 						}
 						Ok((input, vec![(start, end)]))
 					},
-					Term::Bracketed { .. } => Err(RegexErrorKind::EscapeClassInBracketRange.fail(input_after_dash)),
+					Term::Bracketed { .. } => {
+						Err(RegexErrorKind::EscapeClassInBracketRange.fail(input_after_dash))
+					},
 				}
 			},
 			Term::Bracketed { negated, mut items } => {
@@ -730,7 +757,8 @@ fn parse_escaped_character(original_input: &str) -> ParsingResult<'_, Term> {
 	use nom::branch::alt;
 	use nom::combinator::cut;
 
-	let (input, _): (&str, char) = NomUtils::parse_char::<'\\', RegexParsingError<'_>>(original_input)?;
+	let (input, _): (&str, char) =
+		NomUtils::parse_char::<'\\', RegexParsingError<'_>>(original_input)?;
 
 	// Cut: If we parsed a '\\', we necessarily are looking for an escape character.
 	cut(alt((
@@ -797,7 +825,8 @@ fn parse_standard_escape(input: &str) -> ParsingResult<'_, Term> {
 	let mut chars: Chars<'_> = input.chars();
 
 	// We use the NUL character as a marker/equivalent to EOF;
-	// it's not a valid escape character, and will be caught in the default branch of the `match` block below.
+	// it's not a valid escape character,
+	// and will be caught in the default branch of the `match` block below.
 	let ch: char = chars.next().unwrap_or('\0');
 
 	if matches!(ch, 'd' | 's' | 'w' | 'D' | 'S' | 'W') {
@@ -820,7 +849,9 @@ fn parse_standard_escape(input: &str) -> ParsingResult<'_, Term> {
 	match Escaped::unescape_on_control_character(input) {
 		Ok((input, ch)) => Ok((input, Term::Char(ch))),
 		Err(InvalidEscape::Eof) => Err(RegexErrorKind::InvalidEscape.error(input)),
-		Err(InvalidEscape::MalformedCodePoint) => Err(RegexErrorKind::ExpectedHexDigits.fail(input)),
+		Err(InvalidEscape::MalformedCodePoint) => {
+			Err(RegexErrorKind::ExpectedHexDigits.fail(input))
+		},
 		Err(InvalidEscape::BadCodePoint(x)) => Err(RegexErrorKind::InvalidCodePoint(x).fail(input)),
 		Err(InvalidEscape::Unknown(_)) => Err(RegexErrorKind::InvalidEscape.error(input)),
 	}
@@ -878,7 +909,10 @@ fn surrounded_cut<'a, const OPEN: char, const CLOSE: char, O, F>(
 where
 	F: Parser<&'a str, Output = O, Error = RegexParsingError<'a>>,
 {
-	NomUtils::surrounded_cut::<OPEN, CLOSE, _, _, _, _>(inside, RegexErrorKind::ExpectedClose(OPEN, CLOSE).diagnostic())
+	NomUtils::surrounded_cut::<OPEN, CLOSE, _, _, _, _>(
+		inside,
+		RegexErrorKind::ExpectedClose(OPEN, CLOSE).diagnostic(),
+	)
 }
 
 #[cfg(test)]
@@ -1236,14 +1270,18 @@ mod test {
 			let e: RegexError = Regex::from_pattern(r"a|b*").unwrap_err();
 			assert_eq!(
 				e.kind,
-				RegexErrorKind::NullableExpression(Box::new(Regex::KleeneClosure(Box::new(Regex::Literal('b')),)))
+				RegexErrorKind::NullableExpression(Box::new(Regex::KleeneClosure(Box::new(
+					Regex::Literal('b')
+				),)))
 			);
 		}
 		{
 			let e: RegexError = Regex::from_pattern(r"(a|b*)+").unwrap_err();
 			assert_eq!(
 				e.kind,
-				RegexErrorKind::NullableExpression(Box::new(Regex::KleeneClosure(Box::new(Regex::Literal('b')),)))
+				RegexErrorKind::NullableExpression(Box::new(Regex::KleeneClosure(Box::new(
+					Regex::Literal('b')
+				),)))
 			);
 		}
 	}
@@ -1253,7 +1291,10 @@ mod test {
 		const CLASSES: &[(&str, &[(char, char)])] = &[
 			(r"\d", &[('0', '9')]),
 			(r"\w", &[('0', '9'), ('a', 'z'), ('A', 'Z')]),
-			(r"\s", &[(' ', ' '), ('\t', '\t'), ('\r', '\r'), ('\n', '\n')]),
+			(
+				r"\s",
+				&[(' ', ' '), ('\t', '\t'), ('\r', '\r'), ('\n', '\n')],
+			),
 		];
 
 		for (pattern, items) in CLASSES.iter() {

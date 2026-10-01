@@ -1,21 +1,23 @@
 //! Lazy, validating iteration over the UTF-8 scalars in a byte slice.
 //!
-//! [`Utf8Chunks`](core::str::Utf8Chunks) is *eager*: each call to [`Iterator::next`] scans from the
-//! slice start to the first invalid byte, or to the end of the slice. Handing it a large tail on
-//! every decode would therefore cost O(tail) per scalar, and O(n^2) over a whole input.
-//! [`Utf8Chars`] instead validates only the bytes of the scalar it yields, so its cost is
-//! independent of the tail length.
+//! [`Utf8Chunks`](core::str::Utf8Chunks) is *eager*: each call to [`Iterator::next`] scans
+//! from the slice start to the first invalid byte, or to the end of the slice.
+//! Handing it a large tail on every decode would therefore cost O(tail) per scalar,
+//! and O(n^2) over a whole input.
+//! [`Utf8Chars`] instead validates only the bytes of the scalar it yields,
+//! so its cost is independent of the tail length.
 //!
-//! This is the lazy counterpart to [`Utf8Chunks`](core::str::Utf8Chunks). The standard library has
-//! the required building blocks (`str::utf8_char_width`, `next_code_point`) but they are unstable,
+//! This is the lazy counterpart to [`Utf8Chunks`](core::str::Utf8Chunks).
+//! The standard library has the required building blocks
+//! (`str::utf8_char_width`, `next_code_point`) but they are unstable,
 //! and `next_code_point` additionally assumes its input is already valid.
 
 use std::iter::FusedIterator;
 
 /// Decode the UTF-8 scalar at the start of `bytes`, returning it with its length in bytes.
 ///
-/// Only a single scalar (at most 4 bytes) is examined, so the cost does not depend on
-/// `bytes.len()`.
+/// Only a single scalar (at most 4 bytes) is examined,
+/// so the cost does not depend on `bytes.len()`.
 ///
 /// # Panics
 ///
@@ -36,8 +38,9 @@ pub fn decode_scalar(bytes: &[u8]) -> (char, usize) {
 	decode_scalar_non_ascii(bytes)
 }
 
-/// The non-ASCII half of [`decode_scalar`], kept out-of-line and marked cold so that the ASCII
-/// fast path stays small and its surrounding hot loop is laid out without this code in the way.
+/// The non-ASCII half of [`decode_scalar`], kept out-of-line and marked cold
+/// so that the ASCII fast path stays small
+/// and its surrounding hot loop is laid out without this code in the way.
 #[cold]
 #[inline(never)]
 fn decode_scalar_non_ascii(bytes: &[u8]) -> (char, usize) {
@@ -47,10 +50,11 @@ fn decode_scalar_non_ascii(bytes: &[u8]) -> (char, usize) {
 	//
 	//     0xxxxxxx -> 1,  110xxxxx -> 2,  1110xxxx -> 3,  11110xxx -> 4
 	//
-	// This is an upper bound. RFC 3629 forbids some sequences that this structural encoding
-	// admits -- `C0`/`C1` (overlong 2-byte), `F5`-`F7` (above U+10FFFF), and `F8`-`FF` (never a
-	// lead byte) -- but every well-formed sequence has exactly this length and no continuation
-	// byte is ever a lead, so the window below is never shorter than the scalar it must contain.
+	// This is an upper bound. RFC 3629 forbids some sequences that this structural
+	// encoding admits -- `C0`/`C1` (overlong 2-byte), `F5`-`F7` (above U+10FFFF),
+	// and `F8`-`FF` (never a lead byte) -- but every well-formed sequence has exactly
+	// this length and no continuation byte is ever a lead,
+	// so the window below is never shorter than the scalar it must contain.
 	// `Utf8Chunks`, not this table, remains the single authority on validity.
 	let width: usize = match lead {
 		0xC0..=0xDF => 2,
@@ -72,9 +76,9 @@ fn decode_scalar_non_ascii(bytes: &[u8]) -> (char, usize) {
 
 /// A lazy iterator over the UTF-8 scalars of a byte slice, panicking on invalid UTF-8.
 ///
-/// Unlike [`Chars`](core::str::Chars), this accepts a raw `&[u8]`. Each call to [`Iterator::next`] or
-/// [`DoubleEndedIterator::next_back`] validates only the scalar it yields, so neither depends on
-/// the length of the remaining input.
+/// Unlike [`Chars`](core::str::Chars), this accepts a raw `&[u8]`.
+/// Each call to [`Iterator::next`] or [`DoubleEndedIterator::next_back`]
+/// validates only the scalar it yields, so neither depends on the length of the remaining input.
 #[derive(Debug, Clone)]
 pub struct Utf8Chars<'input> {
 	remaining: &'input [u8],
@@ -92,8 +96,9 @@ impl Iterator for Utf8Chars<'_> {
 	#[inline]
 	fn next(&mut self) -> Option<char> {
 		let (&lead, rest): (&u8, &[u8]) = self.remaining.split_first()?;
-		// Fast path for ASCII, the overwhelmingly common case in log text: it is a single byte
-		// and always valid, so there is no need to enter [`decode_scalar`] at all.
+		// Fast path for ASCII, the overwhelmingly common case in log text:
+		// it is a single byte and always valid,
+		// so there is no need to enter [`decode_scalar`] at all.
 		if lead < 0x80 {
 			self.remaining = rest;
 			return Some(char::from(lead));
@@ -120,7 +125,11 @@ impl DoubleEndedIterator for Utf8Chars<'_> {
 		let (ch, len): (char, usize) = decode_scalar(&self.remaining[start..]);
 		// `decode_scalar` bounds its window to one scalar, so it cannot see trailing bytes;
 		// any bytes after the decoded scalar would be an orphaned continuation byte.
-		assert_eq!(start + len, self.remaining.len(), "invalid UTF-8 at end of input");
+		assert_eq!(
+			start + len,
+			self.remaining.len(),
+			"invalid UTF-8 at end of input"
+		);
 		self.remaining = &self.remaining[..start];
 		Some(ch)
 	}
@@ -149,7 +158,13 @@ mod test {
 
 	#[test]
 	fn utf8_chars_matches_str_chars() {
-		for s in ["", "abc", "a\u{e9}b", "\u{4e16}\u{1f600}", "line1\nline2\u{e9}"] {
+		for s in [
+			"",
+			"abc",
+			"a\u{e9}b",
+			"\u{4e16}\u{1f600}",
+			"line1\nline2\u{e9}",
+		] {
 			let forward: Vec<char> = Utf8Chars::new(s.as_bytes()).collect();
 			let expected: Vec<char> = s.chars().collect();
 			assert_eq!(forward, expected, "s={s:?}");
@@ -179,7 +194,10 @@ mod test {
 	/// continuation bytes.
 	#[test]
 	fn decode_scalar_rejects_invalid_lead() {
-		let invalid_leads: Vec<u8> = (0x80..=0xBF).chain([0xC0, 0xC1]).chain(0xF5..=0xFF).collect();
+		let invalid_leads: Vec<u8> = (0x80..=0xBF)
+			.chain([0xC0, 0xC1])
+			.chain(0xF5..=0xFF)
+			.collect();
 		for lead in invalid_leads {
 			let bytes: [u8; 4] = [lead, 0x80, 0x80, 0x80];
 			let result = std::panic::catch_unwind(|| decode_scalar(&bytes));
@@ -190,7 +208,13 @@ mod test {
 	/// A truncated scalar at the end of the slice must panic, not read out of bounds.
 	#[test]
 	fn decode_scalar_rejects_truncated() {
-		let truncated: [&[u8]; 5] = [&[0xC3], &[0xE4], &[0xE4, 0xB8], &[0xF0], &[0xF0, 0x9F, 0x98]];
+		let truncated: [&[u8]; 5] = [
+			&[0xC3],
+			&[0xE4],
+			&[0xE4, 0xB8],
+			&[0xF0],
+			&[0xF0, 0x9F, 0x98],
+		];
 		for bytes in truncated {
 			let result = std::panic::catch_unwind(|| decode_scalar(bytes));
 			assert!(result.is_err(), "bytes={bytes:?}");

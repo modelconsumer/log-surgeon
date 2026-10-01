@@ -82,12 +82,18 @@ impl Eq for ParsingSpec {}
 
 impl PartialEq for ParsingSpec {
 	fn eq(&self, other: &Self) -> bool {
-		(&self.rules, &self.delimiters, &self.placeholders, &self.encodings).eq(&(
-			&other.rules,
-			&other.delimiters,
-			&other.placeholders,
-			&other.encodings,
-		))
+		(
+			&self.rules,
+			&self.delimiters,
+			&self.placeholders,
+			&self.encodings,
+		)
+			.eq(&(
+				&other.rules,
+				&other.delimiters,
+				&other.placeholders,
+				&other.encodings,
+			))
 	}
 }
 
@@ -128,7 +134,11 @@ impl ParsingSpecBuilder {
 	///
 	/// - `"delimiters"`
 	///
-	pub fn add_rule<LikeString>(&mut self, name: LikeString, pattern: &str) -> Result<&mut Self, RegexError>
+	pub fn add_rule<LikeString>(
+		&mut self,
+		name: LikeString,
+		pattern: &str,
+	) -> Result<&mut Self, RegexError>
 	where
 		LikeString: Into<Arc<str>>,
 	{
@@ -155,12 +165,18 @@ impl ParsingSpecBuilder {
 		assert!(!name.is_empty());
 		assert_ne!(&*name, "delimiters");
 
-		let regex: AnchoredRegex = AnchoredRegex::from_pattern_with_placeholders(pattern, name.clone(), self)?;
+		let regex: AnchoredRegex =
+			AnchoredRegex::from_pattern_with_placeholders(pattern, name.clone(), self)?;
 		Ok(self.add_rule_parsed(priority, name, regex))
 	}
 
 	/// Adds an already-parsed rule; see [`ParsingSpecBuilder::add_rule_with_priority`].
-	pub fn add_rule_parsed<LikeString>(&mut self, priority: i32, name: LikeString, regex: AnchoredRegex) -> &mut Self
+	pub fn add_rule_parsed<LikeString>(
+		&mut self,
+		priority: i32,
+		name: LikeString,
+		regex: AnchoredRegex,
+	) -> &mut Self
 	where
 		LikeString: Into<Arc<str>>,
 	{
@@ -168,8 +184,10 @@ impl ParsingSpecBuilder {
 		assert!(!name.is_empty());
 		assert_ne!(&*name, "delimiters");
 
-		let rules: &mut Vec<(Arc<str>, AnchoredRegex)> =
-			self.rules_by_priority.entry(priority).or_insert_with(Vec::new);
+		let rules: &mut Vec<(Arc<str>, AnchoredRegex)> = self
+			.rules_by_priority
+			.entry(priority)
+			.or_insert_with(Vec::new);
 
 		rules.push((name, regex));
 
@@ -180,7 +198,11 @@ impl ParsingSpecBuilder {
 	///
 	/// - `"delimiters"`
 	///
-	pub fn add_placeholder<LikeString>(&mut self, name: LikeString, regex: Regex) -> Result<&mut Self, Regex>
+	pub fn add_placeholder<LikeString>(
+		&mut self,
+		name: LikeString,
+		regex: Regex,
+	) -> Result<&mut Self, Regex>
 	where
 		LikeString: Into<String>,
 	{
@@ -197,7 +219,11 @@ impl ParsingSpecBuilder {
 	}
 
 	/// Panics if `name` is empty.
-	pub fn add_encoding<LikeString>(&mut self, name: LikeString, regex: Regex) -> Result<&mut Self, Arc<Encoding>>
+	pub fn add_encoding<LikeString>(
+		&mut self,
+		name: LikeString,
+		regex: Regex,
+	) -> Result<&mut Self, Arc<Encoding>>
 	where
 		LikeString: Into<String>,
 	{
@@ -214,7 +240,12 @@ impl ParsingSpecBuilder {
 			.expect("too many encodings");
 		let idx: EncodingIdx = EncodingIdx::from(idx);
 		let nfa: Tnfa = Tnfa::for_regex(&regex);
-		self.encodings.push(Arc::new(Encoding { idx, name, regex, nfa }));
+		self.encodings.push(Arc::new(Encoding {
+			idx,
+			name,
+			regex,
+			nfa,
+		}));
 
 		Ok(self)
 	}
@@ -243,21 +274,28 @@ impl ParsingSpecBuilder {
 			}
 		}
 
-		let compressed_dfa_for_parsing: CompressedDfa = self.maybe_cached_dfa.unwrap_or_else(|| {
-			debug!("[dfa] determinizing main dfa for parsing...");
-			now!(t0);
-			let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
-			now!(t1);
-			debug!("[dfa] determinizing took {} ms. canonicalizing...", millis!(t0, t1));
-			let minimized: Tdfa = main_dfa.canonicalize();
-			now!(t2);
-			debug!("[dfa] canonicalizing took {} ms.", millis!(t1, t2));
-			now!(t3);
-			let compressed_dfa_for_parsing: CompressedDfa = minimized.compress();
-			now!(t4);
-			debug!("[dfa] compressing main dfa for parsing took {} ms.", millis!(t3, t4));
-			compressed_dfa_for_parsing
-		});
+		let compressed_dfa_for_parsing: CompressedDfa =
+			self.maybe_cached_dfa.unwrap_or_else(|| {
+				debug!("[dfa] determinizing main dfa for parsing...");
+				now!(t0);
+				let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
+				now!(t1);
+				debug!(
+					"[dfa] determinizing took {} ms. canonicalizing...",
+					millis!(t0, t1)
+				);
+				let minimized: Tdfa = main_dfa.canonicalize();
+				now!(t2);
+				debug!("[dfa] canonicalizing took {} ms.", millis!(t1, t2));
+				now!(t3);
+				let compressed_dfa_for_parsing: CompressedDfa = minimized.compress();
+				now!(t4);
+				debug!(
+					"[dfa] compressing main dfa for parsing took {} ms.",
+					millis!(t3, t4)
+				);
+				compressed_dfa_for_parsing
+			});
 
 		let nfa_for_search: Tnfa = Tnfa::for_rules(&rules, &self.delimiters, &self.encodings);
 
@@ -375,16 +413,19 @@ impl ParsingSpec {
 
 	/// Converts a sequence of shape fragments to an automaton.
 	///
-	/// Split out from [`Self::automata_for_shape`] so a caller can build a **prefix** of a shape. A query
-	/// that is not anchored at the end finishes with a wildcard that consumes everything past its last
-	/// literal run, so shape parts beyond that run only ever match `.*` and need never be built. Real
-	/// shapes carry tens of thousands of characters of trailing static text and one
-	/// state is emitted per character, so not building it is the difference between a ~20-state
-	/// intersection and a ~20 000-state one.
+	/// Split out from [`Self::automata_for_shape`] so a caller can build a **prefix** of a shape.
+	/// A query that is not anchored at the end finishes with a wildcard
+	/// that consumes everything past its last literal run,
+	/// so shape parts beyond that run only ever match `.*` and need never be built.
+	/// Real shapes carry tens of thousands of characters of trailing static text,
+	/// and one state is emitted per character,
+	/// so not building it is the difference between a ~20-state intersection
+	/// and a ~20 000-state one.
 	///
-	/// Note the elided tail is dropped outright rather than replaced by `.*`: a wildcard is a *superset*
-	/// of the text it stands for, and would let a run straddle into the tail in ways the real text
-	/// forbids, inventing interpretations the full shape does not have.
+	/// Note the elided tail is dropped outright rather than replaced by `.*`:
+	/// a wildcard is a *superset* of the text it stands for,
+	/// and would let a run straddle into the tail in ways the real text forbids,
+	/// inventing interpretations the full shape does not have.
 	///
 	/// Returns `Err(name)` if a name is not found.
 	pub fn automata_for_fragments(&self, fragments: &[LogShapeFragment]) -> Result<Tnfa, String> {
@@ -393,7 +434,8 @@ impl ParsingSpec {
 		for fragment in fragments.iter() {
 			match fragment {
 				LogShapeFragment::Text(text) => {
-					let regex: Regex = Regex::Sequence(text.chars().map(Regex::Literal).collect::<Vec<_>>());
+					let regex: Regex =
+						Regex::Sequence(text.chars().map(Regex::Literal).collect::<Vec<_>>());
 					sequence.push(Tnfa::for_regex(&regex));
 				},
 				LogShapeFragment::Rule(rule_name) => {
@@ -411,7 +453,9 @@ impl ParsingSpec {
 			}
 		}
 
-		Ok(sequence.into_iter().fold(Tnfa::BLANK, |accum, x| accum.concat(&x)))
+		Ok(sequence
+			.into_iter()
+			.fold(Tnfa::BLANK, |accum, x| accum.concat(&x)))
 	}
 
 	pub fn split_log_shape(&self, shape: &str) -> Vec<LogShapeFragment> {
@@ -531,20 +575,35 @@ mod test {
 
 		let event: LogEvent<'_> = parser.next_event("a1b", &mut 0).unwrap();
 		assert_eq!(event.all_matches.len(), 1);
-		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(1).unwrap()));
+		assert_eq!(
+			event.all_matches[0].rule_idx,
+			RuleIdx::from(NonZero::new(1).unwrap())
+		);
 		assert_eq!(event.all_matches[0].encoding_idx, None);
 
 		let event: LogEvent<'_> = parser.next_event("123", &mut 0).unwrap();
 		assert_eq!(event.all_matches.len(), 1);
-		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(1).unwrap()));
-		assert_eq!(event.all_matches[0].encoding_idx.unwrap(), NonZero::new(1).unwrap());
+		assert_eq!(
+			event.all_matches[0].rule_idx,
+			RuleIdx::from(NonZero::new(1).unwrap())
+		);
+		assert_eq!(
+			event.all_matches[0].encoding_idx.unwrap(),
+			NonZero::new(1).unwrap()
+		);
 
 		let event: LogEvent<'_> = parser.next_event("12.34.56.78", &mut 0).unwrap();
 		assert_eq!(event.message.as_str(), "12.34.56.78");
 		println!("matches are {:?}", event.all_matches.as_slice());
 		assert_eq!(event.all_matches.len(), 2);
-		assert_eq!(event.all_matches[0].rule_idx, RuleIdx::from(NonZero::new(2).unwrap()));
+		assert_eq!(
+			event.all_matches[0].rule_idx,
+			RuleIdx::from(NonZero::new(2).unwrap())
+		);
 		assert_eq!(event.all_matches[0].encoding_idx, None);
-		assert_eq!(event.all_matches[1].encoding_idx.unwrap(), NonZero::new(1).unwrap());
+		assert_eq!(
+			event.all_matches[1].encoding_idx.unwrap(),
+			NonZero::new(1).unwrap()
+		);
 	}
 }

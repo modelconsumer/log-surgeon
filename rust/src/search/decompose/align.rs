@@ -1,40 +1,47 @@
-//! Aligns a query's fixed text against a [`ShapeModel`], decomposing it into the shape's static text
-//! and captures of the shape's placeholders.
+//! Aligns a query's fixed text against a [`ShapeModel`],
+//! decomposing it into the shape's static text and captures of the shape's placeholders.
 //!
 //! # The model
 //!
 //! A message of a given shape is produced by walking the shape's parts left to right and emitting,
-//! for each part, either its static text verbatim or some string the part's rule can match. A query
-//! matches when its symbols consume such a message (a *prefix* of it, unless the query is anchored at
-//! the end).
+//! for each part, either its static text verbatim or some string the part's rule can match.
+//! A query matches when its symbols consume such a message (a *prefix* of it,
+//! unless the query is anchored at the end).
 //!
-//! The shape is flattened into [`Atom`]s -- one per static character, one per placeholder -- so a
-//! position in the walk is just a pair of indices: how much of the query has been consumed, and how
-//! much of the shape has been produced.
+//! The shape is flattened into [`Atom`]s -- one per static character, one per placeholder --
+//! so a position in the walk is just a pair of indices:
+//! how much of the query has been consumed, and how much of the shape has been produced.
 //!
 //! Start anchoring needs no special handling: a query that is not anchored at the start simply
-//! *begins* with a [`SymbolicChar::GlobStar`], which is what lets the shape emit unconsumed text. End
-//! anchoring is passed explicitly, because the engine expresses it by *not* simulating a trailing
-//! wildcard rather than by carrying one in the symbols -- there is nothing in `symbols` to read it off.
+//! *begins* with a [`SymbolicChar::GlobStar`], which is what lets the shape emit unconsumed text.
+//! End anchoring is passed explicitly,
+//! because the engine expresses it by *not* simulating a trailing wildcard,
+//! rather than carrying one in the symbols
+//! -- there is nothing in `symbols` to read it off.
 //!
 //! # Structure and termination
 //!
-//! Every transition advances the query cursor, the shape cursor, or both; neither moves backwards, so
-//! the state space is a DAG and can be solved in one reverse sweep. The work happens in two passes:
+//! Every transition advances the query cursor, the shape cursor, or both;
+//! neither moves backwards, so the state space is a DAG and can be solved in one reverse sweep.
+//! The work happens in two passes:
 //!
-//! 1. *Reachability* -- which states can still consume the rest of the query. This alone answers the
-//!    prefilter's main question (can this shape match at all?) in `O(states)`, with no allocation per
-//!    state, so rejecting a shape is cheap.
-//! 2. *Enumeration* -- only over reachable states, collecting the decompositions themselves. The number
-//!    of decompositions can be exponential in principle, so this pass is capped by a [`Budget`];
+//! 1. *Reachability* -- which states can still consume the rest of the query.
+//!    This alone answers the prefilter's main question (can this shape match at all?)
+//!    in `O(states)`, with no allocation per state, so rejecting a shape is cheap.
+//! 2. *Enumeration* -- only over reachable states, collecting the decompositions themselves.
+//!    The number of decompositions can be exponential in principle,
+//!    so this pass is capped by a [`Budget`];
 //!    exceeding it yields [`Outcome::Unknown`] rather than a wrong answer.
 //!
 //! # Soundness
 //!
-//! Placeholders are approximated by a [`crate::search::decompose::Charset`], and are permitted to match the
-//! empty string (the model does not know a rule's minimum length). Both widen the set of accepted
-//! alignments, so the result is a **superset** of the true decompositions: [`Outcome::Rejected`]
-//! proves no match is possible, while [`Outcome::Approximate`] must still be confirmed by the engine.
+//! Placeholders are approximated by a [`crate::search::decompose::Charset`],
+//! and are permitted to match the empty string
+//! (the model does not know a rule's minimum length).
+//! Both widen the set of accepted alignments,
+//! so the result is a **superset** of the true decompositions: [`Outcome::Rejected`]
+//! proves no match is possible,
+//! while [`Outcome::Approximate`] must still be confirmed by the engine.
 
 #[cfg(test)]
 mod test;
@@ -85,8 +92,10 @@ pub struct Budget {
 
 impl Default for Budget {
 	fn default() -> Self {
-		// Generous enough for realistic shapes (thousands of atoms, a handful of query runs), small
-		// enough that the fallback stays far cheaper than the intersection it is trying to avoid.
+		// Generous enough for realistic shapes
+		// (thousands of atoms, a handful of query runs),
+		// small enough that the fallback stays far cheaper
+		// than the intersection it is trying to avoid.
 		Self {
 			max_partial_alignments: 500_000,
 			max_alignments: 4_096,
@@ -96,8 +105,8 @@ impl Default for Budget {
 
 /// A shape flattened to one symbol-producing unit.
 ///
-/// Flattening removes the need to track a character offset inside a static run, and makes indexed
-/// access `O(1)` (indexing a `String` by character position is not).
+/// Flattening removes the need to track a character offset inside a static run,
+/// and makes indexed access `O(1)` (indexing a `String` by character position is not).
 #[derive(Clone, Copy, Debug)]
 enum Atom<'a> {
 	/// A single static character, which a match must reproduce verbatim.
@@ -122,13 +131,15 @@ impl ShapeModel {
 
 /// Whether any message of this shape could match the query.
 ///
-/// This is the prefilter proper, and runs only the reachability pass: `false` **proves** no message of
-/// the shape can match, while `true` means "not ruled out". It allocates one bit per state and nothing
-/// per alignment, so it is much cheaper than [`align`] -- use it whenever the decompositions themselves
-/// are not needed.
+/// This is the prefilter proper, and runs only the reachability pass:
+/// `false` **proves** no message of the shape can match, while `true` means "not ruled out".
+/// It allocates one bit per state and nothing per alignment,
+/// so it is much cheaper than [`align`] --
+/// use it whenever the decompositions themselves are not needed.
 ///
-/// `symbols` is the query as the engine sees it, i.e. with any single trailing wildcard already
-/// stripped. `anchored_at_end` states whether the query must consume the shape through to its end,
+/// `symbols` is the query as the engine sees it,
+/// i.e. with any single trailing wildcard already stripped.
+/// `anchored_at_end` states whether the query must consume the shape through to its end,
 /// which is exactly "the query had no trailing wildcard to strip".
 #[must_use]
 pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool {
@@ -155,20 +166,26 @@ pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: 
 
 /// A cheap *sufficient* condition for "not ruled out", used to skip the full walk.
 ///
-/// If the query may float freely (it starts with a wildcard) and some single placeholder's charset
-/// admits every literal the query contains, then as far as this model knows that placeholder alone
-/// could emit the entire query text, so the shape cannot be rejected.
+/// If the query may float freely (it starts with a wildcard)
+/// and some single placeholder's charset admits every literal the query contains,
+/// then as far as this model knows that placeholder alone could emit the entire query text,
+/// so the shape cannot be rejected.
 ///
-/// When the query is anchored at the end the placeholder must additionally be able to be *last*, since
-/// the query has to consume the message through to its end; a placeholder with only nullable parts
-/// after it qualifies.
+/// When the query is anchored at the end the placeholder must additionally be able to be *last*,
+/// since the query has to consume the message through to its end;
+/// a placeholder with only nullable parts after it qualifies.
 ///
-/// This only ever returns `true`, i.e. only ever causes a shape to be *kept*, so it cannot make the
-/// prefilter unsound. It matters because it is `O(placeholders + query)` against the walk's
-/// `O(atoms x query)`: real log shapes are long (thousands of characters) and usually contain a
-/// permissive placeholder, so this is the common case, and paying for the full table there is what
-/// made the prefilter cost more than it saved.
-fn is_obviously_not_ruled_out(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool {
+/// This only ever returns `true`, i.e. only ever causes a shape to be *kept*,
+/// so it cannot make the prefilter unsound.
+/// It matters because it is `O(placeholders + query)` against the walk's `O(atoms x query)`:
+/// real log shapes are long (thousands of characters) and usually contain a permissive placeholder,
+/// so this is the common case,
+/// and paying for the full table there is what made the prefilter cost more than it saved.
+fn is_obviously_not_ruled_out(
+	model: &ShapeModel,
+	symbols: &[SymbolicChar],
+	anchored_at_end: bool,
+) -> bool {
 	if Some(&SymbolicChar::GlobStar) != symbols.first() {
 		return false;
 	}
@@ -191,24 +208,33 @@ fn is_obviously_not_ruled_out(model: &ShapeModel, symbols: &[SymbolicChar], anch
 
 /// Aligns `symbols` against `model`, decomposing the query's fixed text.
 ///
-/// Prefer [`can_match`] when only the yes/no answer is needed; this additionally enumerates the
-/// decompositions, which costs proportionally to how many there are.
+/// Prefer [`can_match`] when only the yes/no answer is needed;
+/// this additionally enumerates the decompositions,
+/// which costs proportionally to how many there are.
 ///
 /// `symbols` is the query with any single trailing wildcard already stripped; `anchored_at_end`
-/// carries what that wildcard meant, i.e. whether the query must consume the shape through to its
-/// end. The two are read off the same query by [`crate::search::SearchString::anchored`], so a trailing `*` must
-/// be stripped from `symbols` and reported as `anchored_at_end == false`, never one without the
-/// other.
+/// carries what that wildcard meant,
+/// i.e. whether the query must consume the shape through to its end.
+/// The two are read off the same query by [`crate::search::SearchString::anchored`],
+/// so a trailing `*` must be stripped from `symbols` and reported as `anchored_at_end == false`,
+/// never one without the other.
 #[must_use]
-pub fn align(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool, budget: Budget) -> Outcome {
-	// An empty query constrains nothing, and the engine rejects it outright; do not claim otherwise.
+pub fn align(
+	model: &ShapeModel,
+	symbols: &[SymbolicChar],
+	anchored_at_end: bool,
+	budget: Budget,
+) -> Outcome {
+	// An empty query constrains nothing, and the engine rejects it outright;
+	// do not claim otherwise.
 	if symbols.is_empty() {
 		return Outcome::Unknown;
 	}
 
-	// Collapsing runs of wildcards keeps alignments canonical: `**` constrains no more than `*`, so
-	// leaving both would enumerate the same decomposition twice. It also guarantees no two adjacent
-	// symbols are both wildcards, which the transitions below rely on.
+	// Collapsing runs of wildcards keeps alignments canonical: `**` constrains no more than `*`,
+	// so leaving both would enumerate the same decomposition twice.
+	// It also guarantees no two adjacent symbols are both wildcards,
+	// which the transitions below rely on.
 	let symbols: Vec<SymbolicChar> = collapse_wildcards(symbols);
 	let symbols: &[SymbolicChar] = &symbols;
 
@@ -247,8 +273,9 @@ impl<'a> Solver<'a> {
 
 	/// Whether the shape, having produced `atom..`, can stop without emitting anything more.
 	///
-	/// Only relevant when anchored at the end. Remaining static characters must be produced, so they
-	/// block acceptance; a placeholder is conservatively assumed to be able to match the empty string.
+	/// Only relevant when anchored at the end. Remaining static characters must be produced,
+	/// so they block acceptance;
+	/// a placeholder is conservatively assumed to be able to match the empty string.
 	fn can_stop(&self, atom: usize) -> bool {
 		self.atoms[atom..]
 			.iter()
@@ -262,8 +289,8 @@ impl<'a> Solver<'a> {
 
 	/// The longest block of query symbols, starting at `query`, that `placeholder` could emit.
 	///
-	/// A wildcard stands for arbitrary rule output, so it never bounds the block; a literal does unless
-	/// the rule's charset admits it.
+	/// A wildcard stands for arbitrary rule output, so it never bounds the block;
+	/// a literal does unless the rule's charset admits it.
 	fn max_capture_length(&self, placeholder: &Placeholder, query: usize) -> usize {
 		let mut length: usize = 0;
 		while let Some(&symbol) = self.symbols.get(query + length) {
@@ -282,8 +309,9 @@ impl<'a> Solver<'a> {
 
 	/// Whether the start state can reach acceptance.
 	///
-	/// Same recurrence as [`Self::reachability`], but keeps only the two atom columns it needs (the
-	/// current one and its successor) instead of the full table, since no later pass reads the rest.
+	/// Same recurrence as [`Self::reachability`],
+	/// but keeps only the two atom columns it needs (the current one and its successor)
+	/// instead of the full table, since no later pass reads the rest.
 	fn can_reach_acceptance(&self) -> bool {
 		let width: usize = self.num_query_positions();
 		// `next` is the column for `atom + 1`; `current` is the column being filled.
@@ -295,7 +323,8 @@ impl<'a> Solver<'a> {
 				current[query] = if self.is_accepting(query, atom) {
 					true
 				} else if query == self.symbols.len() {
-					// Query consumed, but the shape must still produce static text (end-anchored only).
+					// Query consumed,
+					// but the shape must still produce static text (end-anchored only).
 					false
 				} else {
 					let symbol: SymbolicChar = self.symbols[query];
@@ -326,9 +355,10 @@ impl<'a> Solver<'a> {
 
 	/// Which states can consume the rest of the query and accept.
 	///
-	/// Solved in one reverse sweep: every transition either advances the atom cursor, or advances the
-	/// query cursor while leaving the atom cursor alone, so visiting atoms descending (and, within an
-	/// atom, query positions descending) always visits successors first.
+	/// Solved in one reverse sweep: every transition either advances the atom cursor,
+	/// or advances the query cursor while leaving the atom cursor alone,
+	/// so visiting atoms descending (and, within an atom, query positions descending)
+	/// always visits successors first.
 	fn reachability(&self) -> Vec<bool> {
 		let num_states: usize = self.num_query_positions() * (self.atoms.len() + 1);
 		let mut reachable: Vec<bool> = vec![false; num_states];
@@ -342,31 +372,38 @@ impl<'a> Solver<'a> {
 					continue;
 				}
 				if query == self.symbols.len() {
-					// Query consumed, but the shape must still produce static text (end-anchored only).
+					// Query consumed,
+					// but the shape must still produce static text (end-anchored only).
 					continue;
 				}
 
 				let symbol: SymbolicChar = self.symbols[query];
 
 				let Some(&current) = self.atoms.get(atom) else {
-					// Past the end of the shape: there is no more message to consume, so only a
-					// wildcard can remain, and only by matching nothing.
-					reachable[state] = (SymbolicChar::GlobStar == symbol) && reachable[self.index(query + 1, atom)];
+				// Past the end of the shape: there is no more message to consume,
+				// so only a wildcard can remain, and only by matching nothing.
+					reachable[state] = (SymbolicChar::GlobStar == symbol)
+						&& reachable[self.index(query + 1, atom)];
 					continue;
 				};
 
 				reachable[state] = match current {
 					Atom::Char(expected) => match symbol {
 						// Static text must be reproduced verbatim.
-						SymbolicChar::Literal(c) => (c == expected) && reachable[self.index(query + 1, atom + 1)],
-						// The wildcard absorbs this character, or stops and leaves it to the next symbol.
+						SymbolicChar::Literal(c) => {
+							(c == expected) && reachable[self.index(query + 1, atom + 1)]
+						},
+						// The wildcard absorbs this character,
+					// or stops and leaves it to the next symbol.
 						SymbolicChar::GlobStar => {
-							reachable[self.index(query, atom + 1)] || reachable[self.index(query + 1, atom)]
+							reachable[self.index(query, atom + 1)]
+								|| reachable[self.index(query + 1, atom)]
 						},
 					},
 					Atom::Placeholder(placeholder) => {
 						let longest: usize = self.max_capture_length(placeholder, query);
-						// `length == 0` means the placeholder's output is not described by the query.
+						// `length == 0` means the placeholder's output
+					// is not described by the query.
 						(0..=longest).any(|length| reachable[self.index(query + length, atom + 1)])
 					},
 				};
@@ -378,9 +415,11 @@ impl<'a> Solver<'a> {
 
 	/// Collects the decompositions, considering only reachable states.
 	///
-	/// Uses the same reverse sweep as [`Self::reachability`], so each state's decompositions are built
-	/// from its successors' -- already computed, and shared rather than re-explored. This is what keeps
-	/// the pass proportional to the number of *distinct* decompositions instead of the number of paths.
+	/// Uses the same reverse sweep as [`Self::reachability`],
+	/// so each state's decompositions are built from its successors' --
+	/// already computed, and shared rather than re-explored.
+	/// This is what keeps the pass proportional to the number of *distinct* decompositions,
+	/// instead of the number of paths.
 	fn enumerate(&self, reachable: &[bool], budget: Budget) -> Outcome {
 		let num_states: usize = self.num_query_positions() * (self.atoms.len() + 1);
 		// `None` for unreachable states, which are never read.
@@ -451,14 +490,17 @@ impl<'a> Solver<'a> {
 						Some(Atom::Placeholder(placeholder)) => {
 							let longest: usize = self.max_capture_length(placeholder, query);
 							for length in 0..=longest {
-								let consumed: &[SymbolicChar] = &self.symbols[query..(query + length)];
+								let consumed: &[SymbolicChar] =
+									&self.symbols[query..(query + length)];
 								let prepend: Prepend<'_> = if consumed.is_empty() {
-									// Nothing attributed to this placeholder, so no capture is emitted.
+									// Nothing attributed to this placeholder,
+								// so no capture is emitted.
 									Prepend::Nothing
 								} else if consumed.iter().all(SymbolicChar::is_wildcard) {
-									// A capture of only wildcards says nothing about the placeholder's
-									// value; record an unconstrained gap rather than a vacuous
-									// "this rule matched" result.
+								// A capture of only wildcards says nothing about
+								// the placeholder's value;
+								// record an unconstrained gap rather than a vacuous
+								// "this rule matched" result.
 									Prepend::Symbol(SymbolicChar::GlobStar)
 								} else {
 									Prepend::Capture(placeholder, consumed)
@@ -480,7 +522,9 @@ impl<'a> Solver<'a> {
 				collected.dedup();
 
 				materialized += collected.len();
-				if (materialized > budget.max_partial_alignments) || (collected.len() > budget.max_alignments) {
+				if (materialized > budget.max_partial_alignments)
+					|| (collected.len() > budget.max_alignments)
+				{
 					return Outcome::Unknown;
 				}
 
@@ -500,11 +544,14 @@ impl<'a> Solver<'a> {
 		}
 
 		Outcome::Approximate(Vec::from_iter(
-			alignments.into_iter().map(|fragments| Alignment { fragments }),
+			alignments
+				.into_iter()
+				.map(|fragments| Alignment { fragments }),
 		))
 	}
 
-	/// Extends `collected` with each of the successor state's decompositions, prefixed by `prepend`.
+	/// Extends `collected` with each of the successor state's decompositions,
+	/// prefixed by `prepend`.
 	fn extend_from(
 		&self,
 		collected: &mut Vec<Vec<Fragment>>,
@@ -560,11 +607,13 @@ enum Prepend<'a> {
 
 /// Prepends `symbol` to `fragments`, merging into a leading static fragment.
 ///
-/// Merging keeps decompositions canonical, so that structurally identical results compare equal and
-/// deduplicate. Adjacent wildcards collapse for the same reason.
+/// Merging keeps decompositions canonical,
+/// so that structurally identical results compare equal and deduplicate.
+/// Adjacent wildcards collapse for the same reason.
 fn prepend_symbol(fragments: &mut Vec<Fragment>, symbol: SymbolicChar) {
 	if let Some(Fragment::Static(contents)) = fragments.first_mut() {
-		if (SymbolicChar::GlobStar == symbol) && (Some(&SymbolicChar::GlobStar) == contents.first()) {
+		if (SymbolicChar::GlobStar == symbol) && (Some(&SymbolicChar::GlobStar) == contents.first())
+		{
 			return;
 		}
 		contents.insert(0, symbol);

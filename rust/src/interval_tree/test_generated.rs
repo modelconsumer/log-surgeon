@@ -11,12 +11,16 @@ fn complement_of_nothing_is_everything() {
 fn complement_nested_intervals() {
 	let intervals: &mut [Interval<u32>] = &mut [Interval::new(20, 40), Interval::new(25, 30)];
 	let complement: Vec<Interval<u32>> = Interval::complement(intervals);
-	assert_eq!(complement, vec![Interval::new(0, 19), Interval::new(41, u32::MAX)]);
+	assert_eq!(
+		complement,
+		vec![Interval::new(0, 19), Interval::new(41, u32::MAX)]
+	);
 }
 
 #[test]
 fn complement_duplicate_full_range() {
-	let intervals: &mut [Interval<u8>] = &mut [Interval::new(0, u8::MAX), Interval::new(0, u8::MAX)];
+	let intervals: &mut [Interval<u8>] =
+		&mut [Interval::new(0, u8::MAX), Interval::new(0, u8::MAX)];
 	let complement: Vec<Interval<u8>> = Interval::complement(intervals);
 	assert!(complement.is_empty());
 }
@@ -25,7 +29,10 @@ fn complement_duplicate_full_range() {
 fn complement_signed() {
 	let intervals: &mut [Interval<i8>] = &mut [Interval::new(0, 0)];
 	let complement: Vec<Interval<i8>> = Interval::complement(intervals);
-	assert_eq!(complement, vec![Interval::new(i8::MIN, -1), Interval::new(1, i8::MAX)]);
+	assert_eq!(
+		complement,
+		vec![Interval::new(i8::MIN, -1), Interval::new(1, i8::MAX)]
+	);
 }
 
 #[test]
@@ -47,8 +54,14 @@ fn overlap_basic() {
 		Some(Interval::new(10, 10))
 	);
 	// Adjacent but disjoint.
-	assert_eq!(Interval::new(0u32, 10).overlap(&Interval::new(11, 20)), None);
-	assert_eq!(Interval::new(11u32, 20).overlap(&Interval::new(0, 10)), None);
+	assert_eq!(
+		Interval::new(0u32, 10).overlap(&Interval::new(11, 20)),
+		None
+	);
+	assert_eq!(
+		Interval::new(11u32, 20).overlap(&Interval::new(0, 10)),
+		None
+	);
 }
 
 /// `overlap` must not overflow on intervals touching the representable bounds.
@@ -62,7 +75,10 @@ fn overlap_at_bounds_does_not_overflow() {
 		Interval::new(0u8, 0).overlap(&Interval::new(0, u8::MAX)),
 		Some(Interval::new(0, 0))
 	);
-	assert_eq!(Interval::new(0u8, 0).overlap(&Interval::new(u8::MAX, u8::MAX)), None);
+	assert_eq!(
+		Interval::new(0u8, 0).overlap(&Interval::new(u8::MAX, u8::MAX)),
+		None
+	);
 }
 
 #[test]
@@ -297,7 +313,9 @@ fn iter_and_iter_mut() {
 	tree.insert(Interval::new(10, 15), 2, PolicyAdd);
 
 	assert_eq!(
-		tree.iter().map(|(interval, _)| interval).collect::<Vec<_>>(),
+		tree.iter()
+			.map(|(interval, _)| interval)
+			.collect::<Vec<_>>(),
 		vec![Interval::new(0, 5), Interval::new(10, 15)]
 	);
 
@@ -400,7 +418,11 @@ fn coalesce_at_max_does_not_overflow() {
 fn coalesce_is_idempotent() {
 	let mut tree: IntervalTree<u32, u64> = IntervalTree::new();
 	for i in 0..20u32 {
-		tree.insert(Interval::new(i * 2, (i * 2) + 1), u64::from(i % 3), PolicyAdd);
+		tree.insert(
+			Interval::new(i * 2, (i * 2) + 1),
+			u64::from(i % 3),
+			PolicyAdd,
+		);
 	}
 	tree.coalesce();
 	let once: Vec<(Interval<u32>, u64)> = tree.intervals.clone();
@@ -435,9 +457,12 @@ fn randomized_coalesce_preserves_lookups() {
 
 		// The result must be fully coalesced: no adjacent-and-equal pair remains.
 		for window in tree.intervals.windows(2) {
-			let (left, right): (&(Interval<u8>, u64), &(Interval<u8>, u64)) = (&window[0], &window[1]);
+			let (left, right): (&(Interval<u8>, u64), &(Interval<u8>, u64)) =
+				(&window[0], &window[1]);
 			assert!(
-				!((left.0.end() != u8::MAX) && (left.0.end().up() == right.0.start()) && (left.1 == right.1)),
+				!((left.0.end() != u8::MAX)
+					&& (left.0.end().up() == right.0.start())
+					&& (left.1 == right.1)),
 				"not fully coalesced: {:?}",
 				tree.intervals
 			);
@@ -564,7 +589,10 @@ fn randomized_complement_matches_reference() {
 		}
 
 		for pos in 0..256 {
-			assert_eq!(uncovered[pos], !covered[pos], "mismatch at {pos}: {complement:?}");
+			assert_eq!(
+				uncovered[pos], !covered[pos],
+				"mismatch at {pos}: {complement:?}"
+			);
 		}
 	}
 }
@@ -584,14 +612,21 @@ fn randomized_overlap_matches_reference() {
 
 		let expected: Vec<u8> = (0..32u8)
 			.filter(|&pos| {
-				(left.start() <= pos) && (pos <= left.end()) && (right.start() <= pos) && (pos <= right.end())
+				(left.start() <= pos)
+					&& (pos <= left.end())
+					&& (right.start() <= pos)
+					&& (pos <= right.end())
 			})
 			.collect();
 
 		match left.overlap(&right) {
 			None => assert!(expected.is_empty(), "{left:?} and {right:?} do overlap"),
 			Some(overlap) => {
-				assert_eq!(Some(&overlap.start()), expected.first(), "{left:?} {right:?}");
+				assert_eq!(
+					Some(&overlap.start()),
+					expected.first(),
+					"{left:?} {right:?}"
+				);
 				assert_eq!(Some(&overlap.end()), expected.last(), "{left:?} {right:?}");
 			},
 		}

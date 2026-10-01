@@ -7,10 +7,11 @@ use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RuleIdx;
 
 /// If set in a transition value, the target state is accepting (has a non-`None`
-/// [`accepts_for_rule`](CompressedDfa::accepts_for_rule) entry), and the low bits are the target state index.
+/// [`accepts_for_rule`](CompressedDfa::accepts_for_rule) entry),
+/// and the low bits are the target state index.
 ///
-/// This lets the hot loop test acceptance with a single load (the transition itself) instead of
-/// a second dependent load into `accepts_for_rule` for every character.
+/// This lets the hot loop test acceptance with a single load (the transition itself)
+/// instead of a second dependent load into `accepts_for_rule` for every character.
 const ACCEPTING_BIT: u16 = 0x8000;
 const STATE_MASK: u16 = !ACCEPTING_BIT;
 
@@ -19,8 +20,12 @@ pub struct CompressedDfa {
 	pub intervals: Vec<Interval<u32>>,
 	pub accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>>,
 	/// Flattened `states.len() * 0x80` table of encoded transitions for ASCII bytes,
-	/// indexed by `state * 0x80 + byte`. Encoded values: target state index in the low bits,
-	/// plus [`ACCEPTING_BIT`] if the target state is accepting. `0` means "no transition".
+	/// indexed by `state * 0x80 + byte`.
+	///
+	/// Encoded values: target state index in the low bits,
+	/// plus [`ACCEPTING_BIT`] if the target state is accepting.
+	///
+	/// `0` means "no transition".
 	pub ascii_transitions: Vec<u16>,
 	pub non_ascii_transitions: Vec<u16>,
 }
@@ -47,9 +52,11 @@ impl Tdfa {
 			}
 		}
 
-		let mut accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>> = Vec::with_capacity(self.states.len());
+		let mut accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>> =
+			Vec::with_capacity(self.states.len());
 		let mut ascii_transitions: Vec<u16> = vec![0; self.states.len() * 0x80];
-		let mut non_ascii_transitions: Vec<u16> = Vec::with_capacity(self.states.len() * all_intervals.len());
+		let mut non_ascii_transitions: Vec<u16> =
+			Vec::with_capacity(self.states.len() * all_intervals.len());
 
 		assert!(
 			self.states.len() <= usize::from(STATE_MASK),
@@ -101,9 +108,14 @@ impl CompressedDfa {
 		non_ascii_transitions: Vec::new(),
 	};
 
-	pub fn execute<'input>(&self, input: &'input [u8], last_was_delimited: u32) -> Option<MatchedRule<'input>> {
-		// The anchor transition's target may itself be accepting, but (matching
-		// [`Tdfa::execute_without_captures`]) acceptance is only recorded while consuming input.
+	pub fn execute<'input>(
+		&self,
+		input: &'input [u8],
+		last_was_delimited: u32,
+	) -> Option<MatchedRule<'input>> {
+		// The anchor transition's target may itself be accepting,
+		// but (matching [`Tdfa::execute_without_captures`])
+		// acceptance is only recorded while consuming input.
 		let mut current_state: u16 = self.lookup_next_state(0, last_was_delimited)? & STATE_MASK;
 
 		let mut maybe_backup: Option<BackupState> = None;
@@ -112,20 +124,26 @@ impl CompressedDfa {
 		let mut i: usize = 0;
 		while i < input.len() {
 			let b: u8 = input[i];
-			// `consumed` is recorded *before* advancing, so it holds the position of the
-			// character that led to the accepting state (matching `Tdfa::execute_without_captures`).
+			// `consumed` is recorded *before* advancing,
+			// so it holds the position of the character that led to the accepting state
+			// (matching `Tdfa::execute_without_captures`).
 			let (encoded, advance): (u16, usize) = if b < 0x80 {
 				// Fast path: ASCII bytes map directly into the per-state table,
-				// so we avoid UTF-8 decoding entirely. The table also encodes
-				// whether the target is accepting, saving a second lookup.
-				// SAFETY: `current_state` is always a valid state index (it comes from a masked
-				// transition value, or the anchor transition at the top), and `b < 0x80`.
-				let encoded: u16 =
-					unsafe { *ascii_transitions.get_unchecked(usize::from(current_state) * 0x80 + usize::from(b)) };
+				// so we avoid UTF-8 decoding entirely.
+				// The table also encodes whether the target is accepting,
+				// saving a second lookup.
+				// SAFETY: `current_state` is always a valid state index
+				// (it comes from a masked transition value, or the anchor transition at the top),
+				// and `b < 0x80`.
+				let encoded: u16 = unsafe {
+					*ascii_transitions
+						.get_unchecked(usize::from(current_state) * 0x80 + usize::from(b))
+				};
 				(encoded, 1)
 			} else {
-				// Non-ASCII: decode a single UTF-8 scalar. [`decode_scalar`] validates only the
-				// bytes of that scalar, so the cost does not depend on the remaining input length.
+				// Non-ASCII: decode a single UTF-8 scalar.
+				// [`decode_scalar`] validates only the bytes of that scalar,
+				// so the cost does not depend on the remaining input length.
 				let (ch, len): (char, usize) = crate::utils::utf8::decode_scalar(&input[i..]);
 				match self.lookup_next_state(current_state, u32::from(ch)) {
 					Some(encoded) => (encoded, len),
@@ -139,7 +157,8 @@ impl CompressedDfa {
 				break;
 			}
 			if encoded & ACCEPTING_BIT != 0 {
-				let (rule_idx, maybe_encoding_idx) = self.accepts_for_rule[usize::from(encoded & STATE_MASK)].unwrap();
+				let (rule_idx, maybe_encoding_idx) =
+					self.accepts_for_rule[usize::from(encoded & STATE_MASK)].unwrap();
 				maybe_backup = Some(BackupState {
 					rule_idx,
 					maybe_encoding_idx,
@@ -151,6 +170,7 @@ impl CompressedDfa {
 		}
 
 		// Treat end-of-input as if a newline followed.
+		//
 		// (Note: skipped if the loop broke early on a failed transition,
 		// matching the `chain`-based iteration in [`Tdfa::execute_without_captures`].)
 		if (i == input.len())
@@ -158,7 +178,8 @@ impl CompressedDfa {
 		{
 			current_state = encoded & STATE_MASK;
 			if encoded & ACCEPTING_BIT != 0 {
-				let (rule_idx, maybe_encoding_idx) = self.accepts_for_rule[usize::from(current_state)].unwrap();
+				let (rule_idx, maybe_encoding_idx) =
+					self.accepts_for_rule[usize::from(current_state)].unwrap();
 				maybe_backup = Some(BackupState {
 					rule_idx,
 					maybe_encoding_idx,
@@ -169,10 +190,12 @@ impl CompressedDfa {
 
 		let backup: BackupState = maybe_backup?;
 
-		// SAFETY: the loop only advances past ASCII bytes (valid UTF-8 by definition) and past
-		// non-ASCII scalars that were just validated via [`crate::utils::utf8::decode_scalar`], so
-		// `input[..consumed]` is valid UTF-8.
-		let lexeme: &'input str = unsafe { std::str::from_utf8_unchecked(&input[..backup.consumed]) };
+		// SAFETY: the loop only advances past ASCII bytes (valid UTF-8 by definition)
+		// and past non-ASCII scalars that were just validated
+		// via [`crate::utils::utf8::decode_scalar`],
+		// so `input[..consumed]` is valid UTF-8.
+		let lexeme: &'input str =
+			unsafe { std::str::from_utf8_unchecked(&input[..backup.consumed]) };
 
 		Some(MatchedRule {
 			rule_idx: backup.rule_idx,
@@ -199,7 +222,9 @@ impl CompressedDfa {
 
 	fn char_to_class(&self, ch: u32) -> usize {
 		// TODO refactor with interval tree
-		let i: usize = self.intervals.partition_point(|interval| interval.end() < ch);
+		let i: usize = self
+			.intervals
+			.partition_point(|interval| interval.end() < ch);
 		if let Some(interval) = self.intervals.get(i) {
 			if interval.start() <= ch {
 				return i;

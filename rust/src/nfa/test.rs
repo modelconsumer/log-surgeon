@@ -143,7 +143,8 @@ fn for_pattern(pattern: &str) -> Tnfa {
 ///
 /// [`Tdfa::execute`] accepts any viable prefix, and [`Tdfa::execute_without_captures`]
 /// needs anchor transitions, which [`Tnfa::for_regex`] doesn't build.
-/// So instead we append a terminator that is only reachable from `nfa`'s accepting states;
+/// So instead we append a terminator
+/// that is only reachable from `nfa`'s accepting states;
 /// consuming it is then equivalent to `input` being matched in full.
 fn matches(nfa: &Tnfa, input: &str) -> bool {
 	const TERMINATOR: char = '\u{0}';

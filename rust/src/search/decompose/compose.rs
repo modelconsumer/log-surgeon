@@ -2,40 +2,46 @@
 //!
 //! # The DP
 //!
-//! A [`Composition`] chooses one placement per run such that the chosen placements run left to right
-//! and do not overlap. The state is `(run index, earliest usable part)` and every placement advances
-//! both, so the state space is a DAG and is solved by a reverse sweep -- the same structure as
-//! [`crate::search::decompose::align`], and the reason feasibility can be decided in
-//! `O(runs x parts x placements)` even when the number of compositions is large.
+//! A [`Composition`] chooses one placement per run such that the chosen placements run
+//! left to right and do not overlap. The state is `(run index, earliest usable part)`
+//! and every placement advances both, so the state space is a DAG and is solved
+//! by a reverse sweep -- the same structure as [`crate::search::decompose::align`],
+//! and the reason feasibility can be decided in `O(runs x parts x placements)`
+//! even when the number of compositions is large.
 //!
-//! Enumeration is separated from feasibility ([`crate::search::decompose::can_compose`]) so that a shape can be
-//! *rejected* cheaply, and only a shape that survives pays for materializing its decompositions. A
-//! [`ComposeBudget`] caps enumeration so a pathological shape degrades to "no conclusion" instead of
-//! exploding.
+//! Enumeration is separated from feasibility ([`crate::search::decompose::can_compose`]),
+//! so that a shape can be *rejected* cheaply, and only a shape that survives pays for
+//! materializing its decompositions. A [`ComposeBudget`] caps enumeration,
+//! so a pathological shape degrades to "no conclusion" instead of exploding.
 //!
 //! # Positional identity
 //!
-//! Each [`Capture`] names the **index of the shape part** that produced it, so two references to the
-//! same rule in one shape are distinguishable even when they share a name.
+//! Each [`Capture`] names the **index of the shape part** that produced it,
+//! so two references to the same rule in one shape are distinguishable
+//! even when they share a name.
 //!
-//! [`Composition::to_interpretation`] renders that positionally: every rule reference up to the last
-//! constrained one contributes a sub-query, with unconstrained references appearing as a bare `*`. The
-//! position of a capture among those placeholders is what identifies which reference it is, so
-//! `A%foo%B%foo%C` distinguishes its two `foo`s by whether a vacuous `foo=*` precedes the constrained
-//! one.
+//! [`Composition::to_interpretation`] renders that positionally:
+//! every rule reference up to the last constrained one contributes a sub-query,
+//! with unconstrained references appearing as a bare `*`. The position of a capture
+//! among those placeholders is what identifies which reference it is,
+//! so `A%foo%B%foo%C` distinguishes its two `foo`s by whether a vacuous `foo=*`
+//! precedes the constrained one.
 //!
-//! Static text is reported even where the query does not constrain it, as a `'*'` sub-query, so the
-//! output has the same shape as the engine's and [`crate::search::SearchString::search_by_name`]'s:
-//! a run split across static text and a rule yields one sub-query for each. This is pure rendering --
-//! the parts and their attribution are already known, so no automaton or simulation is involved.
+//! Static text is reported even where the query does not constrain it, as a `'*'`
+//! sub-query, so the output has the same shape as the engine's
+//! and [`crate::search::SearchString::search_by_name`]'s: a run split across static text
+//! and a rule yields one sub-query for each. This is pure rendering -- the parts and
+//! their attribution are already known, so no automaton or simulation is involved.
 //!
-//! A static sub-query's value must glob-match its part's text *exactly*, so a run covering only part
-//! of a stretch is padded with `*` on both sides; see [`symbolic_value_of`], which decides this from
-//! the piece offsets rather than from whether the part is a rule.
+//! A static sub-query's value must glob-match its part's text *exactly*,
+//! so a run covering only part of a stretch is padded with `*` on both sides;
+//! see [`symbolic_value_of`], which decides this from the piece offsets
+//! rather than from whether the part is a rule.
 //!
-//! References *after* the last constrained capture are omitted when the query is not anchored at the
-//! end: its trailing wildcard leaves them unconstrained, so they add nothing. Their static text is
-//! still reported, since that is where the trailing wildcard applies.
+//! References *after* the last constrained capture are omitted when the query is not
+//! anchored at the end: its trailing wildcard leaves them unconstrained,
+//! so they add nothing. Their static text is still reported,
+//! since that is where the trailing wildcard applies.
 
 #[cfg(test)]
 mod test;
@@ -72,8 +78,8 @@ pub struct Capture {
 	pub name: String,
 	/// The characters of the query this rule must produce.
 	///
-	/// Several runs can land in one rule, so this may hold more than one piece; they are recorded in
-	/// order and are separated by unconstrained text.
+	/// Several runs can land in one rule, so this may hold more than one piece;
+	/// they are recorded in order and are separated by unconstrained text.
 	pub pieces: Vec<PieceRef>,
 }
 
@@ -89,8 +95,8 @@ pub struct Literal {
 /// A piece of query text, and the run it came from.
 ///
 /// The run index is what makes wildcard placement recoverable: characters within one run are
-/// contiguous in the query and must stay contiguous in the rendering, while a run *boundary* is exactly
-/// where the query had a wildcard.
+/// contiguous in the query and must stay contiguous in the rendering,
+/// while a run *boundary* is exactly where the query had a wildcard.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PieceRef {
 	/// Index into the query's runs.
@@ -114,26 +120,29 @@ struct RenderedPart {
 impl Composition {
 	/// Renders this composition as an [`Interpretation`].
 	///
-	/// Shape parts are emitted in order: static text as a static sub-query, rule references as captures.
-	/// A reference with no query text attributed to it becomes a vacuous `*` capture, so a capture's
-	/// position among the placeholders identifies which reference it is -- this is how two references to
+	/// Shape parts are emitted in order: static text as a static sub-query,
+	/// rule references as captures. A reference with no query text attributed to it
+	/// becomes a vacuous `*` capture, so a capture's position among the placeholders
+	/// identifies which reference it is -- this is how two references to
 	/// one rule name are told apart.
 	///
-	/// Static text is reported whether or not the query constrains it, matching the engine and the shape
-	/// of [`crate::search::SearchString::search_by_name`]'s output: a stretch the query's wildcard merely
-	/// passes over becomes `'*'`. Consecutive static parts are merged into one sub-query, since
-	/// [`Interpretation::invariants`] forbids two static sub-queries in a row.
+	/// Static text is reported whether or not the query constrains it,
+	/// matching the engine and the shape of [`crate::search::SearchString::search_by_name`]'s
+	/// output: a stretch the query's wildcard merely passes over becomes `'*'`.
+	/// Consecutive static parts are merged into one sub-query,
+	/// since [`Interpretation::invariants`] forbids two static sub-queries in a row.
 	///
-	/// Rule references after the last constrained one are **omitted**: the query's implicit trailing
-	/// wildcard leaves them unconstrained, and reporting each as a vacuous capture would add no
-	/// information.
+	/// Rule references after the last constrained one are **omitted**:
+	/// the query's implicit trailing wildcard leaves them unconstrained,
+	/// and reporting each as a vacuous capture would add no information.
 	///
 	/// # Invariant
 	///
-	/// Every literal character of the query appears in the result, in order, however it was split
-	/// between static text and rules. A wildcard appears exactly where the query had one, i.e. between
-	/// characters of different runs; characters of the *same* run stay adjacent, with no wildcard
-	/// introduced between them even when they straddle a part boundary.
+	/// Every literal character of the query appears in the result, in order,
+	/// however it was split between static text and rules. A wildcard appears exactly
+	/// where the query had one, i.e. between characters of different runs;
+	/// characters of the *same* run stay adjacent, with no wildcard introduced
+	/// between them even when they straddle a part boundary.
 	#[must_use]
 	pub fn to_interpretation(&self, model: &ShapeModel, runs: &[Run]) -> Interpretation {
 		let rendered: Vec<RenderedPart> = self.rendered_parts(model, runs);
@@ -149,11 +158,15 @@ impl Composition {
 
 		for part in rendered.into_iter() {
 			match &model.parts[part.part] {
-				// A name can resolve to several rules, but they occupy the same position, so emitting more
-				// than one would duplicate the slot and break the positional correspondence.
+				// A name can resolve to several rules, but they occupy the same position,
+				// so emitting more than one would duplicate the slot
+				// and break the positional correspondence.
 				ShapePart::Placeholder(placeholder) => {
 					if let Some(capture) = placeholder.alternatives.first() {
-						sub_queries.push(SubQuery::new_rule(capture.fully_qualified_name.clone(), part.value));
+						sub_queries.push(SubQuery::new_rule(
+							capture.fully_qualified_name.clone(),
+							part.value,
+						));
 					}
 				},
 				ShapePart::Static(_) => sub_queries.push(SubQuery::new_static_text(part.value)),
@@ -165,11 +178,11 @@ impl Composition {
 
 	/// The shape parts that contribute a sub-query, with their rendered values.
 	///
-	/// Factored out so that rendering and multi-piece verification agree by construction: the value
-	/// checked against a rule is the very one that will be reported.
+	/// Factored out so that rendering and multi-piece verification agree by construction:
+	/// the value checked against a rule is the very one that will be reported.
 	fn rendered_parts(&self, model: &ShapeModel, runs: &[Run]) -> Vec<RenderedPart> {
-		// The last part holding any query text. Rule references after it are unconstrained, so they are
-		// omitted rather than reported as vacuous captures.
+		// The last part holding any query text. Rule references after it are unconstrained,
+		// so they are omitted rather than reported as vacuous captures.
 		let last_constrained: Option<usize> = self
 			.captures
 			.iter()
@@ -177,32 +190,37 @@ impl Composition {
 			.chain(self.literals.iter().map(|literal| literal.part))
 			.max();
 
-		// The last static part. Trailing static text is still reported, as `*`, because that is where the
-		// query's implicit trailing wildcard applies.
-		let last_static: Option<usize> = model.parts.iter().rposition(|part| !part.is_placeholder());
+		// The last static part. Trailing static text is still reported, as `*`,
+		// because that is where the query's implicit trailing wildcard applies.
+		let last_static: Option<usize> =
+			model.parts.iter().rposition(|part| !part.is_placeholder());
 
 		let Some(last_emitted) = last_constrained.max(last_static) else {
 			return Vec::new();
 		};
 
-		// Every static part is reported, whether or not the query constrains it -- an unconstrained one
-		// becomes the value `*`, matching the engine and `search_by_name`'s output shape. Placeholders are
-		// reported only up to the last constrained part; beyond that they are unconstrained and omitted.
+		// Every static part is reported, whether or not the query constrains it --
+		// an unconstrained one becomes the value `*`, matching the engine
+		// and `search_by_name`'s output shape. Placeholders are reported only
+		// up to the last constrained part; beyond that they are unconstrained and omitted.
 		//
-		// Collecting first makes the *next* part's pieces available, which decides whether a run continues
-		// past this part.
+		// Collecting first makes the *next* part's pieces available,
+		// which decides whether a run continues past this part.
 		let emissions: Vec<(usize, &[PieceRef])> = (0..=last_emitted)
 			.map(|part| (part, self.pieces_for(part)))
 			.filter(|&(part, pieces)| {
-				!pieces.is_empty() || !model.parts[part].is_placeholder() || Some(part) <= last_constrained
+				!pieces.is_empty()
+					|| !model.parts[part].is_placeholder()
+					|| Some(part) <= last_constrained
 			})
 			.collect::<Vec<_>>();
 
 		let mut rendered: Vec<RenderedPart> = Vec::with_capacity(emissions.len());
 
 		for (index, &(part, pieces)) in emissions.iter().enumerate() {
-			// `Some(length)` for static text, whose value must glob-match that text exactly; `None` for a
-			// rule, which is padded by what the query permits instead. See `symbolic_value_of`.
+			// `Some(length)` for static text, whose value must glob-match that text exactly;
+			// `None` for a rule, which is padded by what the query permits instead.
+			// See `symbolic_value_of`.
 			let static_len: Option<usize> = match &model.parts[part] {
 				ShapePart::Static(text) => Some(text.chars().count()),
 				ShapePart::Placeholder(_) => None,
@@ -227,24 +245,27 @@ impl Composition {
 			});
 		}
 
-		// Merge consecutive static parts into one, since [`Interpretation::invariants`] forbids two
-		// static sub-queries in a row. A capture is never merged: its position is what identifies which
-		// rule reference it is.
+		// Merge consecutive static parts into one, since [`Interpretation::invariants`]
+		// forbids two static sub-queries in a row. A capture is never merged:
+		// its position is what identifies which rule reference it is.
 		//
 		// Concatenation is sound in both ways two static parts can end up adjacent:
 		//
-		// - genuinely adjacent in the shape (`a%%b` escapes a `%` as text): each value glob-matches its
-		//   own text exactly, so the concatenation glob-matches the concatenated text exactly;
-		// - separated by an omitted placeholder, which happens only past the last constrained part -- so
-		//   the later part has no attributed text and its value is a bare `*`, which is exactly the
-		//   wildcard the omitted placeholder's output requires.
+		// - genuinely adjacent in the shape (`a%%b` escapes a `%` as text):
+		//   each value glob-matches its own text exactly,
+		//   so the concatenation glob-matches the concatenated text exactly;
+		// - separated by an omitted placeholder,
+		//   which happens only past the last constrained part -- so the later part
+		//   has no attributed text and its value is a bare `*`,
+		//   which is exactly the wildcard the omitted placeholder's output requires.
 		let mut merged: Vec<RenderedPart> = Vec::with_capacity(rendered.len());
 		for part in rendered.into_iter() {
 			if !model.parts[part.part].is_placeholder()
 				&& let Some(last) = merged.last_mut()
 				&& !model.parts[last.part].is_placeholder()
 			{
-				last.value = condense_wildcards(last.value.iter().chain(part.value.iter()).cloned());
+				last.value =
+					condense_wildcards(last.value.iter().chain(part.value.iter()).cloned());
 				last.piece_count += part.piece_count;
 				continue;
 			}
@@ -256,29 +277,35 @@ impl Composition {
 
 	/// The captures that need a multi-piece feasibility check, as `(rule name, value)`.
 	///
-	/// A capture holding pieces from *several* runs was validated only one run at a time: each run can
-	/// sit in the rule, but that does not mean the rule can produce them all together. An alternation
-	/// such as `INFO|WARN` admits either alone and neither pair. Single-piece captures are already
-	/// exact, so they are skipped.
+	/// A capture holding pieces from *several* runs was validated only one run at a time:
+	/// each run can sit in the rule, but that does not mean the rule can produce
+	/// them all together. An alternation such as `INFO|WARN` admits either alone
+	/// and neither pair. Single-piece captures are already exact, so they are skipped.
 	///
-	/// Values come from the same rendering used by [`Self::to_interpretation`], so the check asks about
-	/// exactly the string that will be reported -- including whether it is padded, which decides whether
-	/// the rule may emit anything around it.
+	/// Values come from the same rendering used by [`Self::to_interpretation`],
+	/// so the check asks about exactly the string that will be reported --
+	/// including whether it is padded, which decides whether the rule may emit
+	/// anything around it.
 	#[must_use]
 	pub fn captures_to_verify(&self, model: &ShapeModel, runs: &[Run]) -> Vec<(String, String)> {
-		Vec::from_iter(self.rendered_parts(model, runs).into_iter().filter_map(|rendered| {
-			match &model.parts[rendered.part] {
-				ShapePart::Placeholder(placeholder) if rendered.piece_count > 1 => {
-					// `Display` escapes the characters a query treats specially, so the value round-trips
-					// through `SearchString::parse` as the literal text it stands for.
-					Some((
-						placeholder.name.clone(),
-						String::from_iter(rendered.value.iter().map(ToString::to_string)),
-					))
-				},
-				_ => None,
-			}
-		}))
+		Vec::from_iter(
+			self.rendered_parts(model, runs)
+				.into_iter()
+				.filter_map(|rendered| {
+					match &model.parts[rendered.part] {
+						ShapePart::Placeholder(placeholder) if rendered.piece_count > 1 => {
+							// `Display` escapes the characters a query treats specially,
+							// so the value round-trips through `SearchString::parse`
+							// as the literal text it stands for.
+							Some((
+								placeholder.name.clone(),
+								String::from_iter(rendered.value.iter().map(ToString::to_string)),
+							))
+						},
+						_ => None,
+					}
+				}),
+		)
 	}
 
 	/// The query text attributed to shape part `part`.
@@ -295,8 +322,8 @@ impl Composition {
 
 /// Concatenates values, collapsing the `**` that adjoining wildcards would otherwise produce.
 ///
-/// [`Interpretation::invariants`] forbids a doubled wildcard, and merging two static parts (each of
-/// which may itself begin or end with `*`) can create one.
+/// [`Interpretation::invariants`] forbids a doubled wildcard, and merging two static parts
+/// (each of which may itself begin or end with `*`) can create one.
 fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<SymbolicChar> {
 	let mut value: Vec<SymbolicChar> = Vec::new();
 	for symbol in symbols {
@@ -310,23 +337,25 @@ fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<Symbol
 
 /// The symbolic value for one part's pieces.
 ///
-/// A wildcard is emitted exactly where the query had one -- at a run boundary -- and nowhere else. In
-/// particular a run that crosses from one part into the next stays contiguous: `preceding_run` and
-/// `following_run` name the runs adjacent to this part, so a boundary can be told apart from a mere
-/// part boundary.
+/// A wildcard is emitted exactly where the query had one -- at a run boundary --
+/// and nowhere else. In particular a run that crosses from one part into the next
+/// stays contiguous: `preceding_run` and `following_run` name the runs adjacent
+/// to this part, so a boundary can be told apart from a mere part boundary.
 ///
 /// The two kinds of part are padded on different grounds, so `static_len` distinguishes them.
 ///
-/// A **rule** may emit text of its own around the query's characters, so it is padded wherever the
-/// query permits: suppressed where the run continues into a neighbouring part, and where the query
-/// anchors the run to the start or end of the message.
+/// A **rule** may emit text of its own around the query's characters,
+/// so it is padded wherever the query permits: suppressed where the run continues
+/// into a neighbouring part, and where the query anchors the run to the start
+/// or end of the message.
 ///
-/// **Static text** is reproduced verbatim, so its value must be a glob matching the part's text
-/// *exactly*. The padding is therefore decided by the piece offsets alone -- a wildcard stands for the
-/// characters of the part the run does not cover, and appears if and only if there are some. Anchoring
-/// and run continuation need no special case here: a run flowing in from the previous part necessarily
-/// begins at offset zero, and one flowing out necessarily reaches the text's end, so both fall out of
-/// the offsets.
+/// **Static text** is reproduced verbatim, so its value must be a glob matching
+/// the part's text *exactly*. The padding is therefore decided by the piece offsets
+/// alone -- a wildcard stands for the characters of the part the run does not cover,
+/// and appears if and only if there are some. Anchoring and run continuation need
+/// no special case here: a run flowing in from the previous part necessarily
+/// begins at offset zero, and one flowing out necessarily reaches the text's end,
+/// so both fall out of the offsets.
 fn symbolic_value_of(
 	pieces: &[PieceRef],
 	runs: &[Run],
@@ -347,8 +376,8 @@ fn symbolic_value_of(
 
 	let mut value: Vec<SymbolicChar> = Vec::new();
 
-	// Before: for static text, exactly the characters preceding the first piece; for a rule, whatever
-	// the query's wildcard allows it to emit.
+	// Before: for static text, exactly the characters preceding the first piece;
+	// for a rule, whatever the query's wildcard allows it to emit.
 	let pad_before: bool = match static_len {
 		Some(_) => 0 != first.offset,
 		None => !continues_before && !(preceding_run.is_none() && runs[first.run].anchored_start),
@@ -357,8 +386,9 @@ fn symbolic_value_of(
 		value.push(SymbolicChar::GlobStar);
 	}
 
-	// Seeded with the first piece's own run: any boundary *before* this part has already been accounted
-	// for above, and comparing against `preceding_run` here would emit a second wildcard for it.
+	// Seeded with the first piece's own run: any boundary *before* this part has already been
+	// accounted for above, and comparing against `preceding_run` here would emit
+	// a second wildcard for it.
 	let mut previous_run: Option<usize> = Some(first.run);
 	for piece in pieces.iter() {
 		if previous_run.is_some_and(|previous| previous != piece.run) {
@@ -389,14 +419,17 @@ pub struct ComposeBudget {
 impl Default for ComposeBudget {
 	fn default() -> Self {
 		Self {
-			// Sized so that a shape which genuinely *has* many decompositions is still answered here
-			// rather than deferred. The engine is not a cheaper way to enumerate the same answers -- it
-			// derives them by walking paths through an intersection, which on such a shape is far more
-			// expensive and can hit its own path timeout. Falling back is only worthwhile when the
-			// engine would do something different, not when it would do the same thing slowly.
+			// Sized so that a shape which genuinely *has* many decompositions
+			// is still answered here rather than deferred.
+			// The engine is not a cheaper way to enumerate the same
+			// answers -- it derives them by walking paths through an intersection,
+			// which on such a shape is far more expensive and can hit its own path timeout.
+			// Falling back is only worthwhile when the engine would do something different,
+			// not when it would do the same thing slowly.
 			//
-			// The HDFS corpus motivates the size: `*INFO*blk*` against the repeated-classpath shapes
-			// yields ~18 000 distinct interpretations, enumerated in ~2s, where the engine times out.
+			// The HDFS corpus motivates the size: `*INFO*blk*` against the
+			// repeated-classpath shapes yields ~18 000 distinct interpretations,
+			// enumerated in ~2s, where the engine times out.
 			max_compositions: 65_536,
 		}
 	}
@@ -415,10 +448,10 @@ pub enum Composed {
 
 /// Enumerates every composition of `table`'s placements.
 ///
-/// Compositions that assign several runs to one rule are verified against that rule before being
-/// returned: [`PlacementTable`] places a run at a time, and a rule that admits each run separately need
-/// not admit them together. Verification lives here, rather than in the caller, so that an infeasible
-/// composition cannot escape.
+/// Compositions that assign several runs to one rule are verified against that rule
+/// before being returned: [`PlacementTable`] places a run at a time, and a rule that
+/// admits each run separately need not admit them together. Verification lives here,
+/// rather than in the caller, so that an infeasible composition cannot escape.
 #[must_use]
 pub fn compose(
 	spec: &ParsingSpec,
@@ -432,13 +465,16 @@ pub fn compose(
 		return Composed::Impossible;
 	}
 
-	// An end-anchored query pins the shape's trailing parts to producing *nothing*, which is a real
-	// constraint this module cannot express: rendering is truncated at the last constrained part (see
-	// `rendered_parts`), justified by the query's implicit trailing wildcard leaving the rest
-	// unconstrained. With no such wildcard those parts are constrained -- to the empty string -- and the
-	// engine reports that precisely, as an empty capture. Defer to it rather than render a `*` that
+	// An end-anchored query pins the shape's trailing parts to producing *nothing*,
+	// which is a real constraint this module cannot express: rendering is truncated
+	// at the last constrained part (see `rendered_parts`), justified by the query's
+	// implicit trailing wildcard leaving the rest unconstrained. With no such wildcard
+	// those parts are constrained -- to the empty string -- and the engine reports
+	// that precisely, as an empty capture. Defer to it rather than render a `*` that
 	// claims the opposite.
-	if runs.last().is_some_and(|run| run.anchored_end) && model.parts.last().is_some_and(ShapePart::can_be_empty) {
+	if runs.last().is_some_and(|run| run.anchored_end)
+		&& model.parts.last().is_some_and(ShapePart::can_be_empty)
+	{
 		return Composed::Unknown;
 	}
 
@@ -452,16 +488,17 @@ pub fn compose(
 	}
 
 	let num_parts: usize = model.parts.len();
-	// States are *positions* (part plus character offset), not bare part indices: several runs can sit in
-	// one static part, distinguished only by where in it they begin. See [`crate::search::decompose::placement`].
+	// States are *positions* (part plus character offset), not bare part indices:
+	// several runs can sit in one static part, distinguished only by where in it they begin.
+	// See [`crate::search::decompose::placement`].
 	let positions: Vec<Position> = positions_of(table, num_parts);
 
-	// Feasibility first, as *bits*: `reachable[(run * width) + position]` is true when runs `run..` can
-	// all be placed without starting before `position`.
+	// Feasibility first, as *bits*: `reachable[(run * width) + position]` is true
+	// when runs `run..` can all be placed without starting before `position`.
 	//
-	// Keeping this separate from enumeration is what bounds memory. Materializing the compositions at
-	// every state instead would cost `states x compositions`, and a shape can have tens of thousands of
-	// parts, so that is not viable.
+	// Keeping this separate from enumeration is what bounds memory. Materializing the
+	// compositions at every state instead would cost `states x compositions`,
+	// and a shape can have tens of thousands of parts, so that is not viable.
 	let width: usize = positions.len();
 	let mut reachable: Vec<bool> = vec![false; (num_runs + 1) * width];
 	for position in 0..width {
@@ -474,7 +511,10 @@ pub fn compose(
 					&& reachable[((run + 1) * width)
 						+ index_of(
 							&positions,
-							(placement.next_available_part(), placement.next_available_offset()),
+							(
+								placement.next_available_part(),
+								placement.next_available_offset(),
+							),
 						)]
 			});
 		}
@@ -484,9 +524,10 @@ pub fn compose(
 		return Composed::Impossible;
 	}
 
-	// Then enumerate, walking only states already known to lead to a complete assignment. Pruning on
-	// `reachable` means every branch entered yields at least one composition, so the work is proportional
-	// to the number of compositions rather than to the search space.
+	// Then enumerate, walking only states already known to lead to a complete assignment.
+	// Pruning on `reachable` means every branch entered yields at least one composition,
+	// so the work is proportional to the number of compositions
+	// rather than to the search space.
 	let mut compositions: Vec<Composition> = Vec::new();
 	let mut choices: Vec<usize> = Vec::with_capacity(num_runs);
 	if !enumerate(
@@ -504,8 +545,9 @@ pub fn compose(
 		return Composed::Unknown;
 	}
 
-	// A rule holding pieces of several runs was validated one run at a time; check it against all of
-	// them together. An alternation such as `INFO|WARN` admits either run alone but never both.
+	// A rule holding pieces of several runs was validated one run at a time;
+	// check it against all of them together. An alternation such as `INFO|WARN`
+	// admits either run alone but never both.
 	compositions.retain(|composition| {
 		composition
 			.captures_to_verify(model, runs)
@@ -553,7 +595,10 @@ fn enumerate(
 		}
 		let next: usize = index_of(
 			positions,
-			(placement.next_available_part(), placement.next_available_offset()),
+			(
+				placement.next_available_part(),
+				placement.next_available_offset(),
+			),
 		);
 		if !reachable[((run + 1) * width) + next] {
 			continue;
@@ -584,11 +629,13 @@ fn enumerate(
 
 /// Turns one set of per-run placement choices into a [`Composition`].
 ///
-/// Pieces landing in the same shape part are merged, which is what allows several runs to share a rule
+/// Pieces landing in the same shape part are merged,
+/// which is what allows several runs to share a rule
 /// (they are separated by text the rule also produces).
 fn build_composition(model: &ShapeModel, table: &PlacementTable, choices: &[usize]) -> Composition {
 	// Keyed by part index to merge pieces, then flattened in shape order.
-	let mut by_part: std::collections::BTreeMap<usize, Vec<PieceRef>> = std::collections::BTreeMap::new();
+	let mut by_part: std::collections::BTreeMap<usize, Vec<PieceRef>> =
+		std::collections::BTreeMap::new();
 
 	for (run, &choice) in choices.iter().enumerate() {
 		let placement: &Placement = &table.placements[run][choice];

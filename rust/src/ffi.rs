@@ -169,7 +169,12 @@ impl UncheckedCArray<c_char> {
 	}
 
 	pub unsafe fn as_str(&self) -> &str {
-		unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.pointer.cast::<u8>(), self.length)) }
+		unsafe {
+			std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+				self.pointer.cast::<u8>(),
+				self.length,
+			))
+		}
 	}
 }
 
@@ -189,7 +194,12 @@ impl<'lifetime> CUtf8<'lifetime> {
 	}
 
 	pub fn as_str(&self) -> &str {
-		unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.pointer.cast::<u8>(), self.length)) }
+		unsafe {
+			std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+				self.pointer.cast::<u8>(),
+				self.length,
+			))
+		}
 	}
 }
 

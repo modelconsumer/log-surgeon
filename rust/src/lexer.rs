@@ -15,8 +15,8 @@ pub struct Lexer {
 	/// `Parser` already has the spec and could pass it every time to `Lexer::next_token`.
 	/// However, it's cheap and cleaner to clone it here for encapsulation.
 	spec: Arc<ParsingSpec>,
-	/// Copied out of [`ParsingSpec::jit_engine`]; that engine (owned by the spec) keeps the
-	/// JIT-ed code mapped for as long as this lexer's `spec` is alive.
+	/// Copied out of [`ParsingSpec::jit_engine`]; that engine (owned by the spec)
+	/// keeps the JIT-ed code mapped for as long as this lexer's `spec` is alive.
 	maybe_jitted_dfa: Option<JittedDfa>,
 }
 
@@ -37,7 +37,10 @@ impl Lexer {
 	pub fn new(spec: Arc<ParsingSpec>) -> Self {
 		let maybe_jitted_dfa: Option<JittedDfa> = spec.jit_engine().maybe_jitted_dfa();
 
-		Self { spec, maybe_jitted_dfa }
+		Self {
+			spec,
+			maybe_jitted_dfa,
+		}
 	}
 
 	/// Return the next [`Token`] from `input` starting from `*pos`,
@@ -71,8 +74,8 @@ impl Lexer {
 			let rule: &RootRule = &self.spec[rule_idx];
 			assert_eq!(rule.idx, rule_idx);
 
-			// Even if don't call [`Tdfa::execute_with_captures`],
-			// we need to clear any possible captures from the previous call to [`Lexer::next_token`].
+			// Even if don't call [`Tdfa::execute_with_captures`], we need to clear any possible
+			// captures from the previous call to [`Lexer::next_token`].
 			dfa_execution.clear();
 
 			let has_captures: bool = rule.has_captures();
@@ -99,7 +102,8 @@ impl Lexer {
 			}
 			// SAFETY: `[start..*pos]` spans whole UTF-8 scalars, decoded and validated above
 			// (the first via `Utf8Chars::next`, the rest via `glob_static_text`).
-			let static_text: &'input str = unsafe { std::str::from_utf8_unchecked(&input[start..*pos]) };
+			let static_text: &'input str =
+				unsafe { std::str::from_utf8_unchecked(&input[start..*pos]) };
 			Token::StaticText(static_text)
 		}
 	}
@@ -135,7 +139,9 @@ impl Lexer {
 				})
 			}
 		} else {
-			self.spec.compressed_dfa_for_parsing.execute(input, char_before)
+			self.spec
+				.compressed_dfa_for_parsing
+				.execute(input, char_before)
 		}
 	}
 

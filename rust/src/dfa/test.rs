@@ -165,7 +165,10 @@ fn repeated_capture_reports_each_iteration() {
 
 	let bounded: RootRule = for_rule("(?<a>b){2,3}");
 	assert_eq!(captures_of(&bounded, "bb"), vec![(1, 0, 1), (1, 1, 2)]);
-	assert_eq!(captures_of(&bounded, "bbb"), vec![(1, 0, 1), (1, 1, 2), (1, 2, 3)]);
+	assert_eq!(
+		captures_of(&bounded, "bbb"),
+		vec![(1, 0, 1), (1, 1, 2), (1, 2, 3)]
+	);
 }
 
 /// Captures are sorted left to right, then parent before child.
@@ -218,7 +221,14 @@ fn alternation_captures_have_distinct_ids() {
 
 	assert_eq!(
 		captures,
-		vec![(1, 0, 1), (2, 0, 1), (1, 1, 2), (3, 1, 2), (1, 2, 3), (2, 2, 3)],
+		vec![
+			(1, 0, 1),
+			(2, 0, 1),
+			(1, 1, 2),
+			(3, 1, 2),
+			(1, 2, 3),
+			(2, 2, 3)
+		],
 	);
 }
 
@@ -261,14 +271,16 @@ fn execution_data_is_reusable() {
 	let mut data: TdfaExecution = dfa.execution_data();
 
 	assert!(dfa.execute_with_captures("12-34", &mut data, &rule));
-	let first: Vec<(usize, usize)> = Vec::from_iter(data.captures.iter().map(|c| (c.range.start, c.range.end)));
+	let first: Vec<(usize, usize)> =
+		Vec::from_iter(data.captures.iter().map(|c| (c.range.start, c.range.end)));
 
 	// A failed execution shouldn't leave stale captures behind.
 	assert!(!dfa.execute_with_captures("12+34", &mut data, &rule));
 	assert_eq!(data.captures, vec![]);
 
 	assert!(dfa.execute_with_captures("12-34", &mut data, &rule));
-	let second: Vec<(usize, usize)> = Vec::from_iter(data.captures.iter().map(|c| (c.range.start, c.range.end)));
+	let second: Vec<(usize, usize)> =
+		Vec::from_iter(data.captures.iter().map(|c| (c.range.start, c.range.end)));
 
 	assert_eq!(first, second);
 }
@@ -286,11 +298,14 @@ fn captures_carry_rule_idx() {
 }
 
 /// Run the DFA to completion and check it lands on an accepting state,
-/// as opposed to [`Tdfa::execute`], which only checks the input can be consumed.
+/// as opposed to [`Tdfa::execute`],
+/// which only checks the input can be consumed.
 fn full_match(dfa: &Tdfa, input: &str) -> bool {
 	let mut current_state: usize = 0;
 	for ch in input.chars() {
-		let Some(transition): Option<&Transition> = dfa.lookup_transition(current_state, u32::from(ch)) else {
+		let Some(transition): Option<&Transition> =
+			dfa.lookup_transition(current_state, u32::from(ch))
+		else {
 			return false;
 		};
 		current_state = transition.target;
@@ -318,6 +333,7 @@ fn for_pattern(pattern: &str) -> Tdfa {
 }
 
 /// Returns captures as `(capture ID, start, end)` triples.
+///
 /// Panics if no match.
 #[track_caller]
 fn captures_of(rule: &RootRule, input: &str) -> Vec<(u16, usize, usize)> {
@@ -338,33 +354,41 @@ fn compressed_for_pattern(pattern: &str) -> CompressedDfa {
 	builder.build().compressed_dfa_for_parsing
 }
 
-/// The compressed DFA must decode non-ASCII scalars identically to the char iterator it replaced:
-/// both must consume a whole multi-byte scalar and report its full byte length as the lexeme.
+/// The compressed DFA must decode non-ASCII scalars
+/// identically to the char iterator it replaced:
+/// both must consume a whole multi-byte scalar
+/// and report its full byte length as the lexeme.
 #[test]
 fn compressed_execute_non_ascii_scalars() {
 	let compressed: CompressedDfa = compressed_for_pattern("a.b");
 
 	// 2-byte scalar in the middle of an otherwise-ASCII lexeme.
 	let input: &str = "a\u{e9}b";
-	let matched: MatchedRule<'_> = compressed.execute(input.as_bytes(), u32::from('\n')).unwrap();
+	let matched: MatchedRule<'_> = compressed
+		.execute(input.as_bytes(), u32::from('\n'))
+		.unwrap();
 	assert_eq!(&*matched.lexeme, input);
 
 	// 3-byte and 4-byte scalars in the wildcard position.
 	for input in ["a\u{4e16}b", "a\u{1f600}b"] {
-		let matched: MatchedRule<'_> = compressed.execute(input.as_bytes(), u32::from('\n')).unwrap();
+		let matched: MatchedRule<'_> = compressed
+			.execute(input.as_bytes(), u32::from('\n'))
+			.unwrap();
 		assert_eq!(&*matched.lexeme, input, "input={input:?}");
 	}
 
-	// A non-nullable any-char repetition consumes the entire non-ASCII input, exercising every
-	// scalar width as the *first* byte decoded.
+	// A non-nullable any-char repetition consumes the entire non-ASCII input,
+	// exercising every scalar width as the *first* byte decoded.
 	let any: CompressedDfa = compressed_for_pattern(".+");
 	let input: &str = "\u{e9}\u{4e16}\u{1f600}";
 	let matched: MatchedRule<'_> = any.execute(input.as_bytes(), u32::from('\n')).unwrap();
 	assert_eq!(&*matched.lexeme, input);
 }
 
-/// Invalid UTF-8 in the input must panic (the parser only ever sees pre-validated `&str`, so this
-/// is a programming error, not a recoverable condition).
+/// Invalid UTF-8 in the input must panic.
+///
+/// The parser only ever sees pre-validated `&str`,
+/// so this is a programming error, not a recoverable condition.
 #[test]
 #[should_panic(expected = "invalid UTF-8")]
 fn compressed_execute_rejects_invalid_utf8() {
@@ -374,15 +398,19 @@ fn compressed_execute_rejects_invalid_utf8() {
 	let _ = compressed.execute(input, u32::from('\n'));
 }
 
-/// A non-ASCII scalar at the very end of the input (and a truncated lead byte) must not read past
-/// the slice; the truncated case panics as invalid UTF-8 rather than panicking on an index.
+/// A non-ASCII scalar at the very end of the input (and a truncated lead byte)
+/// must not read past the slice;
+/// the truncated case panics as invalid UTF-8 rather than panicking on an index.
 #[test]
 fn compressed_execute_non_ascii_at_end() {
 	let compressed: CompressedDfa = compressed_for_pattern("a.b");
 
 	let input: &str = "a\u{e9}b";
 	assert_eq!(
-		compressed.execute(input.as_bytes(), u32::from('\n')).unwrap().lexeme,
+		compressed
+			.execute(input.as_bytes(), u32::from('\n'))
+			.unwrap()
+			.lexeme,
 		input
 	);
 

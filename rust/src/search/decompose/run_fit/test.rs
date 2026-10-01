@@ -58,8 +58,8 @@ fn whole_run_inside_a_rule() {
 fn whole_fit_carries_interpretations() {
 	let spec: ParsingSpec = test_spec();
 	let fit: RunFit = RunFit::compute(&spec, "digits", "123");
-	// The interpretations are what Stage C will embed into the shape's decomposition, so they must name
-	// the rule.
+	// The interpretations are what Stage C will embed into the shape's decomposition,
+	// so they must name the rule.
 	assert!(!fit.whole.is_empty());
 	assert!(
 		fit.whole
@@ -73,8 +73,8 @@ fn whole_fit_carries_interpretations() {
 fn empty_contributions_are_always_available() {
 	let spec: ParsingSpec = test_spec();
 	let fit: RunFit = RunFit::compute(&spec, "digits", "abc");
-	// Supplying *none* of the run is always possible, and is how a rule that is irrelevant to a run is
-	// represented.
+	// Supplying *none* of the run is always possible,
+	// and is how a rule that is irrelevant to a run is represented.
 	assert!(fit.suffixes[0]);
 	assert!(fit.prefixes[3]);
 }
@@ -86,7 +86,10 @@ fn straddle_splits_for_a_partially_matching_run() {
 	// Run `12x`: the digits rule can end with `1` or `12`, but not `12x`.
 	let fit: RunFit = RunFit::compute(&spec, "digits", "12x");
 	assert_eq!(vec![0, 1, 2], suffix_splits(&fit));
-	assert!(!fit.fits_wholly(), "`12x` cannot sit wholly inside `[0-9]+`");
+	assert!(
+		!fit.fits_wholly(),
+		"`12x` cannot sit wholly inside `[0-9]+`"
+	);
 	assert!(fit.has_partial());
 
 	// Run `x12`: the digits rule can begin with `12` (split at 1) or `2` (split at 2).

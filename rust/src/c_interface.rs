@@ -10,8 +10,8 @@
 //! to a function below, those functions would not be (are not) marked `unsafe`.
 //!
 // We deliberately pass shared handles such as `Box<Arc<ParsingSpec>>` across the FFI boundary:
-// `Box` is the opaque-handle convention here (see `log_surgeon.hpp`), and the extra indirection is
-// not a mistake.
+// `Box` is the opaque-handle convention here (see `log_surgeon.hpp`),
+// and the extra indirection is not a mistake.
 #![allow(clippy::redundant_allocation)]
 
 use std::sync::Arc;
@@ -119,9 +119,12 @@ mod parsing_spec_builder {
 	/// Consume the (boxed) [`ParsingSpecBuilder`] to construct a shared [`ParsingSpec`].
 	///
 	/// The spec is returned behind an [`Arc`] so it can outlive any single [`Parser`] and back
-	/// several of them (see [`log_surgeon_parsing_spec_create_parser`]) and/or be searched directly.
+	/// several of them (see [`log_surgeon_parsing_spec_create_parser`]),
+	/// and/or be searched directly.
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_builder_build(builder: Box<ParsingSpecBuilder>) -> Box<Arc<ParsingSpec>> {
+	extern "C" fn log_surgeon_parsing_spec_builder_build(
+		builder: Box<ParsingSpecBuilder>,
+	) -> Box<Arc<ParsingSpec>> {
 		Box::new(Arc::new(builder.build()))
 	}
 
@@ -189,7 +192,10 @@ mod log_event {
 
 	/// Get the matches of a log event.
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_log_event_all_matches<'a>(log_event: &LogEvent<'a>, len: &mut usize) -> *const Match {
+	extern "C" fn log_surgeon_log_event_all_matches<'a>(
+		log_event: &LogEvent<'a>,
+		len: &mut usize,
+	) -> *const Match {
 		*len = log_event.all_matches.len();
 		log_event.all_matches.as_ptr()
 	}
@@ -219,7 +225,8 @@ mod search {
 			.iter()
 			.map(|shape| shape.as_utf8().unwrap())
 			.collect::<Vec<_>>();
-		let interpretations_by_shapes: Vec<Vec<Interpretation>> = input.search_by_log_shapes(spec, &log_shapes);
+		let interpretations_by_shapes: Vec<Vec<Interpretation>> =
+			input.search_by_log_shapes(spec, &log_shapes);
 		Box::new(interpretations_by_shapes)
 	}
 
@@ -252,7 +259,10 @@ mod search {
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_get_sub_query(interpretation: &Interpretation, i: usize) -> Option<&SubQuery> {
+	extern "C" fn log_surgeon_search_get_sub_query(
+		interpretation: &Interpretation,
+		i: usize,
+	) -> Option<&SubQuery> {
 		interpretation.sub_queries.get(i)
 	}
 
@@ -272,17 +282,22 @@ mod search {
 }
 
 /// Ideally, these would be defined by a macro,
-/// but then `cbindgen` can't process them without `-Zunpretty=expanded`, which is only in nightly...
+/// but then `cbindgen` can't process them without `-Zunpretty=expanded`,
+/// which is only in nightly...
 mod clone_impls {
 	use super::*;
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_builder_clone(value: &ParsingSpecBuilder) -> Box<ParsingSpecBuilder> {
+	extern "C" fn log_surgeon_parsing_spec_builder_clone(
+		value: &ParsingSpecBuilder,
+	) -> Box<ParsingSpecBuilder> {
 		Box::new(value.clone())
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_parsing_spec_clone(value: &Arc<ParsingSpec>) -> Box<Arc<ParsingSpec>> {
+	extern "C" fn log_surgeon_parsing_spec_clone(
+		value: &Arc<ParsingSpec>,
+	) -> Box<Arc<ParsingSpec>> {
 		Box::new(value.clone())
 	}
 
@@ -292,13 +307,16 @@ mod clone_impls {
 	}
 
 	#[unsafe(no_mangle)]
-	unsafe extern "C" fn log_surgeon_log_event_clone<'a>(value: &LogEvent<'a>) -> Box<LogEvent<'a>> {
+	unsafe extern "C" fn log_surgeon_log_event_clone<'a>(
+		value: &LogEvent<'a>,
+	) -> Box<LogEvent<'a>> {
 		Box::new(value.clone())
 	}
 }
 
 /// Ideally, these would be defined by a macro,
-/// but then `cbindgen` can't process them without `-Zunpretty=expanded`, which is only in nightly...
+/// but then `cbindgen` can't process them without `-Zunpretty=expanded`,
+/// which is only in nightly...
 mod destructor_impls {
 	use super::*;
 
@@ -328,7 +346,9 @@ mod destructor_impls {
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_interpretations_by_log_shapes_drop(value: Box<Vec<Vec<Interpretation>>>) {
+	extern "C" fn log_surgeon_search_interpretations_by_log_shapes_drop(
+		value: Box<Vec<Vec<Interpretation>>>,
+	) {
 		std::mem::drop(value);
 	}
 }

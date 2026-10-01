@@ -11,7 +11,8 @@ fn search_email() {
 	let spec: ParsingSpec = builder.build();
 
 	{
-		let interpretations: Vec<Interpretation> = do_search_by_name(&spec, "*a*@*mail*example*", "email");
+		let interpretations: Vec<Interpretation> =
+			do_search_by_name(&spec, "*a*@*mail*example*", "email");
 		println!("===");
 
 		for i in interpretations.iter() {
@@ -30,7 +31,8 @@ fn search_block_id() {
 	let spec: ParsingSpec = builder.build();
 
 	{
-		let interpretations: Vec<Interpretation> = do_search_by_name(&spec, "*blk*_566*", "block_id");
+		let interpretations: Vec<Interpretation> =
+			do_search_by_name(&spec, "*blk*_566*", "block_id");
 		println!("===");
 
 		for i in interpretations.iter() {
@@ -84,7 +86,10 @@ fn search_nested_name_without_leaf_capture() {
 
 		assert_eq!(interpretations.len(), 1);
 		assert_eq!(interpretations[0].sub_queries[0].string_value, "_a*b_");
-		assert_eq!(&*interpretations[0].sub_queries[0].fully_qualified_name, "foo");
+		assert_eq!(
+			&*interpretations[0].sub_queries[0].fully_qualified_name,
+			"foo"
+		);
 	}
 
 	{
@@ -99,7 +104,10 @@ fn search_nested_name_without_leaf_capture() {
 		assert_eq!(interpretations[0].sub_queries[0].string_value, "*a*b*");
 		assert_eq!(&*interpretations[0].sub_queries[0].fully_qualified_name, "");
 		assert_eq!(interpretations[1].sub_queries[0].string_value, "*a*b*");
-		assert_eq!(&*interpretations[1].sub_queries[0].fully_qualified_name, "foo");
+		assert_eq!(
+			&*interpretations[1].sub_queries[0].fully_qualified_name,
+			"foo"
+		);
 	}
 
 	{
@@ -112,15 +120,20 @@ fn search_nested_name_without_leaf_capture() {
 
 		assert_eq!(interpretations.len(), 1);
 		assert_eq!(interpretations[0].sub_queries[0].string_value, "0*1");
-		assert_eq!(&*interpretations[0].sub_queries[0].fully_qualified_name, "foo.bar.baz");
+		assert_eq!(
+			&*interpretations[0].sub_queries[0].fully_qualified_name,
+			"foo.bar.baz"
+		);
 	}
 }
 
 #[test]
 fn test_covers() {
-	let a: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar]);
+	let a: SubQuery =
+		SubQuery::new_static_text(vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar]);
 	let b: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
-	let c: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')]);
+	let c: SubQuery =
+		SubQuery::new_static_text(vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')]);
 	let d: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
 	let e: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::GlobStar]);
 	let f: SubQuery = SubQuery::new_static_text(vec![
@@ -155,7 +168,9 @@ fn test_covers() {
 fn glob_matches(pattern: &[SymbolicChar], text: &[char]) -> bool {
 	match pattern.first() {
 		None => text.is_empty(),
-		Some(SymbolicChar::GlobStar) => (0..=text.len()).any(|skip| glob_matches(&pattern[1..], &text[skip..])),
+		Some(SymbolicChar::GlobStar) => {
+			(0..=text.len()).any(|skip| glob_matches(&pattern[1..], &text[skip..]))
+		},
 		Some(&SymbolicChar::Literal(expected)) => {
 			!text.is_empty() && (text[0] == expected) && glob_matches(&pattern[1..], &text[1..])
 		},
@@ -220,7 +235,9 @@ fn covers_never_claims_an_unsound_containment() {
 	let mut checked: usize = 0;
 	for (general, general_language) in values.iter().zip(languages.iter()) {
 		for (specific, specific_language) in values.iter().zip(languages.iter()) {
-			if !SubQuery::new_static_text(general.clone()).covers(&SubQuery::new_static_text(specific.clone())) {
+			if !SubQuery::new_static_text(general.clone())
+				.covers(&SubQuery::new_static_text(specific.clone()))
+			{
 				continue;
 			}
 			checked += 1;
@@ -233,7 +250,9 @@ fn covers_never_claims_an_unsound_containment() {
 				"{:?} claims to cover {:?}, but {:?} matches only the latter",
 				String::from_iter(general.iter().map(ToString::to_string)),
 				String::from_iter(specific.iter().map(ToString::to_string)),
-				words[unsound.expect("just checked")].iter().collect::<String>(),
+				words[unsound.expect("just checked")]
+					.iter()
+					.collect::<String>(),
 			);
 		}
 	}
@@ -255,7 +274,11 @@ fn covers_is_a_partial_order_in_normal_form() {
 		.collect::<Vec<_>>();
 
 	for value in values.iter() {
-		assert!(value.covers(value), "not reflexive: {:?}", value.string_value);
+		assert!(
+			value.covers(value),
+			"not reflexive: {:?}",
+			value.string_value
+		);
 	}
 
 	for general in values.iter() {
@@ -282,7 +305,8 @@ fn full_log_search() {
 
 	let spec: ParsingSpec = builder.build();
 
-	let interpretations: Vec<Interpretation> = do_full_search(&spec, "a@com*", "hello a@com.example");
+	let interpretations: Vec<Interpretation> =
+		do_full_search(&spec, "a@com*", "hello a@com.example");
 
 	println!("=== Interpretations");
 	for interpretation in interpretations.iter() {
@@ -298,8 +322,11 @@ fn kv_ip_pattern() {
 		"#
 	};
 
-	let interpretations: Vec<Interpretation> =
-		do_full_search(&spec, "*172.31.17.135*", "hello %kv.key%: %kv.ip_value% world");
+	let interpretations: Vec<Interpretation> = do_full_search(
+		&spec,
+		"*172.31.17.135*",
+		"hello %kv.key%: %kv.ip_value% world",
+	);
 
 	println!("=== Interpretations");
 	for interpretation in interpretations.iter() {

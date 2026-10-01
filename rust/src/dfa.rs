@@ -51,7 +51,8 @@ pub struct Tdfa {
 	/// During construction, this is the "current" count;
 	/// after construction, this is the "total required".
 	/// The first `tags.len()` are initial registers for the corresponding tags.
-	/// The second `tags.len()` (i.e. `tags.len()..(2 * tags.len())`) are the corresponding final registers.
+	/// The second `tags.len()` (i.e. `tags.len()..(2 * tags.len())`)
+	/// are the corresponding final registers.
 	#[serde(skip)]
 	pub number_of_registers: usize,
 }
@@ -92,7 +93,8 @@ struct DfaState {
 	/// If this is a final state (the kernel contains an accepting NFA state),
 	/// the rule that this state has matched for.
 	accepting_rule: Option<(RuleIdx, Option<EncodingIdx>)>,
-	/// Register operations upon finalizing a match (if applicable); copy to the final registers.
+	/// Register operations upon finalizing a match (if applicable);
+	/// copy to the final registers.
 	#[serde(skip)]
 	final_operations: Vec<RegisterOperation>,
 	/// Cache/combined map from this state's configurations of "register -> which tag it holds".
@@ -103,9 +105,9 @@ struct DfaState {
 	/// ASCII is most common and happens to be the first 0x80 unicode code points.
 	/// However, the cache size can be changed here without touching the rest of the code.
 	/// Of course, in practice, the cache is presumed to be much much smaller
-	/// than the full range of unicode code points,
-	/// but technically the code should work for any value here;
-	/// comments in the relevant parts of the implementation explain why.
+	/// than the full range of unicode code points;
+	/// but technically the code should work for any value here
+	/// (comments in the relevant parts of the implementation explain why).
 	#[serde(skip, default = "DfaState::default_ascii_cache")]
 	ascii_cache: [Transition; 0x80],
 }
@@ -114,7 +116,8 @@ struct DfaState {
 /// all other information, including state transitions, are derived from the kernel.
 /// In tagged TDFA, the kernel of a TDFA state is a set of corresponding [`Configuration`]s.
 ///
-/// Conceptually, a kernel may more accurately be represented using `BTreeMap<NfaIdx, Configuration>`;
+/// Conceptually, a kernel may more accurately be represented using
+/// `BTreeMap<NfaIdx, Configuration>`;
 /// an NFA state should not show up more than once in a kernel, since:
 ///
 /// 1. by construction, distinct NFA states have distinct "next states" on non-epsilon transitions,
@@ -122,8 +125,8 @@ struct DfaState {
 /// 2. the [`Tdfa::epsilon_closure`] procedure (using a depth-first search)
 ///    only saves the first path of NFA states reachable through epsilon transitions.
 ///
-/// However, both of the aforementioned procedures operate more naturally on a list of `Configuration`s,
-/// and `Vec<Configuration>` naturally has better memory locality.
+/// However, both of the aforementioned procedures operate more naturally on a list
+/// of `Configuration`s, and `Vec<Configuration>` naturally has better memory locality.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 struct Kernel(Vec<Configuration>);
@@ -133,7 +136,8 @@ struct Kernel(Vec<Configuration>);
 #[serde(transparent)]
 struct Configuration {
 	nfa_state: NfaIdx,
-	/// A mapping "tag (by ID/index) -> register"; answers "which register holds this tag?".
+	/// A mapping "tag (by ID/index) -> register";
+	/// answers "which register holds this tag?".
 	#[serde(skip)]
 	register_for_tag: Vec<usize>,
 	/// Sequence of tags accumulated to reach this state during [`Tdfa::epsilon_closure`]
@@ -228,13 +232,14 @@ impl Tdfa {
 	///
 	/// [`TdfaExecution::captures`] is sorted:
 	/// 1. left to right w.r.t. the input,
-	/// 2. top-down w.r.t the regex (i.e. left to right w.r.t. the regex pattern; parent before children).
+	/// 2. top-down w.r.t the regex
+	///    (i.e. left to right w.r.t. the regex pattern; parent before children).
 	///
 	/// `last_was_delimited` should be the "previous" character in the input,
 	/// or newline (`'\n'`) if at the very start of input.
-	/// Newline is "always" an anchor character since newlines are already (and necessarily)
-	/// used to terminate/separate log events;
-	/// an anchored rule should match the same in a log event
+	/// Newline is "always" an anchor character,
+	/// since newlines are already (and necessarily) used to terminate/separate log events;
+	/// an anchored rule should match the same in a log event,
 	/// regardless of the log event's position in the entire log.
 	pub fn execute_without_captures<'input>(
 		&self,
@@ -246,10 +251,15 @@ impl Tdfa {
 
 		let mut maybe_backup: Option<BackupState> = None;
 
-		for (pos, ch) in input.char_indices().chain(std::iter::once((input.len(), '\n'))) {
+		for (pos, ch) in input
+			.char_indices()
+			.chain(std::iter::once((input.len(), '\n')))
+		{
 			if let Some(transition) = self.lookup_transition(current_state, u32::from(ch)) {
 				current_state = transition.target;
-				if let Some((rule_idx, maybe_encoding_idx)) = self.states[current_state].accepting_rule {
+				if let Some((rule_idx, maybe_encoding_idx)) =
+					self.states[current_state].accepting_rule
+				{
 					maybe_backup = Some(BackupState {
 						rule_idx,
 						maybe_encoding_idx,
@@ -274,8 +284,14 @@ impl Tdfa {
 	/// Captures are stored in `execution_data`, sorted:
 	///
 	/// 1. left-to-right (lexicographically with respect to the input),
-	/// 2. top-down; parent captures first (lexicographically with respect to the regex pattern).
-	pub fn execute_with_captures(&self, input: &str, execution_data: &mut TdfaExecution, rule: &RootRule) -> bool {
+	/// 2. top-down; parent captures first
+	///    (lexicographically with respect to the regex pattern).
+	pub fn execute_with_captures(
+		&self,
+		input: &str,
+		execution_data: &mut TdfaExecution,
+		rule: &RootRule,
+	) -> bool {
 		let rule_idx: RuleIdx = rule.idx;
 		let mut current_state: usize = 0;
 
@@ -353,12 +369,15 @@ impl Tdfa {
 				maybe_close = prefix_tree[close_node].maybe_predecessor;
 			}
 		}
-		captures.sort_unstable_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
+		captures
+			.sort_unstable_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
 		for i in 0..captures.len() {
 			if let Some(parent_id) = captures[i].parent_id {
 				// Linear scan (backwards) since it should usually be small.
 				for j in (0..i).rev() {
-					if (captures[j].capture_id == parent_id) && (captures[i].range.end <= captures[j].range.end) {
+					if (captures[j].capture_id == parent_id)
+						&& (captures[i].range.end <= captures[j].range.end)
+					{
 						assert!(captures[j].range.start <= captures[i].range.start);
 						captures[i].parent_index = 1 + j;
 						break;
@@ -379,7 +398,11 @@ impl Tdfa {
 		};
 		let current_state: &DfaState = &self.states[current_state];
 		if let Some(transition) = current_state.ascii_cache.get(cache_index) {
-			if transition.is_valid() { Some(transition) } else { None }
+			if transition.is_valid() {
+				Some(transition)
+			} else {
+				None
+			}
 		} else {
 			current_state.transitions.lookup(ch)
 		}
@@ -402,7 +425,8 @@ impl Tdfa {
 					registers[o.destination] = registers[*source];
 					for &symbolic in history.iter() {
 						if symbolic == SymbolicPosition::Current {
-							let node: NonZero<usize> = prefix_tree.add_node(registers[o.destination], pos);
+							let node: NonZero<usize> =
+								prefix_tree.add_node(registers[o.destination], pos);
 							registers[o.destination] = Some(node);
 						}
 					}
@@ -426,6 +450,7 @@ impl Tdfa {
 impl Tdfa {
 	/// Construct the TDFA for the combination (alternation) of multiple rules,
 	/// i.e. from a parsing specification.
+	///
 	/// Capturing is not enabled.
 	#[tracing::instrument(skip_all, level = "trace")]
 	pub fn for_rules(rules: &[RootRule], delimiters: &str, encodings: &[Arc<Encoding>]) -> Self {
@@ -486,12 +511,13 @@ impl Tdfa {
 		// `dfa.states.len()` is not constant.
 		let mut i: usize = 0;
 		while i < dfa.states.len() {
-			// Since we may append to `dfa.states`, it may resize
+			// Since we may append to `dfa.states`, it may resize,
 			// and a reference to `dfa.states[i]` here would become invalid
 			// (borrow checker will complain without the `.clone()`.
 			let kernel: Kernel = dfa.states[i].kernel.clone();
 
-			let mut register_action_tag: BTreeMap<(CaptureTag, RegisterAction), usize> = BTreeMap::new();
+			let mut register_action_tag: BTreeMap<(CaptureTag, RegisterAction), usize> =
+				BTreeMap::new();
 			for (interval, next) in kernel.step_on_intervals(nfa).iter() {
 				let next: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> =
 					Self::epsilon_closure::<WITH_TAGS>(nfa, next);
@@ -529,15 +555,18 @@ impl Tdfa {
 	///
 	/// Returns the index of the DFA state for the given kernel
 	/// (the set of NFA configurations landed on after a transition),
-	/// reusing an existing state when possible;
-	/// kernels may be equal up to register (re)naming.
+	/// reusing an existing state when possible.
+	///
+	/// Kernels may be equal up to register (re)naming.
 	fn lookup_or_add_state(
 		&mut self,
 		nfa: &Tnfa,
 		configurations: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
 		ops: &mut Vec<RegisterOperation>,
 	) -> usize {
-		let kernel: Kernel = Kernel(Vec::from_iter(configurations.into_iter().map(|(config, _)| config)));
+		let kernel: Kernel = Kernel(Vec::from_iter(
+			configurations.into_iter().map(|(config, _)| config),
+		));
 
 		if let Some(&idx) = self.kernels.get(&kernel) {
 			return idx;
@@ -564,10 +593,12 @@ impl Tdfa {
 				&& let Some(accepting_data) = nfa_state.maybe_accepting_data
 			{
 				accepting_rule = Some(accepting_data);
-				final_operations = self.final_operations(&config.register_for_tag, &config.tag_path_in_closure);
+				final_operations =
+					self.final_operations(&config.register_for_tag, &config.tag_path_in_closure);
 			}
 			for (tag_idx, &register) in config.register_for_tag.iter().enumerate() {
-				let old: Option<CaptureTag> = tag_for_register.insert(register, self.tags[tag_idx].clone());
+				let old: Option<CaptureTag> =
+					tag_for_register.insert(register, self.tags[tag_idx].clone());
 				assert!(old.is_none() || (old.as_ref() == Some(&self.tags[tag_idx])));
 			}
 		}
@@ -590,19 +621,25 @@ impl Tdfa {
 	/// Rewrites `ops` (whose destinations are registers of the new kernel)
 	/// to target the corresponding registers of the existing kernel, per `bijection`,
 	/// and appends the copy operations needed to reconcile the remaining registers.
+	///
 	/// Returns `None` if reconciling would require breaking a nontrivial cycle of copies.
 	fn map_operations_through_bijection(
 		mut ops: Vec<RegisterOperation>,
 		mut bijection: BTreeMap<usize, usize>,
 	) -> Option<Vec<RegisterOperation>> {
-		// Destinations already written by `ops` need no copy; remove them from the bijection.
+		// Destinations already written by `ops` need no copy;
+		// remove them from the bijection.
 		for o in ops.iter_mut() {
 			o.destination = bijection.remove(&o.destination).unwrap();
 		}
-		ops.extend(bijection.iter().map(|(&source, &destination)| RegisterOperation {
-			destination,
-			action: RegisterAction::CopyFrom { source },
-		}));
+		ops.extend(
+			bijection
+				.iter()
+				.map(|(&source, &destination)| RegisterOperation {
+					destination,
+					action: RegisterAction::CopyFrom { source },
+				}),
+		);
 		Self::topological_sort(ops)
 	}
 
@@ -634,7 +671,8 @@ impl Tdfa {
 			for o in ops.drain(..) {
 				if in_degree_register[&o.destination] == 0 {
 					match &o.action {
-						RegisterAction::CopyFrom { source } | RegisterAction::Append { source, .. } => {
+						RegisterAction::CopyFrom { source }
+						| RegisterAction::Append { source, .. } => {
 							*in_degree_register.get_mut(source).unwrap() += 1;
 						},
 					}
@@ -648,7 +686,8 @@ impl Tdfa {
 			if !anything_added {
 				for o in ops.iter() {
 					match &o.action {
-						RegisterAction::CopyFrom { source } | RegisterAction::Append { source, .. } => {
+						RegisterAction::CopyFrom { source }
+						| RegisterAction::Append { source, .. } => {
 							if *source != o.destination {
 								nontrivial_cycle = true;
 							}
@@ -674,7 +713,8 @@ impl Tdfa {
 			.map(|(config, _)| config.nfa_state)
 			.collect::<BTreeSet<_>>();
 
-		let mut stack: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> = configurations.clone();
+		let mut stack: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> =
+			configurations.clone();
 		stack.reverse();
 
 		while let Some((config, inherited)) = stack.pop() {
@@ -700,7 +740,11 @@ impl Tdfa {
 						stack.push((new_config, inherited.clone()));
 					}
 				},
-				Transitions::Tagged { tag, positive, target } => {
+				Transitions::Tagged {
+					tag,
+					positive,
+					target,
+				} => {
 					if nfa_states_on_stack.contains(target) {
 						continue;
 					}
@@ -720,8 +764,8 @@ impl Tdfa {
 							},
 						));
 					} else {
-						// If `!WITH_TAGS`,
-						// this path is identical to the branch for `Transitions::Spontaneous`.
+						// If `!WITH_TAGS`, this path is identical to the branch
+						// for `Transitions::Spontaneous`.
 					}
 
 					nfa_states_on_stack.insert(new_config.nfa_state);
@@ -743,7 +787,8 @@ impl Tdfa {
 		Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
 		Vec<RegisterOperation>,
 	) {
-		let mut new_configurations: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> = Vec::new();
+		let mut new_configurations: Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)> =
+			Vec::new();
 		let mut ops: BTreeSet<RegisterOperation> = BTreeSet::new();
 
 		for (mut config, inherited) in configurations.into_iter() {
@@ -752,7 +797,8 @@ impl Tdfa {
 				if history.is_empty() {
 					continue;
 				}
-				let action: RegisterAction = Self::operation_rhs(&config.register_for_tag, history, tag_idx);
+				let action: RegisterAction =
+					Self::operation_rhs(&config.register_for_tag, history, tag_idx);
 				let target: usize = *register_action_tag
 					.entry((tag.clone(), action.clone()))
 					.or_insert_with_key(|(_, _)| {
@@ -799,7 +845,11 @@ impl Tdfa {
 	}
 
 	/// Algorithm 3 in the [paper][tdfa].
-	fn operation_rhs(registers: &[usize], history: Vec<SymbolicPosition>, tag_idx: usize) -> RegisterAction {
+	fn operation_rhs(
+		registers: &[usize],
+		history: Vec<SymbolicPosition>,
+		tag_idx: usize,
+	) -> RegisterAction {
 		RegisterAction::Append {
 			source: registers[tag_idx],
 			history,
@@ -807,7 +857,10 @@ impl Tdfa {
 	}
 
 	/// Algorithm 3 in the [paper][tdfa].
-	fn filter_history_for_tag(history: &[(CaptureTag, SymbolicPosition)], tag1: &CaptureTag) -> Vec<SymbolicPosition> {
+	fn filter_history_for_tag(
+		history: &[(CaptureTag, SymbolicPosition)],
+		tag1: &CaptureTag,
+	) -> Vec<SymbolicPosition> {
 		history
 			.iter()
 			.filter_map(|(tag2, pos)| if tag2 == tag1 { Some(*pos) } else { None })
@@ -816,8 +869,9 @@ impl Tdfa {
 }
 
 impl Tdfa {
-	/// Compute the canonical (minimal) DFA;
-	/// should not be used with a TDFA (DFA with tagged transitions).
+	/// Compute the canonical (minimal) DFA.
+	///
+	/// This should not be used with a TDFA (DFA with tagged transitions).
 	#[tracing::instrument(skip_all, level = "trace")]
 	pub fn canonicalize(&self) -> Tdfa {
 		let partitions: Vec<Vec<usize>> = self.partition_states();
@@ -841,7 +895,8 @@ impl Tdfa {
 					for (interval, transition) in transitions.iter() {
 						assert_eq!(
 							transition.target,
-							partition_for_state[state.transitions.lookup(interval.start()).unwrap().target]
+							partition_for_state
+								[state.transitions.lookup(interval.start()).unwrap().target]
 						);
 					}
 					for (interval, transition) in state.transitions.iter() {
@@ -916,8 +971,10 @@ impl Tdfa {
 				// We need `move` for `source`, but not `all_classes`.
 				let all_classes: &[Interval<u32>] = &all_classes;
 				state.transitions.iter().map(move |(interval, transition)| {
-					let first: usize = all_classes.partition_point(|class| class.end() < interval.start());
-					let last: usize = all_classes.partition_point(|class| class.end() < interval.end());
+					let first: usize =
+						all_classes.partition_point(|class| class.end() < interval.start());
+					let last: usize =
+						all_classes.partition_point(|class| class.end() < interval.end());
 					assert_eq!(all_classes[first].start(), interval.start());
 					assert_eq!(all_classes[last].end(), interval.end());
 					// There are at most `u32::MAX` intervals,
@@ -927,7 +984,8 @@ impl Tdfa {
 			}),
 		);
 
-		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, Vec<usize>> = BTreeMap::new();
+		let mut by_accepting: BTreeMap<Option<(RuleIdx, Option<EncodingIdx>)>, Vec<usize>> =
+			BTreeMap::new();
 		for (i, state) in self.states.iter().enumerate() {
 			by_accepting
 				.entry(state.accepting_rule)
@@ -1027,8 +1085,9 @@ impl Tdfa {
 			}
 		}
 
-		let mut partitions: Vec<Vec<usize>> =
-			Vec::from_iter((0..starts.len()).map(|p| Vec::from_iter(members[starts[p]..ends[p]].iter().copied())));
+		let mut partitions: Vec<Vec<usize>> = Vec::from_iter(
+			(0..starts.len()).map(|p| Vec::from_iter(members[starts[p]..ends[p]].iter().copied())),
+		);
 
 		// Entry should be first.
 		partitions.swap(0, partition_for_state[0]);
@@ -1041,8 +1100,8 @@ impl DfaState {
 	fn initialize_ascii_cache(&mut self) {
 		for (i, cached_transition) in self.ascii_cache.iter_mut().enumerate() {
 			// It doesn't matter whether this is a (lossless) upcast (`usize::BITS <= u32::BITS`)
-			// or (lossy) downcast (`usize::BITS > u32::BITS`);
-			// a lossless cast is necessarily harmless,
+			// or (lossy) downcast (`usize::BITS > u32::BITS`).
+			// A lossless cast is necessarily harmless,
 			// and a lossy downcast simply means the cache contains more slots than necessary,
 			// which won't be touched during simulation/lexing.
 			if let Some(transition) = self.transitions.lookup(i as u32) {
@@ -1101,8 +1160,10 @@ impl Kernel {
 	) -> IntervalTree<u32, Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>> {
 		use crate::interval_tree::PolicyExtend;
 
-		let mut combined: IntervalTree<u32, Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>> =
-			IntervalTree::new();
+		let mut combined: IntervalTree<
+			u32,
+			Vec<(Configuration, Vec<(CaptureTag, SymbolicPosition)>)>,
+		> = IntervalTree::new();
 
 		for config in self.0.iter() {
 			let nfa_state: &NfaState = &nfa[config.nfa_state];
@@ -1143,9 +1204,9 @@ impl Kernel {
 
 		// Do they contain the same NFA states with the same lookahead tags?
 		for (i, x) in lhs.iter().enumerate() {
-			rhs_states[i] = rhs
-				.iter()
-				.position(|y| (x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure))?;
+			rhs_states[i] = rhs.iter().position(|y| {
+				(x.nfa_state == y.nfa_state) && (x.tag_path_in_closure == y.tag_path_in_closure)
+			})?;
 		}
 
 		// `m1`: register in `lhs` -> register in `rhs`.
@@ -1210,10 +1271,14 @@ impl PrefixTree {
 		}
 	}
 
-	fn add_node(&mut self, maybe_predecessor: Option<NonZero<usize>>, lexeme_position: usize) -> NonZero<usize> {
+	fn add_node(
+		&mut self,
+		maybe_predecessor: Option<NonZero<usize>>,
+		lexeme_position: usize,
+	) -> NonZero<usize> {
 		assert!(maybe_predecessor.map_or(0, NonZero::get) < self.nodes.len());
-		let len: NonZero<usize> =
-			NonZero::new(self.nodes.len()).expect("prefix tree should always be constructed with a root node");
+		let len: NonZero<usize> = NonZero::new(self.nodes.len())
+			.expect("prefix tree should always be constructed with a root node");
 		self.nodes.push(PrefixTreeNode {
 			maybe_predecessor,
 			lexeme_position,

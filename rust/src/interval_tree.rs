@@ -57,7 +57,9 @@ pub struct PolicyFunction<T>(T);
 
 impl<T: Number, V: Clone> IntervalTree<T, V> {
 	pub const fn new() -> Self {
-		Self { intervals: Vec::new() }
+		Self {
+			intervals: Vec::new(),
+		}
 	}
 
 	pub fn len(&self) -> usize {
@@ -71,11 +73,15 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 
 impl<T: Number, V: Clone> IntervalTree<T, V> {
 	pub fn iter(&self) -> impl Iterator<Item = (Interval<T>, &V)> {
-		self.intervals.iter().map(|(interval, value)| (*interval, value))
+		self.intervals
+			.iter()
+			.map(|(interval, value)| (*interval, value))
 	}
 
 	pub fn iter_mut(&mut self) -> impl Iterator<Item = (Interval<T>, &mut V)> {
-		self.intervals.iter_mut().map(|(interval, value)| (*interval, value))
+		self.intervals
+			.iter_mut()
+			.map(|(interval, value)| (*interval, value))
 	}
 }
 
@@ -107,14 +113,17 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 	}
 
 	/// Insert a new value for the given interval.
-	/// The `policy` determines how to merge values where the new interval overlaps with existing intervals.
+	/// The `policy` determines how to merge values
+	/// where the new interval overlaps with existing intervals.
 	pub fn insert<P>(&mut self, new: Interval<T>, new_value: V, mut policy: P)
 	where
 		P: Policy<V>,
 	{
 		// This is the same as `self.partition_point(new.start)`,
 		// but we write it out to make the symmetry clear with `first_disjoint_after`.
-		let first_overlap_before: usize = self.intervals.partition_point(|(interval, _)| interval.end < new.start);
+		let first_overlap_before: usize = self
+			.intervals
+			.partition_point(|(interval, _)| interval.end < new.start);
 		let first_disjoint_after: usize = self
 			.intervals
 			.partition_point(|(interval, _)| interval.start <= new.end);
@@ -124,12 +133,21 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 		let mut cursor: T = new.start;
 		let mut covered: bool = false;
 
-		for (existing, existing_value) in self.intervals.drain(first_overlap_before..first_disjoint_after) {
+		for (existing, existing_value) in self
+			.intervals
+			.drain(first_overlap_before..first_disjoint_after)
+		{
 			if cursor < existing.start {
-				replacement.push((Interval::new(cursor, existing.start.down()), new_value.clone()));
+				replacement.push((
+					Interval::new(cursor, existing.start.down()),
+					new_value.clone(),
+				));
 				cursor = existing.start;
 			} else if existing.start < cursor {
-				replacement.push((Interval::new(existing.start, cursor.down()), existing_value.clone()));
+				replacement.push((
+					Interval::new(existing.start, cursor.down()),
+					existing_value.clone(),
+				));
 			}
 
 			let overlap_end: T = std::cmp::min(existing.end, new.end);
@@ -138,7 +156,10 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 			replacement.push((Interval::new(cursor, overlap_end), merged));
 
 			if overlap_end < existing.end {
-				replacement.push((Interval::new(overlap_end.up(), existing.end), existing_value));
+				replacement.push((
+					Interval::new(overlap_end.up(), existing.end),
+					existing_value,
+				));
 			}
 
 			if overlap_end == new.end {
@@ -187,13 +208,16 @@ impl<T: Number, V: Clone + PartialEq> IntervalTree<T, V> {
 		}
 
 		// `write` is the index of the last entry kept;
-		// entries in `(write, read)` have been merged into it and are dropped by the final truncate.
+		// entries in `(write, read)` have been merged into it
+		// and are dropped by the final truncate.
 		let mut write: usize = 0;
 		for read in 1..self.intervals.len() {
 			let (kept, candidate): (&(Interval<T>, V), &(Interval<T>, V)) =
 				(&self.intervals[write], &self.intervals[read]);
-			// Guard against `up()` overflowing; nothing can be adjacent to an interval ending at `T::MAX`.
-			let adjacent: bool = (kept.0.end() != T::MAX) && (kept.0.end().up() == candidate.0.start());
+			// Guard against `up()` overflowing;
+			// nothing can be adjacent to an interval ending at `T::MAX`.
+			let adjacent: bool =
+				(kept.0.end() != T::MAX) && (kept.0.end().up() == candidate.0.start());
 			if adjacent && (kept.1 == candidate.1) {
 				let end: T = candidate.0.end();
 				self.intervals[write].0 = Interval::new(self.intervals[write].0.start(), end);
@@ -228,14 +252,16 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 	fn partition_point(&self, pos: T) -> usize {
 		#[cfg(debug_assertions)]
 		self.check_invariants();
-		// `partition_point` assumes partitioning as `[true, ..., false]` and returns the index of the first `false`.
-		self.intervals.partition_point(|(interval, _)| interval.end < pos)
+		// `partition_point` assumes partitioning as `[true, ..., false]`
+		// and returns the index of the first `false`.
+		self.intervals
+			.partition_point(|(interval, _)| interval.end < pos)
 	}
 
 	/// Checks that intervals are non-overlapping.
 	///
-	/// Only called under `debug_assertions`; the attribute silences the dead-code warning in release
-	/// builds, where there are no callers.
+	/// Only called under `debug_assertions`;
+	/// the attribute silences the dead-code warning in release builds, where there are no callers.
 	#[cfg_attr(not(debug_assertions), allow(unused))]
 	fn check_invariants(&self) {
 		let mut maybe_previous: Option<T> = None;

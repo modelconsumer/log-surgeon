@@ -143,7 +143,8 @@ impl Dominators {
 			for v in buckets[parent].drain(..) {
 				let u: usize = self.eval(v, &mut ancestors, &mut labels, &mut compress_stack);
 
-				self.idom[v] = if self.vertices[u].semi_dominator < self.vertices[v].semi_dominator {
+				self.idom[v] = if self.vertices[u].semi_dominator < self.vertices[v].semi_dominator
+				{
 					u
 				} else {
 					parent
@@ -161,7 +162,13 @@ impl Dominators {
 		self
 	}
 
-	fn compress(&self, mut v: usize, ancestors: &mut [usize], labels: &mut [usize], stack: &mut Vec<usize>) {
+	fn compress(
+		&self,
+		mut v: usize,
+		ancestors: &mut [usize],
+		labels: &mut [usize],
+		stack: &mut Vec<usize>,
+	) {
 		while ancestors[v] != UNVISITED {
 			let a: usize = ancestors[v];
 
@@ -185,7 +192,13 @@ impl Dominators {
 		}
 	}
 
-	fn eval(&self, v: usize, ancestors: &mut [usize], labels: &mut [usize], stack: &mut Vec<usize>) -> usize {
+	fn eval(
+		&self,
+		v: usize,
+		ancestors: &mut [usize],
+		labels: &mut [usize],
+		stack: &mut Vec<usize>,
+	) -> usize {
 		if ancestors[v] == UNVISITED {
 			v
 		} else {

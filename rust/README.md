@@ -8,7 +8,8 @@ This crate provides the core parsing engine and exposes it through C/C++ and Pyt
 - [Parsing Specification][parsing-spec]-driven log parser.
 - Search query decomposition based on the parsing specification.
 - C/C++ bindings (`/cxx`).
-- CPython bindings (extension module) through [PyO3][pyo3] and [Maturin][maturin] (`src/python_interface.rs`, `/python`).
+- CPython bindings (extension module) through [PyO3][pyo3] and [Maturin][maturin]
+	(`src/python_interface.rs`, `/python`).
 	- See the [Python README][python-readme] for more details.
 
 ## Table of Contents
@@ -72,7 +73,8 @@ export LOG_SURGEON_LOG=log_surgeon=trace
 ```
 
 In this crate, `#[tracing::instrument]` spans are set to level `trace` or `debug`;
-i.e. running with `LOG_SURGEON_LOG=log_surgeon=info` or higher should not include instrumentation logs.
+i.e. running with `LOG_SURGEON_LOG=log_surgeon=info` or higher
+should not include instrumentation logs.
 
 [parsing-spec]: parsing-specification.md
 [python-readme]: python/README.md

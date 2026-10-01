@@ -35,8 +35,8 @@ pub struct NfaState {
 	/// ID and also an index into an [`Nfa`]'s list of states.
 	pub idx: NfaIdx,
 	pub transitions: Transitions,
-	/// If this is an accepting state: the rule it accepts for, and the encoding (if any) of
-	/// the matched lexeme.
+	/// If this is an accepting state: the rule it accepts for,
+	/// and the encoding (if any) of the matched lexeme.
 	pub maybe_accepting_data: Option<(RuleIdx, Option<EncodingIdx>)>,
 	/// Not strictly needed, but useful for debugging (including DOT output).
 	///
@@ -214,15 +214,17 @@ impl Tnfa {
 	/// a parsing specification pattern (i.e. "would necessarily match"),
 	/// as opposed to the search (i.e. "meaningful search value").
 	///
-	/// The intersection is always taken *to the end*: a state accepts only when both sides accept, so a
-	/// match must consume all of `self` and all of `other`. A search that should be free to stop early
-	/// says so in `other` itself, by ending in a wildcard -- see
-	/// [`crate::search::SearchString::search_by_log_shapes`], where deciding how much of `self` even
-	/// needs building is the caller's job rather than this function's.
+	/// The intersection is always taken *to the end*: a state accepts only when both sides accept,
+	/// so a match must consume all of `self` and all of `other`.
+	/// A search that should be free to stop early says so in `other` itself,
+	/// by ending in a wildcard -- see [`crate::search::SearchString::search_by_log_shapes`],
+	/// where deciding how much of `self` even needs building
+	/// is the caller's job rather than this function's.
 	pub fn intersect<const FOR_SEARCH: bool>(&self, other: &Self) -> Self {
 		let begin: NfaIdx = NfaIdx::BEGIN;
 
-		let mut stack: Vec<(StatePair<'_>, NfaIdx)> = vec![(StatePair::new(self, other, begin, begin), begin)];
+		let mut stack: Vec<(StatePair<'_>, NfaIdx)> =
+			vec![(StatePair::new(self, other, begin, begin), begin)];
 		// Note 2026-09-16 (de50fcd316304679841d0687cfac883d5e09287e):
 		// No noticeable performance improvement by using `rustc::FxHashMap`.
 		let mut seen: BTreeMap<StatePair<'_>, NfaIdx> = BTreeMap::from_iter(stack.iter().copied());
@@ -260,9 +262,18 @@ impl Tnfa {
 				(_, Transitions::Tagged { .. }) => {
 					panic!("the right hand side of `Tnfa::intersect` should not contain tags");
 				},
-				(Transitions::Tagged { tag, positive, target }, _) => {
-					let next: NfaIdx =
-						lookup_state(StatePair::new(self, other, *target, pair.states.1), &mut intersection);
+				(
+					Transitions::Tagged {
+						tag,
+						positive,
+						target,
+					},
+					_,
+				) => {
+					let next: NfaIdx = lookup_state(
+						StatePair::new(self, other, *target, pair.states.1),
+						&mut intersection,
+					);
 					intersection[state].transitions = Transitions::Tagged {
 						tag: tag.clone(),
 						positive: *positive,
@@ -301,11 +312,15 @@ impl Tnfa {
 					let mut combined: IntervalTree<u32, NfaIdx> = IntervalTree::new();
 					for (interval1, &target1) in transitions1.iter() {
 						for (interval2, &target2) in transitions2.iter() {
-							let Some(mut overlap): Option<Interval<u32>> = interval1.overlap(&interval2) else {
+							let Some(mut overlap): Option<Interval<u32>> =
+								interval1.overlap(&interval2)
+							else {
 								continue;
 							};
-							let next: NfaIdx =
-								lookup_state(StatePair::new(self, other, target1, target2), &mut intersection);
+							let next: NfaIdx = lookup_state(
+								StatePair::new(self, other, target1, target2),
+								&mut intersection,
+							);
 							if FOR_SEARCH && (interval2.start() != interval2.end()) {
 								overlap = Interval::new(0, u32::MAX);
 							}
@@ -366,7 +381,9 @@ impl Tnfa {
 				},
 			}
 		}
-		intersection.states.retain(|state| state.idx != NfaIdx(usize::MAX));
+		intersection
+			.states
+			.retain(|state| state.idx != NfaIdx(usize::MAX));
 
 		if cfg!(debug_assertions) {
 			assert!(
@@ -432,7 +449,12 @@ impl Tnfa {
 			.states
 			.iter()
 			.cloned()
-			.chain(other.states.iter().map(|state| state.offset_idxes(self.states.len())))
+			.chain(
+				other
+					.states
+					.iter()
+					.map(|state| state.offset_idxes(self.states.len())),
+			)
 			.collect::<Vec<_>>();
 
 		for my_state in new_states[..self.states.len()].iter_mut() {
@@ -469,7 +491,8 @@ impl Tnfa {
 			.map(|state| state.offset_idxes(2 + self.states.len()))
 			.collect::<Vec<_>>();
 
-		let mut new_states: Vec<NfaState> = Vec::with_capacity(2 + self.states.len() + other_states.len());
+		let mut new_states: Vec<NfaState> =
+			Vec::with_capacity(2 + self.states.len() + other_states.len());
 		let end_idx: NfaIdx = NfaIdx(1);
 
 		new_states.push(NfaState {
@@ -574,7 +597,8 @@ impl Transitions {
 
 	/// Returns an iterator of successor [`NfaIdx`]s.
 	/// The elided `'_` lifetime in the return type refers to the lifetime of `&self`,
-	/// and means that the returned `dyn Iterator` will/must be valid for at least the lifetime of `&self`.
+	/// and means that the returned `dyn Iterator` will/must be valid
+	/// for at least the lifetime of `&self`.
 	fn successors(&self) -> Box<dyn Iterator<Item = NfaIdx> + '_> {
 		/*
 		match self {
@@ -584,7 +608,9 @@ impl Transitions {
 		}
 		*/
 		let iter: &mut dyn Iterator<Item = NfaIdx> = match self {
-			Self::Interval(transitions) => &mut transitions.iter().map(|(_interval, target)| *target),
+			Self::Interval(transitions) => {
+				&mut transitions.iter().map(|(_interval, target)| *target)
+			},
 			Self::Spontaneous(transitions) => &mut transitions.iter().copied(),
 			Self::Tagged { target, .. } => &mut std::iter::once(*target),
 		};

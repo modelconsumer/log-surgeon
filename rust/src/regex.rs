@@ -149,7 +149,8 @@ pub enum RegexErrorKind {
 	InvalidBracketRange(char, char),
 	/// Invalid escape character.
 	InvalidEscape,
-	/// Invalid repetition bound; `min > max` or `max == 0` (semantic error, like `InvalidBracketRange`).
+	/// Invalid repetition bound; `min > max` or `max == 0`
+	/// (semantic error, like `InvalidBracketRange`).
 	InvalidRepetitionBound(u32, u32),
 	/// Too large of a repetition bound
 	/// (~implementation detail/restriction; repetition bounds are stored as `u32`).
@@ -171,9 +172,13 @@ pub enum RegexErrorKind {
 	/// Used for parsing a non-special character (`negate == true`)
 	/// and for parsing an escaped special character (`negate == false`).
 	/// This shouldn't actually bubble up publicly;
-	/// it'll either get consumed by/turned into `ExpectedLiteralInBracketedExpression` or `InvalidTerm`,
+	/// it'll either get consumed by/turned into
+	/// `ExpectedLiteralInBracketedExpression` or `InvalidTerm`,
 	/// but exists because 1. it models "what's happening", and 2. it's useful for debugging.
-	ExpectedOneOf { characters: &'static str, negate: bool },
+	ExpectedOneOf {
+		characters: &'static str,
+		negate: bool,
+	},
 	/// No definition for placeholder.
 	/// TODO: this could be `Arc<str>`?
 	UndefinedPlaceholder(String),
@@ -280,7 +285,8 @@ impl Regex {
 						buffer.push('\\');
 						buffer.push(ch);
 					} else if ch == '-' {
-						// This is needed, for example, for `[a\-z]` as 3 characters, but not `[a-]`.
+						// This is needed, for example, for `[a\-z]` as 3 characters,
+						// but not `[a-]`.
 						// However, we always escape it for simplicity and clarity.
 						buffer.push_str("\\-");
 					} else {
@@ -289,18 +295,25 @@ impl Regex {
 				}
 
 				let negation: &str = if *negated { "^" } else { "" };
-				let serialized: String = items.iter().fold(String::new(), |mut accumulated, &(lo, hi)| {
-					escape(lo, &mut accumulated);
-					if lo != hi {
-						accumulated.push('-');
-						escape(hi, &mut accumulated);
-					}
-					accumulated
-				});
+				let serialized: String =
+					items
+						.iter()
+						.fold(String::new(), |mut accumulated, &(lo, hi)| {
+							escape(lo, &mut accumulated);
+							if lo != hi {
+								accumulated.push('-');
+								escape(hi, &mut accumulated);
+							}
+							accumulated
+						});
 				format!("[{negation}{serialized}]")
 			},
 			Self::Capture(capture) => {
-				format!("(?<{}>{})", capture.name, capture.item.to_pattern_internal())
+				format!(
+					"(?<{}>{})",
+					capture.name,
+					capture.item.to_pattern_internal()
+				)
 			},
 			Self::Placeholder { name, .. } => {
 				format!("(?<{}>)", name)
@@ -371,7 +384,10 @@ impl Regex {
 	/// "Desugars" a pattern `(self)+` as `(self)(self)*`;
 	/// see [`Regex::KleenePlus`] for more details.
 	pub fn wrap_as_desugared_kleene_plus(&self) -> Self {
-		Self::Sequence(vec![self.clone(), Self::KleeneClosure(Box::new(self.clone()))])
+		Self::Sequence(vec![
+			self.clone(),
+			Self::KleeneClosure(Box::new(self.clone())),
+		])
 	}
 
 	/// Whether this regex contains any [`Regex::Capture`] anywhere in its subtree.
@@ -383,7 +399,9 @@ impl Regex {
 			| Self::KleenePlus(item)
 			| Self::BoundedRepetition { item, .. }
 			| Self::Placeholder { item, .. } => item.contains_capture(),
-			Self::Sequence(items) | Self::Alternation(items) => items.iter().any(Self::contains_capture),
+			Self::Sequence(items) | Self::Alternation(items) => {
+				items.iter().any(Self::contains_capture)
+			},
 		}
 	}
 

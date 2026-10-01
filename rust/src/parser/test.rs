@@ -15,7 +15,10 @@ fn ip_address() {
 		let event: LogEvent<'_> = parser.next_event(input, &mut pos).unwrap();
 		assert_eq!(&*event.message, "hello 1.2.3.4");
 		assert_eq!(event.all_matches.len(), 1);
-		assert_eq!(event.all_matches[0].range, CRange::new("hello ".len(), input.len()));
+		assert_eq!(
+			event.all_matches[0].range,
+			CRange::new("hello ".len(), input.len())
+		);
 	}
 
 	assert_eq!(pos, input.len());

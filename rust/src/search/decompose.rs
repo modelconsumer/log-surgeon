@@ -1,20 +1,24 @@
 //! Decomposes a query against a log shape without building the shape's automaton.
 //!
-//! Answering [`crate::search::SearchString::search_by_log_shapes`] via the engine is expensive: it
-//! builds the shape's TNFA, intersects it with the query's, and enumerates paths through the result.
+//! Answering [`crate::search::SearchString::search_by_log_shapes`] via the engine is expensive:
+//! it builds the shape's TNFA, intersects it with the query's,
+//! and enumerates paths through the result.
 //! This module answers the same question directly from a coarse model of the shape, and on a real
 //! corpus it answers nearly all of them -- the engine is a fallback, not the normal path.
 //!
 //! It is organised as two tiers, cheapest first:
 //!
-//! 1. **Rejection** ([`align`]) -- a `false` from [`can_match`] *proves* no message of the shape can
-//!    match, so the shape is discarded outright. This tier is a true prefilter: it only ever answers
-//!    "no" or "maybe". Its soundness rests on [`Charset`] being a **superset** of the characters a
-//!    rule can emit, and on placeholders being allowed to match empty; both only widen what is
+//! 1. **Rejection** ([`align`]) -- a `false` from [`can_match`] *proves* no message of the shape
+//!    can match, so the shape is discarded outright.
+//!    This tier is a true prefilter: it only ever answers "no" or "maybe".
+//!    Its soundness rests on [`Charset`] being a **superset**
+//!    of the characters a rule can emit,
+//!    and on placeholders being allowed to match empty; both only widen what is
 //!    accepted, so a rejection is never wrong. For the same reason its *decompositions* are not
 //!    usable as a result -- only the yes/no answer is.
-//! 2. **Composition** ([`placement`] then [`compose`]) -- decides where each of the query's runs can
-//!    sit ([`PlacementTable`]), enumerates the consistent assignments, and renders them as the
+//! 2. **Composition** ([`placement`] then [`compose`]) --
+//!    decides where each of the query's runs can sit ([`PlacementTable`]),
+//!    enumerates the consistent assignments, and renders them as the
 //!    [`crate::search::Interpretation`]s the caller receives. Unlike tier 1 this is **exact**: what
 //!    it reports is what the engine would report, so a wrong value here is a wrong answer rather
 //!    than a loose filter.
@@ -110,8 +114,10 @@ impl Charset {
 	/// A fast path for callers that can then skip per-character checks entirely.
 	#[must_use]
 	pub fn is_universal(&self) -> bool {
-		// Note: [`IntervalTree`] does not coalesce adjacent intervals that happen to hold equal values,
-		// so a universal set is not necessarily a single entry; check for contiguous coverage instead.
+		// Note: [`IntervalTree`] does not coalesce adjacent intervals
+		// that happen to hold equal values,
+		// so a universal set is not necessarily a single entry;
+		// check for contiguous coverage instead.
 		// Entries are disjoint and ascending, so one pass suffices.
 		let mut cursor: u32 = 0;
 		for (interval, _) in self.0.iter() {
@@ -164,8 +170,8 @@ impl Charset {
 	///
 	/// Mirrors the structure of TNFA construction for each [`Regex`] variant, so that the result is
 	/// exactly the alphabet of the symbol transitions the engine would build. Since only the
-	/// *alphabet* matters, the repetition and grouping variants simply recurse: how many times an item
-	/// repeats cannot introduce a character the item itself could not emit.
+	/// *alphabet* matters, the repetition and grouping variants simply recurse:
+	/// how many times an item repeats cannot introduce a character the item itself could not emit.
 	pub fn add_regex(&mut self, regex: &Regex) {
 		match regex {
 			Regex::AnyChar => self.insert_interval(Self::universe()),
@@ -177,9 +183,11 @@ impl Charset {
 					.map(|&(low, high)| Interval::new(u32::from(low), u32::from(high)))
 					.collect::<Vec<_>>();
 				if *negated {
-					// The complement is taken over `u32`, so it also admits surrogates and values above
-					// `char::MAX`, which the engine's own complement admits too. That only widens the
-					// set (sound), and `contains` is only ever asked about a `char`.
+					// The complement is taken over `u32`,
+					// so it also admits surrogates and values above `char::MAX`,
+					// which the engine's own complement admits too.
+					// That only widens the set (sound),
+					// and `contains` is only ever asked about a `char`.
 					intervals = Interval::complement(&mut intervals);
 				}
 				for interval in intervals.into_iter() {

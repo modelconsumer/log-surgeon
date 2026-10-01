@@ -52,7 +52,10 @@ fn serde_roundtrip() {
 	tree.insert(Interval::new(20, 30), 2, PolicyAdd);
 
 	let json: String = serde_json::to_string(&tree).unwrap();
-	assert_eq!(json, r#"[{"start":0,"end":10,"value":1},{"start":20,"end":30,"value":2}]"#);
+	assert_eq!(
+		json,
+		r#"[{"start":0,"end":10,"value":1},{"start":20,"end":30,"value":2}]"#
+	);
 
 	let roundtripped: IntervalTree<u32, u64> = serde_json::from_str(&json).unwrap();
 	assert_eq!(tree, roundtripped);

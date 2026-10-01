@@ -27,8 +27,9 @@ pub mod python_interface;
 /// Registers a global [`tracing`] [`tracing_subscriber::fmt::Subscriber`]
 /// with environment variable `LOG_SURGEON_LOG`.
 ///
-/// For example, set `LOG_SURGEON_LOG=log_surgeon=info` to show `info` and higher level messages.
-/// See [`tracing_subscriber::filter::EnvFilter`] for more details on the syntax for the environment variable.
+/// For example, set `LOG_SURGEON_LOG=log_surgeon=info` to show `info` and higher level
+/// messages. See [`tracing_subscriber::filter::EnvFilter`] for more details on the environment
+/// variable syntax.
 ///
 /// There can only be one global subscriber, and it can only be set once
 /// (by [`tracing_subscriber::fmt::SubscriberBuilder::init`]/`try_init`).
@@ -36,8 +37,10 @@ pub mod python_interface;
 /// This global subscriber also includes records from <https://docs.rs/log/latest/log/>.
 ///
 /// See also:
-/// - <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/fmt/struct.SubscriberBuilder.html#method.init>
-/// - <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>
+/// - `SubscriberBuilder::init`: <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/>
+///   (`fmt::SubscriberBuilder`, method `init`)
+/// - `EnvFilter` directives:
+///   <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html>
 ///
 pub fn enable_tracing() {
 	use tracing_subscriber::filter::EnvFilter;
@@ -45,7 +48,7 @@ pub fn enable_tracing() {
 
 	// Note: [`tracing_subscriber::fmt::SubscriberBuilder::without_time`]
 	// disables _both_ timestamps per log message _and_ timing events/showing their duration.
-	// Call `.with_timer()` with an empty formatter to _just_ disable timestamps in each log printed.
+	// Call `.with_timer()` with an empty formatter to _just_ disable timestamps in each log.
 	tracing_subscriber::fmt()
 		.with_timer(())
 		.with_target(false)
@@ -60,7 +63,7 @@ pub fn enable_tracing() {
 ///
 /// 1. Rust's only real implementation is rustc,
 /// 2. rustc is built on LLVM,
-/// 3. LLVM fundamentally assumes that pointer subtraction returns a value in the C `ptrdiff_t` type,
+/// 3. LLVM assumes pointer subtraction returns a value in the C `ptrdiff_t` type,
 /// 4. so objects/arrays are at most half the address space,
 /// 5. and an object/array/vector of size `(isize::MAX as usize) + 1` would violate this.
 ///
@@ -71,5 +74,8 @@ const _LENGTH_AT_MOST_HALF_USIZE_MAX: () = ();
 /// We assume we're on at least a 32-bit platform for lossless `u32` <-> `usize` casts.
 /// The only "smaller" platforms rustc supports are 16-bits.
 const _USIZE_AT_LEAST_32_BITS: () = {
-	assert!(usize::BITS >= u32::BITS, "possibly lossy cast from `u32` to `usize`");
+	assert!(
+		usize::BITS >= u32::BITS,
+		"possibly lossy cast from `u32` to `usize`"
+	);
 };

@@ -19,7 +19,8 @@ use crate::parsing_spec::RuleInfo;
 
 /// A parser is almost stateless aside from 2/3 fields:
 ///
-/// - An owned copy of the substring of the input text for the "current" (most recently returned) log event.
+/// - An owned copy of the substring of the input text
+///   for the "current" (most recently returned) log event.
 ///   - This greatly simplifies lifetime management, especially in the presence of FFI,
 ///     since the parser doesn't own a whole copy of the input text.
 ///   - Most calls to [`Parser::next_event`] won't require allocation;
@@ -128,9 +129,13 @@ impl Parser {
 
 					self.current_log.all_matches.push(variable_capture);
 					if variable_is_implicit_capture {
-						self.current_log.leaf_indices.push(token_starting_capture_count);
+						self.current_log
+							.leaf_indices
+							.push(token_starting_capture_count);
 					}
-					self.current_log.root_indices.push(token_starting_capture_count);
+					self.current_log
+						.root_indices
+						.push(token_starting_capture_count);
 
 					for regex_capture in self.dfa_execution.captures.iter() {
 						let capture_index: usize = self.current_log.all_matches.len();
@@ -154,20 +159,29 @@ impl Parser {
 
 					if &*rule.name == "header" && previous_was_newline {
 						if have_header {
-							let pending_header: &mut WorkingLogEvent =
-								self.maybe_pending_header.get_or_insert_with(WorkingLogEvent::new);
+							let pending_header: &mut WorkingLogEvent = self
+								.maybe_pending_header
+								.get_or_insert_with(WorkingLogEvent::new);
 							assert_eq!(pending_header.message.len(), 0);
 							assert_eq!(pending_header.all_matches.len(), 0);
 							assert_eq!(pending_header.root_indices.len(), 0);
 							assert_eq!(pending_header.leaf_indices.len(), 0);
 							pending_header.message.push_str(lexeme);
-							for mut capture in self.current_log.all_matches.drain(token_starting_capture_count..) {
+							for mut capture in self
+								.current_log
+								.all_matches
+								.drain(token_starting_capture_count..)
+							{
 								capture.range.start -= token_start;
 								capture.range.end -= token_start;
 								capture.parent_index -= token_starting_capture_count;
 								pending_header.all_matches.push(capture);
 							}
-							for mut index in self.current_log.leaf_indices.drain(token_starting_leaf_indices..) {
+							for mut index in self
+								.current_log
+								.leaf_indices
+								.drain(token_starting_leaf_indices..)
+							{
 								index -= token_starting_capture_count;
 								pending_header.leaf_indices.push(index);
 							}
@@ -211,11 +225,13 @@ impl Parser {
 			} else {
 				std::ptr::null()
 			};
-			mat.ffi_pointers.lexeme = UncheckedCArray::new(&self.current_log.message[mat.range.start..mat.range.end]);
+			mat.ffi_pointers.lexeme =
+				UncheckedCArray::new(&self.current_log.message[mat.range.start..mat.range.end]);
 
 			let rule_info: &RuleInfo = &self.spec[mat.rule_idx][mat.sub_rule_id];
 			mat.ffi_pointers.rule_name = UncheckedCArray::new(&rule_info.name);
-			mat.ffi_pointers.fully_qualified_name = UncheckedCArray::new(&rule_info.fully_qualified_name);
+			mat.ffi_pointers.fully_qualified_name =
+				UncheckedCArray::new(&rule_info.fully_qualified_name);
 		}
 
 		Some(LogEvent {

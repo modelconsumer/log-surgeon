@@ -1,19 +1,23 @@
 //! A coarse model of a log shape.
 //!
-//! A log shape is a sequence of static text and references to rules (placeholders). [`ShapeModel`]
-//! keeps that structure, pairing each placeholder with a [`Charset`] bounding the characters the rule
-//! can emit, plus the sub-rule(s) needed to report a capture.
+//! A log shape is a sequence of static text and references to rules (placeholders).
+//! [`ShapeModel`] keeps that structure,
+//! pairing each placeholder with a [`Charset`] bounding the characters the rule can emit,
+//! plus the sub-rule(s) needed to report a capture.
 //!
-//! The model is built from [`ParsingSpec::split_log_shape`], the same tokenizer
-//! [`ParsingSpec::automata_for_shape`] uses, so the model and the automaton can never disagree about
-//! where the placeholders are.
+//! The model is built from [`ParsingSpec::split_log_shape`],
+//! the same tokenizer [`ParsingSpec::automata_for_shape`] uses,
+//! so the model and the automaton can never disagree about where the placeholders are.
 //!
 //! # Preconditions
 //!
-//! A shape is expected to be *decomposable*: every placeholder must name a rule the spec defines, and
-//! every such rule must be a **leaf** (no nested captures). Both are asserted when the model is built,
-//! so callers never have to ask whether a shape can be decomposed -- the type says it can. Violations
-//! are programming errors in the shape, not conditions to recover from; see [`ShapeModel::new`].
+//! A shape is expected to be *decomposable*:
+//! every placeholder must name a rule the spec defines,
+//! and every such rule must be a **leaf** (no nested captures).
+//! Both are asserted when the model is built,
+//! so callers never have to ask whether a shape can be decomposed -- the type says it can.
+//! Violations are programming errors in the shape, not conditions to recover from;
+//! see [`ShapeModel::new`].
 
 #[cfg(test)]
 mod test;
@@ -78,9 +82,11 @@ pub struct Placeholder {
 	pub alternatives: Vec<ResolvedCapture>,
 	/// Whether some alternative can match the empty string.
 	///
-	/// A nullable placeholder can stand entirely aside, so a part *before* it can still be the first
-	/// thing a message emits, and a part *after* it can still be the last. Anchoring therefore cannot
-	/// simply demand the first or last shape part; see [`ShapeModel::can_start_at`].
+	/// A nullable placeholder can stand entirely aside,
+	/// so a part *before* it can still be the first thing a message emits,
+	/// and a part *after* it can still be the last.
+	/// Anchoring therefore cannot simply demand the first or last shape part;
+	/// see [`ShapeModel::can_start_at`].
 	pub can_match_empty: bool,
 }
 
@@ -97,11 +103,14 @@ impl ShapeModel {
 	///
 	/// # Panics
 	///
-	/// Panics if a placeholder names a rule the spec does not define, or names a rule with nested
-	/// captures (i.e. one that is not a leaf). Both make the shape unsupported for direct
-	/// decomposition, and continuing past them would silently produce a different answer than the
-	/// engine -- a non-leaf rule must be reported as its nested captures, which this model does not
-	/// carry -- so they are treated as errors in the shape rather than as conditions to recover from.
+	/// Panics if a placeholder names a rule the spec does not define,
+	/// or names a rule with nested captures (i.e. one that is not a leaf).
+	/// Both make the shape unsupported for direct decomposition,
+	/// and continuing past them would silently produce a different answer than the engine --
+	/// a non-leaf rule must be reported as its nested captures,
+	/// which this model does not carry --
+	/// so they are treated as errors in the shape,
+	/// rather than as conditions to recover from.
 	#[must_use]
 	pub fn new(spec: &ParsingSpec, shape: &str) -> Self {
 		let mut parts: Vec<ShapePart> = Vec::new();
@@ -122,8 +131,8 @@ impl ShapeModel {
 
 	/// The fragments for parts `start..=end`, for rebuilding a *slice* of the shape's automaton.
 	///
-	/// Round-trips through [`LogShapeFragment`] rather than re-tokenizing the shape string, so the parts
-	/// the automaton is built from are exactly the parts the placement reasoned about.
+	/// Round-trips through [`LogShapeFragment`] rather than re-tokenizing the shape string,
+	/// so the parts the automaton is built from are exactly the parts the placement reasoned about.
 	#[must_use]
 	pub fn fragments_in(&self, start: usize, end: usize) -> Vec<LogShapeFragment> {
 		Vec::from_iter(self.parts[start..=end].iter().map(|part| match part {
@@ -134,10 +143,12 @@ impl ShapeModel {
 
 	/// Whether a message of this shape can *begin* with the text part `part` emits.
 	///
-	/// True when every earlier part can emit nothing at all. Static text is never empty -- the tokenizer
-	/// does not produce empty fragments -- so only nullable placeholders can stand aside. This is what a
-	/// start-anchored run needs: it must be the first thing in the message, which does not require it to
-	/// be in the first *part* if the parts before it can vanish.
+	/// True when every earlier part can emit nothing at all.
+	/// Static text is never empty -- the tokenizer does not produce empty fragments --
+	/// so only nullable placeholders can stand aside.
+	/// This is what a start-anchored run needs:
+	/// it must be the first thing in the message,
+	/// which does not require it to be in the first *part* if the parts before it can vanish.
 	#[must_use]
 	pub fn can_start_at(&self, part: usize) -> bool {
 		self.parts[..part].iter().all(ShapePart::can_be_empty)
@@ -187,7 +198,8 @@ impl Placeholder {
 
 		for &(info, regex) in rows.iter() {
 			charset.add_regex(regex);
-			// Conservative in the direction that keeps anchoring sound: if *any* alternative is nullable,
+			// Conservative in the direction that keeps anchoring sound:
+			// if *any* alternative is nullable,
 			// the placeholder is treated as able to stand aside.
 			can_match_empty |= regex.is_nullable().is_some();
 

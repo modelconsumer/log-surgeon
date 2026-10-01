@@ -1,12 +1,14 @@
 //! A query is anchored at a boundary exactly when it has no wildcard there.
 //!
-//! The rule is uniform across both ends: `foo*` is anchored at the start, `*foo` at the end, `foo` at
-//! both (an exact match), and `*foo*` at neither. Both ends are expressed the same way -- as a wildcard
-//! the automaton actually consumes -- and the cost of the unanchored case is controlled by bounding how
-//! much of the shape is built, not by stopping the intersection early.
+//! The rule is uniform across both ends: `foo*` is anchored at the start,
+//! `*foo` at the end, `foo` at both (an exact match), and `*foo*` at neither.
+//! Both ends are expressed the same way --
+//! as a wildcard the automaton actually consumes --
+//! and the cost of the unanchored case is controlled by bounding how much of the shape is built,
+//! not by stopping the intersection early.
 //!
-//! These tests pin the semantics through the public entry point, so they cover `decompose`, the
-//! composition path, and the engine together.
+//! These tests pin the semantics through the public entry point,
+//! so they cover `decompose`, the composition path, and the engine together.
 
 use log_surgeon::parsing_spec::ParsingSpec;
 use log_surgeon::parsing_spec::ParsingSpecBuilder;
@@ -19,8 +21,9 @@ fn test_spec() -> ParsingSpec {
 		("level", "TRACE|DEBUG|INFO|WARN|ERROR|FATAL"),
 		("word", "[a-zA-Z]+"),
 		("digits", "[0-9]+"),
-		// The rule cannot match empty (the spec builder forbids that), but the `pad` capture can, so
-		// `%optional.pad%` is a placeholder that can stand aside entirely.
+		// The rule cannot match empty (the spec builder forbids that),
+		// but the `pad` capture can,
+		// so `%optional.pad%` is a placeholder that can stand aside entirely.
 		("optional", r"<(?<pad>[!?]*)>"),
 	] {
 		builder.add_rule(name, pattern).unwrap();
@@ -55,14 +58,18 @@ fn render(interpretation: &Interpretation) -> String {
 		.join(" ")
 }
 
-/// `*foo` must require the message to *end* with `foo`, the way `foo*` requires it to start with it.
+/// `*foo` must require the message to *end* with `foo`,
+/// the way `foo*` requires it to start with it.
 #[test]
 fn trailing_wildcard_decides_end_anchoring() {
 	let spec: ParsingSpec = test_spec();
 	let shape: &str = "%level% %word% done";
 
 	// The shape always ends with `done`, so a query anchored to anything else cannot match.
-	assert!(matches(&spec, "*done", shape), "the shape does end with `done`");
+	assert!(
+		matches(&spec, "*done", shape),
+		"the shape does end with `done`"
+	);
 	assert!(
 		!matches(&spec, "*INFO", shape),
 		"`*INFO` is anchored at the end, and the shape cannot end with INFO"
@@ -78,7 +85,10 @@ fn leading_wildcard_decides_start_anchoring() {
 	let spec: ParsingSpec = test_spec();
 	let shape: &str = "start %word% end";
 
-	assert!(matches(&spec, "start*", shape), "the shape does start with `start`");
+	assert!(
+		matches(&spec, "start*", shape),
+		"the shape does start with `start`"
+	);
 	assert!(
 		!matches(&spec, "end*", shape),
 		"`end*` is anchored at the start, and the shape cannot start with `end`"
@@ -91,7 +101,8 @@ fn leading_wildcard_decides_start_anchoring() {
 fn bare_query_is_anchored_at_both_ends() {
 	let spec: ParsingSpec = test_spec();
 
-	// `%word%` is `[a-zA-Z]+`, so it cannot be empty: `hello` alone is never a whole message.
+	// `%word%` is `[a-zA-Z]+`, so it cannot be empty:
+	// `hello` alone is never a whole message.
 	assert!(
 		!matches(&spec, "hello", "hello %word%"),
 		"`hello` cannot be the whole message: a space and a word must follow"
@@ -108,7 +119,10 @@ fn bare_query_is_anchored_at_both_ends() {
 
 	// An exact literal shape matches its own text exactly.
 	assert!(matches(&spec, "abc", "abc"), "an exact match");
-	assert!(!matches(&spec, "ab", "abc"), "`ab` is not the whole of `abc`");
+	assert!(
+		!matches(&spec, "ab", "abc"),
+		"`ab` is not the whole of `abc`"
+	);
 	assert!(matches(&spec, "ab*", "abc"), "`ab*` is a prefix match");
 }
 
@@ -145,7 +159,8 @@ fn start_anchoring_allows_a_leading_nullable_placeholder() {
 	);
 }
 
-/// A non-nullable trailing placeholder must still emit something, so the query cannot end before it.
+/// A non-nullable trailing placeholder must still emit something,
+/// so the query cannot end before it.
 #[test]
 fn end_anchoring_rejects_a_trailing_non_nullable_placeholder() {
 	let spec: ParsingSpec = test_spec();
@@ -187,19 +202,24 @@ fn both_ends_anchored_pins_a_capture_exactly() {
 	);
 }
 
-/// The engine always intersects to the end, so an unanchored query must carry a *real* trailing
-/// wildcard rather than being allowed to stop early.
+/// The engine always intersects to the end,
+/// so an unanchored query must carry a *real* trailing wildcard rather than being allowed to
+/// stop early.
 ///
-/// This pins the contract that replaced the old `TO_END` / `WILDCARD_END` const parameters: there is no
-/// longer a mode in which the intersection accepts while the shape is mid-way through. The observable
-/// consequence is that a trailing `*` and an anchored end give genuinely different answers, and that
-/// both are reported without any synthetic wildcard being appended afterwards.
+/// This pins the contract that replaced the old `TO_END` / `WILDCARD_END` const parameters:
+/// there is no longer a mode in which the intersection accepts
+/// while the shape is mid-way through.
+/// The observable consequence is that a trailing `*` and an anchored end give genuinely different
+/// answers,
+/// and that both are reported without any synthetic wildcard being appended afterwards.
 #[test]
 fn unanchored_queries_consume_the_rest_of_the_shape() {
 	let spec: ParsingSpec = test_spec();
 
-	// The shape continues past `id=` with a non-nullable rule, so only the unanchored form matches; the
-	// anchored one must not, which it could not express if the engine stopped at the query's last run.
+	// The shape continues past `id=` with a non-nullable rule,
+	// so only the unanchored form matches;
+	// the anchored one must not,
+	// which it could not express if the engine stopped at the query's last run.
 	assert!(matches(&spec, "*id=*", "id=%digits%"));
 	assert!(!matches(&spec, "*id=", "id=%digits%"));
 
@@ -212,7 +232,8 @@ fn unanchored_queries_consume_the_rest_of_the_shape() {
 			.search_by_log_shapes(&spec, &[shape])
 			.pop()
 			.expect("one result per shape");
-		let expected: Vec<Interpretation> = parsed.interpretations_for_log_shape_via_engine(&spec, shape);
+		let expected: Vec<Interpretation> =
+			parsed.interpretations_for_log_shape_via_engine(&spec, shape);
 		assert_eq!(
 			expected.iter().map(render).collect::<Vec<_>>(),
 			actual.iter().map(render).collect::<Vec<_>>(),
@@ -223,10 +244,13 @@ fn unanchored_queries_consume_the_rest_of_the_shape() {
 
 /// An unanchored query reports nothing past its last literal character.
 ///
-/// The engine now runs to the end of the shape, so it *sees* the trailing parts; they must still be
-/// dropped from the result, because the trailing wildcard leaves them unconstrained and reporting each
-/// as a bare `*` would carry no information. Positional identity is read left to right, so trimming the
-/// tail cannot disturb it.
+/// The engine now runs to the end of the shape,
+/// so it *sees* the trailing parts;
+/// they must still be dropped from the result,
+/// because the trailing wildcard leaves them unconstrained
+/// and reporting each as a bare `*` would carry no information.
+/// Positional identity is read left to right,
+/// so trimming the tail cannot disturb it.
 #[test]
 fn trailing_unconstrained_parts_are_not_reported() {
 	let spec: ParsingSpec = test_spec();
@@ -268,9 +292,9 @@ fn decompose_and_engine_agree_on_anchoring() {
 	];
 
 	let queries: &[&str] = &[
-		"*done", "*done*", "done*", "done", "*INFO", "*INFO*", "INFO", "INFO*", "*id=", "*id=*", "id=1", "id=1*",
-		"*hello", "*hello*", "hello*", "hello", "*end", "*end*", "*c", "*c*", "a*c", "a*c*", "*b*c", "*1", "*1*", "*>",
-		"*tail", "*tail*",
+		"*done", "*done*", "done*", "done", "*INFO", "*INFO*", "INFO", "INFO*", "*id=", "*id=*",
+		"id=1", "id=1*", "*hello", "*hello*", "hello*", "hello", "*end", "*end*", "*c", "*c*",
+		"a*c", "a*c*", "*b*c", "*1", "*1*", "*>", "*tail", "*tail*",
 	];
 
 	for shape in shapes.iter() {
@@ -281,12 +305,14 @@ fn decompose_and_engine_agree_on_anchoring() {
 				.search_by_log_shapes(&spec, &[shape])
 				.pop()
 				.expect("one result per shape");
-			let expected: Vec<Interpretation> = query.interpretations_for_log_shape_via_engine(&spec, shape);
+			let expected: Vec<Interpretation> =
+				query.interpretations_for_log_shape_via_engine(&spec, shape);
 
 			assert_eq!(
 				expected.is_empty(),
 				actual.is_empty(),
-				"decompose and engine disagree on whether it matches: shape={shape:?} query={query_text:?}\n  \
+				"decompose and engine disagree on whether it matches: \
+				 shape={shape:?} query={query_text:?}\n  \
 				 engine={:?}\n  actual={:?}",
 				expected.iter().map(render).collect::<Vec<_>>(),
 				actual.iter().map(render).collect::<Vec<_>>(),

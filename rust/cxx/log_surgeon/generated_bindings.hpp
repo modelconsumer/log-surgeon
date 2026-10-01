@@ -25,8 +25,8 @@ struct NfaIdx;
 
 /// A parser is almost stateless aside from 2/3 fields:
 ///
-/// - An owned copy of the substring of the input text for the "current" (most recently returned)
-/// log event.
+/// - An owned copy of the substring of the input text
+///   for the "current" (most recently returned) log event.
 ///   - This greatly simplifies lifetime management, especially in the presence of FFI,
 ///     since the parser doesn't own a whole copy of the input text.
 ///   - Most calls to [`Parser::next_event`] won't require allocation;
@@ -106,8 +106,8 @@ struct Match {
     uint16_t encoding_idx;
     /// DANGEROUS fields exposed for FFI.
     /// But it's not dangerous if you don't look at it (in Rust).
-    /// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`] as
-    /// necessary.
+    /// Safe Rust code should refer to the fields above and the corresponding [`LogEvent`]
+    /// as necessary.
     ///
     /// Note: [`LogEvent`] can borrow from [`crate::parser::Parser`] since it's an "external" value,
     /// but the [`Match`]es of a `LogEvent` live in a `Vec` inside `Parser`,
@@ -210,8 +210,8 @@ extern "C" {
     /// Consume the (boxed) [`ParsingSpecBuilder`] to construct a shared [`ParsingSpec`].
     ///
     /// The spec is returned behind an [`Arc`] so it can outlive any single [`Parser`] and back
-    /// several of them (see [`log_surgeon_parsing_spec_create_parser`]) and/or be searched
-    /// directly.
+    /// several of them (see [`log_surgeon_parsing_spec_create_parser`]),
+    /// and/or be searched directly.
     Box<Arc<ParsingSpec>> log_surgeon_parsing_spec_builder_build(Box<ParsingSpecBuilder> builder);
 
     Box<ParsingSpecBuilder> log_surgeon_parsing_spec_builder_clone(ParsingSpecBuilder const* value);

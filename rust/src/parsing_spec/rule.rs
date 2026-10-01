@@ -133,16 +133,23 @@ impl std::fmt::Display for RuleIdx {
 impl RootRule {
 	/// Construct a new root rule;
 	/// initialize the [`RuleInfo`] for the root rule and any/all sub-rules.
-	pub fn new(idx: RuleIdx, name: Arc<str>, priority: i32, regex: AnchoredRegex, encodings: &[Arc<Encoding>]) -> Self {
-		let rule_info: Vec<RuleInfo> = Vec::from_iter(regex.captures.iter().map(|capture| RuleInfo {
-			root_idx: idx,
-			id: capture.id,
-			name: capture.name.clone(),
-			parent_id: capture.parent_id,
-			descendants: capture.descendants,
-			qualified_name: capture.qualified_name.clone(),
-			fully_qualified_name: Arc::from(format!("{}{}", name, capture.qualified_name)),
-		}));
+	pub fn new(
+		idx: RuleIdx,
+		name: Arc<str>,
+		priority: i32,
+		regex: AnchoredRegex,
+		encodings: &[Arc<Encoding>],
+	) -> Self {
+		let rule_info: Vec<RuleInfo> =
+			Vec::from_iter(regex.captures.iter().map(|capture| RuleInfo {
+				root_idx: idx,
+				id: capture.id,
+				name: capture.name.clone(),
+				parent_id: capture.parent_id,
+				descendants: capture.descendants,
+				qualified_name: capture.qualified_name.clone(),
+				fully_qualified_name: Arc::from(format!("{}{}", name, capture.qualified_name)),
+			}));
 
 		// The parsing DFA is built from the pattern *without* the implicit root capture: the
 		// parser synthesizes the root match itself, so the root's tags/registers would be pure

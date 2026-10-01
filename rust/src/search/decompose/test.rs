@@ -13,11 +13,17 @@ fn assert_contains_exactly(charset: &Charset, expected: &str) {
 		assert!(charset.contains(c), "expected {c:?} to be in the charset");
 	}
 	// Sample the rest of ASCII, plus a non-ASCII scalar value.
-	for c in (0..0x80u32).filter_map(char::from_u32).chain(['\u{e9}', '\u{10FFFF}']) {
+	for c in (0..0x80u32)
+		.filter_map(char::from_u32)
+		.chain(['\u{e9}', '\u{10FFFF}'])
+	{
 		if expected.contains(c) {
 			continue;
 		}
-		assert!(!charset.contains(c), "expected {c:?} not to be in the charset");
+		assert!(
+			!charset.contains(c),
+			"expected {c:?} not to be in the charset"
+		);
 	}
 }
 
@@ -62,8 +68,8 @@ fn bracketed_ranges() {
 
 #[test]
 fn negated_bracketed_ranges_are_exact() {
-	// The key precision win over a bitmap-with-universal-fallback: a negated range excludes exactly
-	// its members instead of widening to every character.
+	// The key precision win over a bitmap-with-universal-fallback:
+	// a negated range excludes exactly its members, instead of widening to every character.
 	let charset: Charset = charset_for_pattern("[^0-9]");
 	assert!(!charset.is_universal());
 	for c in "0123456789".chars() {
@@ -77,8 +83,9 @@ fn negated_bracketed_ranges_are_exact() {
 
 #[test]
 fn negated_range_covering_everything_contains_no_char() {
-	// The complement is taken over `u32`, so it retains the (sound, deliberately widened) tail above
-	// `char::MAX`; what matters is that no actual `char` is admitted.
+	// The complement is taken over `u32`,
+	// so it retains the (sound, deliberately widened) tail above `char::MAX`;
+	// what matters is that no actual `char` is admitted.
 	let charset: Charset = charset_for_pattern(r"[^\u{00}-\u{10FFFF}]");
 	assert!(!charset.is_universal());
 	assert!(!charset.contains('a'));
@@ -88,8 +95,9 @@ fn negated_range_covering_everything_contains_no_char() {
 
 #[test]
 fn adjacent_ranges_are_universal() {
-	// `IntervalTree` does not coalesce adjacent entries, so a set covering everything may be split
-	// across several intervals; `is_universal` must still recognize it.
+	// `IntervalTree` does not coalesce adjacent entries,
+	// so a set covering everything may be split across several intervals;
+	// `is_universal` must still recognize it.
 	let charset: Charset = charset_for_pattern(r"[\u{00}-\u{7F}]|[\u{80}-\u{10FFFF}]");
 	assert!(charset.is_universal());
 	assert!(charset.contains('a'));

@@ -10,7 +10,10 @@ fn spec_with_rules(rules: &[(&str, &str)]) -> ParsingSpec {
 }
 
 fn leaf_spec() -> ParsingSpec {
-	spec_with_rules(&[("level", "TRACE|DEBUG|INFO|WARN|ERROR"), ("digits", "[0-9]+")])
+	spec_with_rules(&[
+		("level", "TRACE|DEBUG|INFO|WARN|ERROR"),
+		("digits", "[0-9]+"),
+	])
 }
 
 /// A compact rendering of the parts, for readable assertions.
@@ -29,7 +32,10 @@ fn describe(model: &ShapeModel) -> Vec<String> {
 fn tokenizes_static_text_and_placeholders() {
 	let spec: ParsingSpec = leaf_spec();
 	let model: ShapeModel = ShapeModel::new(&spec, "hello %level% world");
-	assert_eq!(vec!["text(hello )", "rule(level)", "text( world)"], describe(&model));
+	assert_eq!(
+		vec!["text(hello )", "rule(level)", "text( world)"],
+		describe(&model)
+	);
 	assert_eq!(1, model.num_placeholders());
 }
 
@@ -38,13 +44,21 @@ fn tokenization_matches_the_engines() {
 	// The model must agree with `automata_for_shape` about where placeholders are; both go through
 	// `split_log_shape`, so this pins the shared behaviour (including the `%%` escape).
 	let spec: ParsingSpec = leaf_spec();
-	for shape in ["%level%", "a%level%b", "100%% done", "%level%%digits%", "plain"] {
+	for shape in [
+		"%level%",
+		"a%level%b",
+		"100%% done",
+		"%level%%digits%",
+		"plain",
+	] {
 		let model: ShapeModel = ShapeModel::new(&spec, shape);
 		let fragments: Vec<LogShapeFragment> = spec.split_log_shape(shape);
 		assert_eq!(fragments.len(), model.parts.len(), "shape={shape:?}");
 		for (fragment, part) in std::iter::zip(fragments.iter(), model.parts.iter()) {
 			match (fragment, part) {
-				(LogShapeFragment::Text(text), ShapePart::Static(modelled)) => assert_eq!(text, modelled),
+				(LogShapeFragment::Text(text), ShapePart::Static(modelled)) => {
+					assert_eq!(text, modelled)
+				},
 				(LogShapeFragment::Rule(name), ShapePart::Placeholder(placeholder)) => {
 					assert_eq!(name, &placeholder.name);
 				},
@@ -84,8 +98,8 @@ fn leaf_root_rule_resolves() {
 	let spec: ParsingSpec = leaf_spec();
 	let model: ShapeModel = ShapeModel::new(&spec, "x %level% y");
 
-	// A capture-less root rule is reported under its own name, matching `automata_for_shape`'s
-	// implicit whole-rule capture.
+	// A capture-less root rule is reported under its own name,
+	// matching `automata_for_shape`'s implicit whole-rule capture.
 	let placeholder: &Placeholder = model.placeholders().next().unwrap();
 	assert_eq!(1, placeholder.alternatives.len());
 	assert_eq!("level", &*placeholder.alternatives[0].fully_qualified_name);
@@ -94,7 +108,8 @@ fn leaf_root_rule_resolves() {
 #[test]
 #[should_panic(expected = "references non-leaf rule")]
 fn rule_with_nested_captures_panics() {
-	// `blockID` has captures, so it is not a leaf. A decomposition would have to report `num`/`gen`,
+	// `blockID` has captures, so it is not a leaf.
+	// A decomposition would have to report `num`/`gen`,
 	// which this model does not carry, so the shape must name a leaf capture instead.
 	let spec: ParsingSpec = spec_with_rules(&[("blockID", r"blk_(?<num>[0-9]+)_(?<gen>[0-9]+)")]);
 	let _: ShapeModel = ShapeModel::new(&spec, "%blockID%");
@@ -106,15 +121,19 @@ fn leaf_sub_rule_reference_resolves() {
 	let spec: ParsingSpec = spec_with_rules(&[("blockID", r"blk_(?<num>[0-9]+)_(?<gen>[0-9]+)")]);
 	let model: ShapeModel = ShapeModel::new(&spec, "%blockID.num%");
 	let placeholder: &Placeholder = model.placeholders().next().unwrap();
-	assert_eq!("blockID.num", &*placeholder.alternatives[0].fully_qualified_name);
+	assert_eq!(
+		"blockID.num",
+		&*placeholder.alternatives[0].fully_qualified_name
+	);
 	assert!(placeholder.charset.contains('7'));
 	assert!(!placeholder.charset.contains('b'));
 }
 
 #[test]
 fn placeholderless_shape_is_modelled() {
-	// A literal-only shape has no placeholders, but it is still a valid model: its static text is
-	// exactly what a query must reproduce, so placement and composition handle it like any other.
+	// A literal-only shape has no placeholders, but it is still a valid model:
+	// its static text is exactly what a query must reproduce,
+	// so placement and composition handle it like any other.
 	let spec: ParsingSpec = leaf_spec();
 	let model: ShapeModel = ShapeModel::new(&spec, "plain literal text");
 	assert_eq!(0, model.num_placeholders());

@@ -7,9 +7,9 @@ The parsing specification includes:
 - How log events are separated.
 
 The specification is the main entry point: [`ParsingSpec::create_parser`][create-parser] creates a
-parser, and there may be many independent parsers per specification. A parser advances through the
-input and builds structured log events, using a lexer to identify matches in the input according to
-the parsing specification.
+parser, and there may be many independent parsers per specification.
+A parser advances through the input and builds structured log events,
+using a lexer to identify matches in the input according to the parsing specification.
 
 ### Index
 - Matching Root Rules
@@ -21,24 +21,29 @@ the parsing specification.
 The lexer identifies occurrences of root rules defined in the parsing specification.
 A root rule match represents a piece of semantically meaningful text identified by the user.
 
-The lexer processes input left to right. At each step, it attempts to match root rules according to the following:
+The lexer processes input left to right.
+At each step, it attempts to match root rules according to the following:
 
 - The longest possible match.
-- If multiple root rules match with the same length, the highest-priority (earliest) rule in the spec is selected.
+- If multiple root rules match with the same length,
+  the highest-priority (earliest) rule in the spec is selected.
 
 If no root rules match at the current position,
 the parser seeks to the first delimiter character after the current position,
 and the lexer repeats attempting to match a root rule _after_ the delimiter.
 
-WIP: We hope to generalize root rule matching to find the earliest possible occurrence of a root rule at each step.
+WIP: We hope to generalize root rule matching
+to find the earliest possible occurrence of a root rule at each step.
 
 #### Implementation Details
 To determine if/what rule matches from an input position,
-Log Surgeon builds an [automaton][dfa] for the combination of all root rule patterns in the parsing specification;
+Log Surgeon builds an [automaton][dfa]
+for the combination of all root rule patterns in the parsing specification;
 an automaton is just a state machine with transitions based on an input character.
 Specifically, Log Surgeon implements the classical regex -> NFA -> DFA construction.
 
-DFAs simulate matching multiple patterns/rules at once performing only a single pass through the input.
+DFAs simulate matching multiple patterns/rules at once,
+performing only a single pass through the input.
 "Executing" the DFA is a loop that traverses the states:
 
 ```rust
@@ -66,7 +71,8 @@ In practice, the non-static text of logs is small compared to the static text,
 and confirming the longest possible match for rules in a parsing specification
 rarely require consuming much extra input.
 
-Notice that each iteration of the loop requires looking up the transition for the current state and input character.
+Notice that each iteration of the loop
+requires looking up the transition for the current state and input character.
 Specifically, characters are Unicode code points (with fast lookup for those in the ASCII range).
 Additionally, at each step, we check if the current state is an accepting state.
 In a sense, this DFA loop is an "interpreter" for instructions "record match" and "goto next state".
@@ -98,7 +104,8 @@ When executing this code, the current state is naturally encoded by the CPU's in
 (pointing to the compiled instructions for the state).
 Because we know everything about the states when compiling the DFA,
 all the information is baked into the native instructions;
-instead of looking up the list of transitions/intervals for the current state (as in the loop above),
+instead of looking up the list of transitions/intervals for the current state
+(as in the loop above),
 the instructions for the state contain exactly the comparisons to choose the next state.
 Also, instead of checking if a state is accepting during execution (as in the loop above),
 we simply don't emit `record_match()` for a state if it isn't an accepting state.
@@ -125,7 +132,8 @@ if let Some((next_state, operations)) = states[current_state].lookup_transition(
 }
 ```
 
-Note: While it is possible to build a single tagged DFA for all the rules in the parsing specification,
+Note: While it is possible to build a single tagged DFA
+for all the rules in the parsing specification,
 executing this DFA to determine the root and sub-rule matches at once means
 executing all the state transition operations for all the potential rule matches;
 i.e. recording many potential sub-rule matches that are discarded.

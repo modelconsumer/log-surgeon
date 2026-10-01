@@ -109,7 +109,8 @@ impl Escaped {
 					return Err(InvalidEscape::MalformedCodePoint);
 				}
 
-				let ch: char = char::from_u32(code_point).ok_or(InvalidEscape::BadCodePoint(code_point))?;
+				let ch: char =
+					char::from_u32(code_point).ok_or(InvalidEscape::BadCodePoint(code_point))?;
 
 				return Ok((chars.as_str(), ch));
 			},

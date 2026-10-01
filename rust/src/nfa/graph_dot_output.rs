@@ -23,7 +23,11 @@ impl Tnfa {
 				} else {
 					""
 				};
-				let colour: &str = if scc.len() > 1 { " [color=\"red\"]" } else { "" };
+				let colour: &str = if scc.len() > 1 {
+					" [color=\"red\"]"
+				} else {
+					""
+				};
 				lines.push_str(&format!(
 					"\t{} [label=\"{}: {:#}\"]{shape}{colour};\n",
 					state.idx, state.idx, state.name
@@ -38,7 +42,11 @@ impl Tnfa {
 					for (interval, &target) in transitions.iter() {
 						let src_scc: usize = tarjan.vertices[state.idx.0].scc;
 						let dst_scc: usize = tarjan.vertices[target.0].scc;
-						let colour: &str = if src_scc == dst_scc { " [color=\"red\"]" } else { "" };
+						let colour: &str = if src_scc == dst_scc {
+							" [color=\"red\"]"
+						} else {
+							""
+						};
 						lines.push_str(&format!(
 							"\t{} -> {} [label=\"{}\"]{colour}\n",
 							state.idx,
@@ -67,15 +75,31 @@ impl Tnfa {
 					for &target in transitions.iter() {
 						let src_scc: usize = tarjan.vertices[state.idx.0].scc;
 						let dst_scc: usize = tarjan.vertices[target.0].scc;
-						let colour: &str = if src_scc == dst_scc { " [color=\"red\"]" } else { "" };
-						lines.push_str(&format!("\t{} -> {} [label=\"epsilon\"]{colour};\n", state.idx, target));
+						let colour: &str = if src_scc == dst_scc {
+							" [color=\"red\"]"
+						} else {
+							""
+						};
+						lines.push_str(&format!(
+							"\t{} -> {} [label=\"epsilon\"]{colour};\n",
+							state.idx, target
+						));
 					}
 				},
-				Transitions::Tagged { tag, positive, target } => {
+				Transitions::Tagged {
+					tag,
+					positive,
+					target,
+				} => {
 					let src_scc: usize = tarjan.vertices[state.idx.0].scc;
 					let dst_scc: usize = tarjan.vertices[target.0].scc;
-					let colour: &str = if src_scc == dst_scc { " [color=\"red\"]" } else { "" };
-					let location: String = format!("rule {} capture {}", tag.rule_idx, tag.capture_id);
+					let colour: &str = if src_scc == dst_scc {
+						" [color=\"red\"]"
+					} else {
+						""
+					};
+					let location: String =
+						format!("rule {} capture {}", tag.rule_idx, tag.capture_id);
 					let mut capture: String = if !tag.is_close {
 						format!("start({location})")
 					} else {

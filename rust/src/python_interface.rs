@@ -55,7 +55,8 @@ struct PyLogEvent {
 struct PyMatch {
 	#[pyo3(get)]
 	root_rule_id: Py<PyInt>,
-	/// Capture ID within [`RuleInfo`](crate::parsing_spec::RuleInfo); `0` iff this match is a root rule.
+	/// Capture ID within [`RuleInfo`](crate::parsing_spec::RuleInfo);
+	/// `0` iff this match is a root rule.
 	#[pyo3(get)]
 	sub_rule_id: Py<PyInt>,
 
@@ -138,7 +139,8 @@ impl PyParser {
 			return Err(LogSurgeonException::new_err("parser has not been compiled"));
 		};
 
-		let Some(event): Option<LogEvent<'_>> = parser.next_event(&self.buffer, &mut self.pos) else {
+		let Some(event): Option<LogEvent<'_>> = parser.next_event(&self.buffer, &mut self.pos)
+		else {
 			return Ok(None);
 		};
 
@@ -159,7 +161,10 @@ impl PyParser {
 			let rule_info: &RuleInfo = &rule[mat.sub_rule_id];
 			let (name, maybe_parent): (&str, Option<Py<PyMatch>>) = if mat.parent_index < i {
 				assert!(!rule_info.is_root());
-				(&*rule_info.name, Some(all_matches[mat.parent_index].clone().unbind()))
+				(
+					&*rule_info.name,
+					Some(all_matches[mat.parent_index].clone().unbind()),
+				)
 			} else {
 				assert!(rule_info.is_root());
 				(&rule.name, None)
@@ -293,11 +298,11 @@ impl PyMatch {
 	}
 }
 
-/// Maps byte offsets into a [`str`] to Python code-point offsets into the
-/// corresponding [`PyString`].
+/// Maps byte offsets into a [`str`] to Python code-point offsets
+/// into the corresponding [`PyString`].
 ///
-/// Python strings are indexed by code point, but the parser reports byte
-/// offsets into the UTF-8 buffer; the two agree iff the message is ASCII.
+/// Python strings are indexed by code point, but the parser reports byte offsets
+/// into the UTF-8 buffer; the two agree iff the message is ASCII.
 enum CodePointOffsets {
 	/// The message is ASCII, so byte offset == code-point offset.
 	Identity,

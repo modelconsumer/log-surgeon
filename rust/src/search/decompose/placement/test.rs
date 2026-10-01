@@ -11,7 +11,11 @@ fn spec_with_rules(rules: &[(&str, &str)]) -> ParsingSpec {
 }
 
 fn test_spec() -> ParsingSpec {
-	spec_with_rules(&[("digits", "[0-9]+"), ("word", "[a-z]+"), ("level", "INFO|WARN|ERROR")])
+	spec_with_rules(&[
+		("digits", "[0-9]+"),
+		("word", "[a-z]+"),
+		("level", "INFO|WARN|ERROR"),
+	])
 }
 
 /// The query's symbols, exactly as written.
@@ -22,7 +26,11 @@ fn symbols_of(query: &str) -> Vec<SymbolicChar> {
 	SearchString::parse(query).unwrap().as_slice().to_vec()
 }
 
-fn table_for(spec: &ParsingSpec, shape: &str, query: &str) -> (ShapeModel, Vec<Run>, PlacementTable) {
+fn table_for(
+	spec: &ParsingSpec,
+	shape: &str,
+	query: &str,
+) -> (ShapeModel, Vec<Run>, PlacementTable) {
 	let model: ShapeModel = ShapeModel::new(spec, shape);
 	let runs: Vec<Run> = runs_of(&symbols_of(query));
 	let fits: RunFitCache = RunFitCache::new();
@@ -66,8 +74,8 @@ fn splits_a_query_into_runs() {
 	assert_eq!(1, runs.len());
 	assert!(runs[0].anchored_start);
 
-	// A query with no trailing wildcard anchors its last run. Note the engine strips one trailing
-	// wildcard, so `abc` and `abc*` both arrive here as `abc`.
+	// A query with no trailing wildcard anchors its last run.
+	// Note the engine strips one trailing wildcard, so `abc` and `abc*` both arrive here as `abc`.
 	let runs: Vec<Run> = runs_of(&symbols_of("*abc"));
 	assert!(runs[0].anchored_end);
 
@@ -106,22 +114,35 @@ fn run_straddling_a_rule_and_following_text() {
 #[test]
 fn run_straddling_text_then_rule_is_found_from_the_text_side() {
 	let spec: ParsingSpec = test_spec();
-	// `x12` has `x` in static text and `12` in the rule. The straddle search starts from a rule, so this
-	// direction is represented by the *rule* supplying a trailing piece; check the run is placeable.
+	// `x12` has `x` in static text and `12` in the rule.
+	// The straddle search starts from a rule,
+	// so this direction is represented by the *rule* supplying a trailing piece;
+	// check the run is placeable.
 	let (model, _, table) = table_for(&spec, "x%digits%y", "*x12*");
-	assert!(!table.is_impossible(), "`x12` must be placeable in `x%digits%y`");
+	assert!(
+		!table.is_impossible(),
+		"`x12` must be placeable in `x%digits%y`"
+	);
 	assert!(can_compose(&table, model.parts.len()));
 }
 
 #[test]
 fn positional_identity_distinguishes_two_instances_of_one_rule() {
 	let spec: ParsingSpec = test_spec();
-	// The key requirement: `A%foo%B%foo%C` has two `foo` instances, and a placement must say *which*.
+	// The key requirement: `A%foo%B%foo%C` has two `foo` instances,
+	// and a placement must say *which*.
 	let (_, _, table) = table_for(&spec, "A%word%B%word%C", "*qq*");
 	let placements: Vec<String> = rendered(&table, 0);
-	// Parts 1 and 3 are the two rule instances; both are valid placements and are reported distinctly.
-	assert!(placements.contains(&"1:<qq>".to_owned()), "got {placements:?}");
-	assert!(placements.contains(&"3:<qq>".to_owned()), "got {placements:?}");
+	// Parts 1 and 3 are the two rule instances;
+	// both are valid placements and are reported distinctly.
+	assert!(
+		placements.contains(&"1:<qq>".to_owned()),
+		"got {placements:?}"
+	);
+	assert!(
+		placements.contains(&"3:<qq>".to_owned()),
+		"got {placements:?}"
+	);
 	assert_eq!(2, placements.len());
 }
 
@@ -130,7 +151,10 @@ fn run_that_fits_nowhere_is_impossible() {
 	let spec: ParsingSpec = test_spec();
 	// `#` appears in no static text and no rule's language.
 	let (_, _, table) = table_for(&spec, "id=%digits%", "*#*");
-	assert!(table.is_impossible(), "a run that fits nowhere proves no match");
+	assert!(
+		table.is_impossible(),
+		"a run that fits nowhere proves no match"
+	);
 	assert!(!can_compose(&table, 2));
 }
 
@@ -155,10 +179,14 @@ fn runs_must_compose_in_order() {
 #[test]
 fn two_runs_may_share_one_rule() {
 	let spec: ParsingSpec = test_spec();
-	// `*1*2*` can both sit inside the same digits rule, since a rule can emit text between the runs.
+	// `*1*2*` can both sit inside the same digits rule,
+	// since a rule can emit text between the runs.
 	let (model, _, table) = table_for(&spec, "id=%digits%", "*1*2*");
 	assert!(!table.is_impossible());
-	assert!(can_compose(&table, model.parts.len()), "a rule can hold both runs");
+	assert!(
+		can_compose(&table, model.parts.len()),
+		"a rule can hold both runs"
+	);
 }
 
 #[test]
@@ -171,18 +199,23 @@ fn anchored_run_must_start_at_the_shape_start() {
 
 	// Anchored `d=` does not, since it is not at offset 0.
 	let (_, _, table) = table_for(&spec, "id=%digits%", "d=*");
-	assert!(table.is_impossible(), "an anchored run cannot start mid-text");
+	assert!(
+		table.is_impossible(),
+		"an anchored run cannot start mid-text"
+	);
 }
 
 #[test]
 fn static_text_occurrence_is_required_verbatim() {
 	let spec: ParsingSpec = test_spec();
-	// `hello` is both a substring of the static text *and* a word the rule can emit, so both placements
-	// are reported: the run does not "have" to be in the variable, but it may be.
+	// `hello` is both a substring of the static text *and* a word the rule can emit,
+	// so both placements are reported:
+	// the run does not "have" to be in the variable, but it may be.
 	let (_, _, table) = table_for(&spec, "hello %word%", "*hello*");
 	assert_eq!(vec!["0:'hello'", "1:<hello>"], rendered(&table, 0));
 
-	// `hellp` is not in the static text, but `%word%` is `[a-z]+`, so only the rule placement remains.
+	// `hellp` is not in the static text, but `%word%` is `[a-z]+`,
+	// so only the rule placement remains.
 	let (_, _, table) = table_for(&spec, "hello %word%", "*hellp*");
 	assert_eq!(vec!["1:<hellp>"], rendered(&table, 0));
 

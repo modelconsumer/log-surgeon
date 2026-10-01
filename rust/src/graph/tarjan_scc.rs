@@ -80,7 +80,8 @@ impl TarjanSccs {
 		}
 
 		{
-			// Tarjan's SCC algorithm identifies SCCs in a reverse topological sort of the DAG of the SCCs;
+			// Tarjan's SCC algorithm identifies SCCs
+			// in a reverse topological sort of the DAG of the SCCs;
 			// i.e., the SCC containing the entry state of an NFA/DFA would be ordered last.
 			this.sccs.reverse();
 
@@ -92,14 +93,19 @@ impl TarjanSccs {
 		this
 	}
 
-	/// "Iterative" implementation of the recursive `strong_connect` subprocedure in Tarjan's SCC algorithm:
+	/// "Iterative" implementation of the recursive `strong_connect` subprocedure
+	/// in Tarjan's SCC algorithm:
 	/// visits all vertices that are reachable from `start`.
 	///
 	/// The recursion call-stack is implemented as a heap-allocated `Vec`/stack of frames;
 	/// unlike iterative versions of tail-recursive functions,
 	/// more bookkeeping is necessary to perform the "after-recursion" work.
-	fn strong_connect_iterative<'a, T, F, I>(&mut self, vertices: &'a [T], start: usize, successors: &F)
-	where
+	fn strong_connect_iterative<'a, T, F, I>(
+		&mut self,
+		vertices: &'a [T],
+		start: usize,
+		successors: &F,
+	) where
 		T: 'a,
 		F: Fn(&'a T) -> I + 'a,
 		I: Iterator<Item = usize>,
@@ -128,14 +134,18 @@ impl TarjanSccs {
 						// However, it remains true that `low_link == encountered_at` iff
 						// the vertex is the root of its SCC,
 						// and the algorithm otherwise remains valid.
+						// See
 						// <https://en.wikipedia.org/wiki/Tarjan's_strongly_connected_components_algorithm>.
-						self.vertices[i].low_link = self.vertices[i].low_link.min(self.vertices[j].low_link);
+						self.vertices[i].low_link =
+							self.vertices[i].low_link.min(self.vertices[j].low_link);
 					}
 				}
 			} else {
 				if let Some(parent) = frames.last() {
-					self.vertices[parent.index].low_link =
-						std::cmp::min(self.vertices[parent.index].low_link, self.vertices[i].low_link);
+					self.vertices[parent.index].low_link = std::cmp::min(
+						self.vertices[parent.index].low_link,
+						self.vertices[i].low_link,
+					);
 				}
 
 				if self.vertices[i].low_link == self.vertices[i].encountered_at {
@@ -213,11 +223,13 @@ impl TarjanSccs {
 		for j in successors(&vertices[i]) {
 			if self.vertices[j].encountered_at != DfsIndex::INVALID {
 				if self.vertices[j].on_stack {
-					self.vertices[i].low_link = self.vertices[i].low_link.min(self.vertices[j].low_link);
+					self.vertices[i].low_link =
+						self.vertices[i].low_link.min(self.vertices[j].low_link);
 				}
 			} else {
 				self.strong_connect_recursive(vertices, j, successors, stack);
-				self.vertices[i].low_link = std::cmp::min(self.vertices[i].low_link, self.vertices[j].low_link);
+				self.vertices[i].low_link =
+					std::cmp::min(self.vertices[i].low_link, self.vertices[j].low_link);
 			}
 		}
 

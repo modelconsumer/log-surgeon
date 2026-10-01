@@ -59,7 +59,9 @@ fn rendered(outcome: &Outcome) -> Vec<String> {
 				.fragments
 				.iter()
 				.map(|fragment| match fragment {
-					Fragment::Static(contents) => contents.iter().map(ToString::to_string).collect::<String>(),
+					Fragment::Static(contents) => {
+						contents.iter().map(ToString::to_string).collect::<String>()
+					},
 					Fragment::Capture { capture, contents } => format!(
 						"{}{{{}}}",
 						capture.fully_qualified_name,
@@ -78,9 +80,10 @@ fn rendered(outcome: &Outcome) -> Vec<String> {
 fn static_text_must_match_verbatim() {
 	let spec: ParsingSpec = test_spec();
 	assert!(!is_rejected(&align_query(&spec, "hello %word%", "*hello*")));
-	// `hxllo` is not producible by the static text, but note `%word%` can emit `hxllo`'s letters, so
-	// this is only rejected once the run has to straddle the static text. Use a character no part can
-	// emit to isolate the static-text check.
+	// `hxllo` is not producible by the static text,
+	// but note `%word%` can emit `hxllo`'s letters,
+	// so this is only rejected once the run has to straddle the static text.
+	// Use a character no part can emit to isolate the static-text check.
 	assert!(is_rejected(&align_query(&spec, "hello %word%", "*h#llo*")));
 }
 
@@ -96,7 +99,8 @@ fn placeholder_charset_rejects_foreign_characters() {
 fn fixed_text_is_decomposed_into_static_and_capture() {
 	let spec: ParsingSpec = test_spec();
 	let outcome: Outcome = align_query(&spec, "id=%digits%", "id=123*");
-	// The decomposition that matters: `id=` is the shape's static text, `123` a capture of `digits`.
+	// The decomposition that matters: `id=` is the shape's static text,
+	// `123` a capture of `digits`.
 	assert!(
 		rendered(&outcome).contains(&"id=digits{123}".to_owned()),
 		"got {:?}",
@@ -139,10 +143,17 @@ fn contiguity_is_enforced_across_a_placeholder() {
 #[test]
 fn runs_must_align_in_order() {
 	let spec: ParsingSpec = test_spec();
-	// Both runs exist in the shape, but in the opposite order, so no alignment consumes them in order.
+	// Both runs exist in the shape, but in the opposite order,
+	// so no alignment consumes them in order.
 	// This is the key improvement over checking each run independently.
-	assert!(!is_rejected(&align_query(&spec, "aaa %word% zzz", "*aaa*zzz*")));
-	assert!(is_rejected(&align_query(&spec, "aaa %digits% zzz", "*zzz*aaa*")));
+	assert!(!is_rejected(&align_query(
+		&spec, "aaa %word% zzz", "*aaa*zzz*"
+	)));
+	assert!(is_rejected(&align_query(
+		&spec,
+		"aaa %digits% zzz",
+		"*zzz*aaa*"
+	)));
 }
 
 #[test]
@@ -160,9 +171,13 @@ fn start_anchoring_is_honoured() {
 fn end_anchoring_requires_consuming_the_shape() {
 	let spec: ParsingSpec = test_spec();
 	// Anchored: trailing static text remains unconsumed, so the query cannot reach the end.
-	assert!(is_rejected(&align_query_anchored(&spec, "%word% tail", "*xyz")));
+	assert!(is_rejected(&align_query_anchored(
+		&spec, "%word% tail", "*xyz"
+	)));
 	// Consuming through to the end is accepted.
-	assert!(!is_rejected(&align_query_anchored(&spec, "%word% tail", "* tail")));
+	assert!(!is_rejected(&align_query_anchored(
+		&spec, "%word% tail", "* tail"
+	)));
 	// Unanchored (the engine's current semantics), the remaining text is unconstrained.
 	assert!(!is_rejected(&align_query(&spec, "%word% tail", "*xyz")));
 }
@@ -171,10 +186,13 @@ fn end_anchoring_requires_consuming_the_shape() {
 fn wildcard_only_placeholder_is_not_reported_as_a_capture() {
 	let spec: ParsingSpec = test_spec();
 	let outcome: Outcome = align_query(&spec, "a%word%b", "a*b*");
-	// A capture whose contents are only wildcards says nothing about the rule's value, so it must not
-	// appear as a `digits{*}`-style vacuous result.
+	// A capture whose contents are only wildcards says nothing about the rule's value,
+	// so it must not appear as a `digits{*}`-style vacuous result.
 	for rendering in rendered(&outcome).iter() {
-		assert!(!rendering.contains("word{*}"), "vacuous capture in {rendering:?}");
+		assert!(
+			!rendering.contains("word{*}"),
+			"vacuous capture in {rendering:?}"
+		);
 	}
 }
 
@@ -182,7 +200,10 @@ fn wildcard_only_placeholder_is_not_reported_as_a_capture() {
 fn empty_query_is_unknown() {
 	let spec: ParsingSpec = test_spec();
 	// The engine panics on an empty query; never claim a verdict for it.
-	assert!(matches!(align_query(&spec, "%word%", "*"), Outcome::Unknown));
+	assert!(matches!(
+		align_query(&spec, "%word%", "*"),
+		Outcome::Unknown
+	));
 }
 
 #[test]
@@ -203,9 +224,10 @@ fn exhausted_budget_is_unknown_not_rejected() {
 #[test]
 fn adjacent_wildcards_do_not_duplicate_alignments() {
 	let spec: ParsingSpec = test_spec();
-	// Interior and leading runs of wildcards collapse, so they cannot enumerate the same decomposition
-	// more than once. (Note the engine strips only a single *trailing* wildcard, so `*ab*` and `**ab**`
-	// are genuinely different queries and are not compared here.)
+	// Interior and leading runs of wildcards collapse,
+	// so they cannot enumerate the same decomposition more than once.
+	// (Note the engine strips only a single *trailing* wildcard,
+	// so `*ab*` and `**ab**` are genuinely different queries and are not compared here.)
 	let one: Outcome = align_query(&spec, "a%word%b", "*ab*");
 	let two: Outcome = align_query(&spec, "a%word%b", "**ab*");
 	assert_eq!(rendered(&one), rendered(&two));
@@ -216,14 +238,17 @@ fn adjacent_wildcards_do_not_duplicate_alignments() {
 
 	// No alignment contains a doubled wildcard.
 	for rendering in rendered(&one).iter() {
-		assert!(!rendering.contains("**"), "doubled wildcard in {rendering:?}");
+		assert!(
+			!rendering.contains("**"),
+			"doubled wildcard in {rendering:?}"
+		);
 	}
 }
 
 #[test]
 fn can_match_agrees_with_align() {
-	// `can_match` is the cheap reachability-only pass; it must never disagree with the full walk, since
-	// the search path relies on it to skip shapes.
+	// `can_match` is the cheap reachability-only pass;
+	// it must never disagree with the full walk, since the search path relies on it to skip shapes.
 	let spec: ParsingSpec = test_spec();
 	for shape in [
 		"id=%digits%",
@@ -235,8 +260,8 @@ fn can_match_agrees_with_align() {
 	] {
 		let model: ShapeModel = ShapeModel::new(&spec, shape);
 		for query in [
-			"*a*", "*abc*", "id=1*", "*id=x*", "a*b", "*INFO*", "*zzz*", "hello*", "*world", "plain*", "*-*", "*1*2*",
-			"*#*",
+			"*a*", "*abc*", "id=1*", "*id=x*", "a*b", "*INFO*", "*zzz*", "hello*", "*world",
+			"plain*", "*-*", "*1*2*", "*#*",
 		] {
 			let symbols: Vec<SymbolicChar> = symbols_of(query);
 			for anchored_at_end in [false, true] {
@@ -256,7 +281,8 @@ fn can_match_agrees_with_align() {
 
 #[test]
 fn every_alignment_preserves_the_querys_fixed_text() {
-	// A structural invariant: concatenating an alignment's fragments must reproduce the query symbols,
+	// A structural invariant:
+	// concatenating an alignment's fragments must reproduce the query symbols,
 	// modulo the wildcard collapsing the walk performs.
 	let spec: ParsingSpec = test_spec();
 	for (shape, query) in [
@@ -279,7 +305,9 @@ fn every_alignment_preserves_the_querys_fixed_text() {
 				.fragments
 				.iter()
 				.flat_map(|fragment| match fragment {
-					Fragment::Static(contents) | Fragment::Capture { contents, .. } => contents.iter(),
+					Fragment::Static(contents) | Fragment::Capture { contents, .. } => {
+						contents.iter()
+					},
 				})
 				.map(ToString::to_string)
 				.collect::<String>()
