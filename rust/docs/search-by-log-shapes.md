@@ -257,7 +257,8 @@ This is the path that actually answers the question, and it never builds a shape
 produced in full, and there are only three possibilities:
 
 1. **wholly inside a rule** -- `RunFit::fits_wholly`;
-2. **wholly inside static text** -- a `match_indices` substring search;
+2. **wholly inside static text** -- a `match_indices` substring search (`match_indices` yields byte
+   offsets, which are converted to the character offsets the `Placement` records use);
 3. **straddling** a boundary -- split between a rule and its neighbour, recorded via `suffixes` /
    `prefixes`.
 
@@ -375,7 +376,7 @@ when both sides accept -- so `anchored_end` changes only what goes in, not how i
 // `false` (`*foo*`): the dropped trailing wildcard is restored as a real `.*`.
 let search_nfa = Tnfa::for_regex(&self.to_regex_ending(!anchored_end));
 let intersection = shape_nfa.intersect::<true>(&search_nfa);
-let paths = intersection.compute_paths();
+let paths = intersection.compute_paths(spec);
 ```
 
 The `FOR_SEARCH = true` parameter tells the intersection to keep non-literal (wildcard) transitions

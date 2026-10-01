@@ -310,7 +310,7 @@ pub static BLANK: ParsingSpec = ParsingSpec {
 	ascii_delimiters: [false; 0x80],
 	non_ascii_delimiters: String::new(),
 	maybe_jit_engine: OnceLock::new(),
-	shape_models: ShapeModelCache::BLANK,
+	shape_models: ShapeModelCache::new(),
 };
 
 impl ParsingSpec {

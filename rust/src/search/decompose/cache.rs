@@ -27,17 +27,11 @@ pub struct ShapeModelCache {
 
 impl ShapeModelCache {
 	/// An empty cache, as a `const` so [`crate::parsing_spec::BLANK`] can use it.
-	///
-	/// The interior mutability lint is about reading this `const` by value; here it is only used
-	/// to initialize a `static`, so no shared mutable temporary is created.
-	#[allow(clippy::declare_interior_mutable_const)]
-	pub const BLANK: Self = Self {
-		models: Mutex::new(BTreeMap::new()),
-	};
-
 	#[must_use]
-	pub fn new() -> Self {
-		Self::default()
+	pub const fn new() -> Self {
+		Self {
+			models: Mutex::new(BTreeMap::new()),
+		}
 	}
 
 	/// The model for `shape`, building and caching it on a miss.

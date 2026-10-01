@@ -19,8 +19,8 @@ overflow-checks = true
 
 [features]
 # This crate produces two types of output:
-# 1. A C library (staticlib) — used by C/C++ code, built with `cargo build`
-# 2. A Python extension (.so) — used by Python, built with `maturin build`
+# 1. A C library (staticlib) - used by C/C++ code, built with `cargo build`
+# 2. A Python extension (.so) - used by Python, built with `maturin build`
 #
 # These two outputs need incompatible linker settings, so we can't enable both
 # at once. We leave "default" empty here, and let each build tool enable only
