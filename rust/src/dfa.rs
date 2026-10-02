@@ -5,7 +5,6 @@
 //! [tdfa]: https://arxiv.org/abs/2206.01398
 
 mod compressed;
-mod jit;
 #[cfg(test)]
 mod test;
 
@@ -18,9 +17,6 @@ use std::range::Range;
 use std::sync::Arc;
 
 pub use compressed::CompressedDfa;
-pub use jit::Jit;
-pub use jit::JitEngine;
-pub use jit::JittedDfa;
 
 use crate::graph::Csr;
 use crate::interval_tree::Interval;
@@ -910,8 +906,7 @@ impl Tdfa {
 					for (_, transition) in transitions.iter_mut() {
 						transition.target = partition_for_state[transition.target];
 					}
-					// Minimization frequently makes neighbouring intervals share a target;
-					// fewer intervals means smaller jump tables in the JIT and cheaper lookups.
+					// TODO: is this necessary?
 					transitions.coalesce();
 					maybe_transitions = Some(transitions);
 				}

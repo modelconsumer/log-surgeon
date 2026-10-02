@@ -77,39 +77,6 @@ Specifically, characters are Unicode code points (with fast lookup for those in 
 Additionally, at each step, we check if the current state is an accepting state.
 In a sense, this DFA loop is an "interpreter" for instructions "record match" and "goto next state".
 
-To speed up matching, we compile DFAs into native functions.
-Currently, Log Surgeon just in time (JIT) compiles them for ease of deployment,
-but conceptually the DFAs are the same as if they were "ahead of time" compiled.
-
-Each state in the DFA will be compiled to a short sequence of basic blocks
-that looks like/roughly corresponds to the following pseudocode:
-
-```
-state10:
-ch = read_next_character();
-record_match(); // Only if this state is actually an accepting state.
-if ('a' <= ch) && (ch <= 'z') {
-	goto state20;
-} else if ('0' <= ch) && (ch <= '9') {
-	goto state30;
-} else if ch == '_' {
-	goto state40;
-// etc.
-} else {
-	goto done;
-}
-```
-
-When executing this code, the current state is naturally encoded by the CPU's instruction pointer
-(pointing to the compiled instructions for the state).
-Because we know everything about the states when compiling the DFA,
-all the information is baked into the native instructions;
-instead of looking up the list of transitions/intervals for the current state
-(as in the loop above),
-the instructions for the state contain exactly the comparisons to choose the next state.
-Also, instead of checking if a state is accepting during execution (as in the loop above),
-we simply don't emit `record_match()` for a state if it isn't an accepting state.
-
 ##### Submatch Extraction
 The classical DFA execution determines which rule matches;
 once the rule and matched text is known,

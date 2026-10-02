@@ -27,7 +27,6 @@ overflow-checks = true
 # what it needs: maturin automatically enables the "python" feature (configured
 # in pyproject.toml).
 default = []
-jit = []
 python = [
 	"dep:pyo3",
 	"pyo3/extension-module",
@@ -45,14 +44,6 @@ tracing-subscriber = { version = "0.3", features = ["tracing-log", "env-filter"]
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 rustc-hash = "2.1"
-
-# Note: We do want to always include to JIT,
-# the compile-time feature flag is just the current way to test with/without it,
-# but eventually it should be enabled/disabled by a runtime flag.
-cranelift = { version = "0.132", optional = false }
-cranelift-module = { version = "0.132", optional = false }
-cranelift-native = { version = "0.132", optional = false }
-cranelift-jit = { version = "0.132", optional = false }
 
 [dependencies.pyo3]
 version = "0.27"

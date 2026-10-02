@@ -5,7 +5,6 @@ mod spec_file;
 use std::collections::BTreeMap;
 use std::num::NonZero;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 pub use encoding::Encoding;
 pub use encoding::EncodingIdx;
@@ -16,7 +15,6 @@ pub use rule::RuleIdx;
 pub use rule::RuleInfo;
 
 use crate::dfa::CompressedDfa;
-use crate::dfa::JitEngine;
 use crate::dfa::Tdfa;
 use crate::nfa::Tnfa;
 use crate::parser::Parser;
@@ -62,13 +60,6 @@ pub struct ParsingSpec {
 	/// Derived from `delimiters`.
 	pub ascii_delimiters: [bool; 0x80],
 	pub non_ascii_delimiters: String,
-
-	/// JIT-compiled [`Self::dfa_for_parsing`], built on first use and shared by every
-	/// [`Parser`] created from this spec.
-	///
-	/// Behind an [`Arc`] because [`JitEngine`] is not [`Clone`] (`JITModule` can't be cloned),
-	/// while a cloned spec should share the already-compiled code rather than compile again.
-	maybe_jit_engine: OnceLock<Arc<JitEngine>>,
 
 	/// Prefilter models for log-shape search, built on demand and shared across
 	/// [`Parser`]s created from this spec.
@@ -321,7 +312,6 @@ impl ParsingSpecBuilder {
 			nfa_for_search,
 			ascii_delimiters,
 			non_ascii_delimiters,
-			maybe_jit_engine: OnceLock::new(),
 			shape_models: ShapeModelCache::new(),
 		}
 	}
@@ -347,17 +337,10 @@ pub static BLANK: ParsingSpec = ParsingSpec {
 	nfa_for_search: Tnfa::BLANK,
 	ascii_delimiters: [false; 0x80],
 	non_ascii_delimiters: String::new(),
-	maybe_jit_engine: OnceLock::new(),
 	shape_models: ShapeModelCache::new(),
 };
 
 impl ParsingSpec {
-	/// The JIT engine for [`Self::dfa_for_parsing`].
-	pub fn jit_engine(&self) -> &Arc<JitEngine> {
-		self.maybe_jit_engine
-			.get_or_init(|| Arc::new(JitEngine::new(&self.dfa_for_parsing)))
-	}
-
 	/// The shape-model cache backing
 	/// [`crate::search::SearchString::search_by_log_shapes`].
 	pub fn shape_models(&self) -> &ShapeModelCache {
@@ -366,8 +349,8 @@ impl ParsingSpec {
 
 	/// Create a new [`Parser`] that shares this spec.
 	///
-	/// Parsers are cheap to create once the spec has been built (and its DFA JIT-compiled), and
-	/// each caller owns a mutable parser; there may be many parsers per spec.
+	/// Parsers are cheap to create once the spec and its DFA have been built,
+	/// and each caller owns a mutable parser; there may be many parsers per spec.
 	pub fn create_parser(self: &Arc<Self>) -> Parser {
 		Parser::new(self.clone())
 	}

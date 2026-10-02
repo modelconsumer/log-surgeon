@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use crate::dfa::JittedDfa;
 use crate::dfa::MatchedRule;
 use crate::dfa::TdfaExecution;
 use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::RootRule;
-use crate::parsing_spec::RuleIdx;
 use crate::utils::utf8::Utf8Chars;
 
 #[derive(Debug, Clone)]
@@ -15,9 +13,6 @@ pub struct Lexer {
 	/// `Parser` already has the spec and could pass it every time to `Lexer::next_token`.
 	/// However, it's cheap and cleaner to clone it here for encapsulation.
 	spec: Arc<ParsingSpec>,
-	/// Copied out of [`ParsingSpec::jit_engine`]; that engine (owned by the spec)
-	/// keeps the JIT-ed code mapped for as long as this lexer's `spec` is alive.
-	maybe_jitted_dfa: Option<JittedDfa>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -35,12 +30,7 @@ pub enum Token<'spec, 'input> {
 
 impl Lexer {
 	pub fn new(spec: Arc<ParsingSpec>) -> Self {
-		let maybe_jitted_dfa: Option<JittedDfa> = spec.jit_engine().maybe_jitted_dfa();
-
-		Self {
-			spec,
-			maybe_jitted_dfa,
-		}
+		Self { spec }
 	}
 
 	/// Return the next [`Token`] from `input` starting from `*pos`,
@@ -69,7 +59,7 @@ impl Lexer {
 			rule_idx,
 			maybe_encoding_idx,
 			lexeme,
-		}) = self.execute_dfa::<{ cfg!(feature = "jit") }>(input_remaining, char_before)
+		}) = self.execute_dfa(input_remaining, char_before)
 		{
 			let rule: &RootRule = &self.spec[rule_idx];
 			assert_eq!(rule.idx, rule_idx);
@@ -108,41 +98,17 @@ impl Lexer {
 		}
 	}
 
-	/// Uniform "interface" to executing a TDFA via the JIT-ed or Rust implementation.
-	fn execute_dfa<'input, const JIT: bool>(
+	/// Uniform "interface" to executing a TDFA;
+	/// refactored for convenience when testing different implementations.
+	#[inline(always)]
+	fn execute_dfa<'input>(
 		&self,
 		input: &'input [u8],
 		char_before: u32,
 	) -> Option<MatchedRule<'input>> {
-		if JIT {
-			let input: std::ops::Range<*const u8> = input.as_ptr_range();
-			let mut end: *const u8 = std::ptr::null();
-			let mut maybe_encoding_idx: Option<EncodingIdx> = None;
-
-			unsafe {
-				let rule_idx: RuleIdx = (self.maybe_jitted_dfa.unwrap_unchecked())(
-					input.start,
-					input.end,
-					char_before,
-					&mut end,
-					&mut maybe_encoding_idx,
-				)?;
-				let start: *const u8 = input.start;
-				let len: isize = end.offset_from(start);
-				assert!(len >= 0);
-				let bytes: &[u8] = std::slice::from_raw_parts(start, len as usize);
-				let lexeme: &str = std::str::from_utf8_unchecked(bytes);
-				Some(MatchedRule {
-					rule_idx,
-					maybe_encoding_idx,
-					lexeme,
-				})
-			}
-		} else {
-			self.spec
-				.compressed_dfa_for_parsing
-				.execute(input, char_before)
-		}
+		self.spec
+			.compressed_dfa_for_parsing
+			.execute(input, char_before)
 	}
 
 	/// See the [document on parsing](docs/parsing.md).
@@ -158,6 +124,7 @@ impl Lexer {
 		}
 	}
 
+	#[inline(always)]
 	fn is_delimiter(&self, ch: char) -> bool {
 		if let Ok(i) = u8::try_from(ch)
 			&& let Some(ch_is_delimiter) = self.spec.ascii_delimiters.get(usize::from(i))
