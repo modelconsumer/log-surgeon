@@ -175,24 +175,6 @@ fn queries() -> Vec<String> {
 	queries
 }
 
-/// The query as the engine sees it: one trailing wildcard stripped.
-fn engine_symbols(query: &SearchString) -> Vec<log_surgeon::search::SymbolicChar> {
-	use log_surgeon::search::SymbolicChar;
-	let symbols: &[SymbolicChar] = query.as_slice();
-	if Some(&SymbolicChar::GlobStar) == symbols.last() {
-		symbols[..(symbols.len() - 1)].to_vec()
-	} else {
-		symbols.to_vec()
-	}
-}
-
-/// Whether the query must match through to the end of the message,
-/// i.e. it has no trailing wildcard.
-fn is_anchored_at_end(query: &SearchString) -> bool {
-	use log_surgeon::search::SymbolicChar;
-	Some(&SymbolicChar::GlobStar) != query.as_slice().last()
-}
-
 /// The set of `(fully_qualified_name, string_value)` captures in an interpretation.
 fn captures_of(interpretation: &Interpretation) -> Vec<(String, String)> {
 	interpretation
@@ -283,7 +265,6 @@ fn decompose_never_drops_a_match() {
 
 	for query_text in queries().iter() {
 		let query: SearchString = SearchString::parse(query_text).unwrap();
-		let symbols: Vec<log_surgeon::search::SymbolicChar> = engine_symbols(&query);
 
 		for shape in SHAPES.iter() {
 			checked += 1;
@@ -348,12 +329,7 @@ fn decompose_never_drops_a_match() {
 			}
 
 			let model: ShapeModel = ShapeModel::new(&spec, shape);
-			let outcome: Outcome = align(
-				&model,
-				&symbols,
-				is_anchored_at_end(&query),
-				Budget::default(),
-			);
+			let outcome: Outcome = align(&model, query.as_slice(), Budget::default());
 
 			match outcome {
 				Outcome::Rejected => {

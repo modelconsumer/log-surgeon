@@ -19,27 +19,14 @@ fn test_spec() -> ParsingSpec {
 	])
 }
 
-/// Parses `query` and drops a single trailing wildcard, as the engine does.
+/// The query's symbols, exactly as written: a trailing `*` is what makes it unanchored.
 fn symbols_of(query: &str) -> Vec<SymbolicChar> {
-	let parsed: SearchString = SearchString::parse(query).unwrap();
-	let symbols: &[SymbolicChar] = parsed.as_slice();
-	if Some(&SymbolicChar::GlobStar) == symbols.last() {
-		symbols[..(symbols.len() - 1)].to_vec()
-	} else {
-		symbols.to_vec()
-	}
+	SearchString::parse(query).unwrap().as_slice().to_vec()
 }
 
-/// Aligns without requiring the query to reach the end of the shape.
 fn align_query(spec: &ParsingSpec, shape: &str, query: &str) -> Outcome {
 	let model: ShapeModel = ShapeModel::new(spec, shape);
-	align(&model, &symbols_of(query), false, Budget::default())
-}
-
-/// Aligns with end anchoring, i.e. the query must consume the shape through to its end.
-fn align_query_anchored(spec: &ParsingSpec, shape: &str, query: &str) -> Outcome {
-	let model: ShapeModel = ShapeModel::new(spec, shape);
-	align(&model, &symbols_of(query), true, Budget::default())
+	align(&model, &symbols_of(query), Budget::default())
 }
 
 fn is_rejected(outcome: &Outcome) -> bool {
@@ -100,10 +87,10 @@ fn fixed_text_is_decomposed_into_static_and_capture() {
 	let spec: ParsingSpec = test_spec();
 	let outcome: Outcome = align_query(&spec, "id=%digits%", "id=123*");
 	// The decomposition that matters: `id=` is the shape's static text,
-	// `123` a capture of `digits`.
-	assert!(
-		rendered(&outcome).contains(&"id=digits{123}".to_owned()),
-		"got {:?}",
+	// `123` a capture of `digits`. The trailing wildcard is attributed too --
+	// either absorbed by the rule, or left over past the end of the shape.
+	assert_eq!(
+		vec!["id=digits{123*}", "id=digits{123}*"],
 		rendered(&outcome)
 	);
 }
@@ -124,11 +111,7 @@ fn text_is_split_across_static_and_variable() {
 	let spec: ParsingSpec = test_spec();
 	// `abc` must be split: `a` from static text, `bc` captured by the rule.
 	let outcome: Outcome = align_query(&spec, "a%word%", "abc*");
-	assert!(
-		rendered(&outcome).contains(&"aword{bc}".to_owned()),
-		"got {:?}",
-		rendered(&outcome)
-	);
+	assert_eq!(vec!["aword{bc*}", "aword{bc}*"], rendered(&outcome));
 }
 
 #[test]
@@ -171,15 +154,11 @@ fn start_anchoring_is_honoured() {
 fn end_anchoring_requires_consuming_the_shape() {
 	let spec: ParsingSpec = test_spec();
 	// Anchored: trailing static text remains unconsumed, so the query cannot reach the end.
-	assert!(is_rejected(&align_query_anchored(
-		&spec, "%word% tail", "*xyz"
-	)));
+	assert!(is_rejected(&align_query(&spec, "%word% tail", "*xyz")));
 	// Consuming through to the end is accepted.
-	assert!(!is_rejected(&align_query_anchored(
-		&spec, "%word% tail", "* tail"
-	)));
-	// Unanchored (the engine's current semantics), the remaining text is unconstrained.
-	assert!(!is_rejected(&align_query(&spec, "%word% tail", "*xyz")));
+	assert!(!is_rejected(&align_query(&spec, "%word% tail", "* tail")));
+	// Unanchored, the trailing wildcard consumes the remaining text.
+	assert!(!is_rejected(&align_query(&spec, "%word% tail", "*xyz*")));
 }
 
 #[test]
@@ -197,13 +176,20 @@ fn wildcard_only_variable_is_not_reported_as_a_capture() {
 }
 
 #[test]
-fn empty_query_is_unknown() {
+fn wildcard_only_query_aligns_as_a_single_gap() {
 	let spec: ParsingSpec = test_spec();
-	// The engine panics on an empty query; never claim a verdict for it.
-	assert!(matches!(
-		align_query(&spec, "%word%", "*"),
-		Outcome::Unknown
-	));
+	// `*` constrains nothing, so it has exactly one alignment: an unconstrained gap.
+	assert_eq!(vec!["*"], rendered(&align_query(&spec, "%word%", "*")));
+	assert_eq!(vec!["*"], rendered(&align_query(&spec, "a%word%b", "*")));
+}
+
+#[test]
+fn empty_query_requires_an_empty_message() {
+	let spec: ParsingSpec = test_spec();
+	// The empty query is anchored at both ends, so it matches only a message of nothing.
+	// Static text cannot vanish; a variable is conservatively assumed able to.
+	assert!(is_rejected(&align_query(&spec, "a%word%", "")));
+	assert!(!is_rejected(&align_query(&spec, "%word%", "")));
 }
 
 #[test]
@@ -216,7 +202,7 @@ fn exhausted_budget_is_unknown_not_rejected() {
 	};
 	// Degrading must never look like a rejection.
 	assert!(matches!(
-		align(&model, &symbols_of("*abc*"), false, budget),
+		align(&model, &symbols_of("*abc*"), budget),
 		Outcome::Unknown
 	));
 }
@@ -224,12 +210,10 @@ fn exhausted_budget_is_unknown_not_rejected() {
 #[test]
 fn adjacent_wildcards_do_not_duplicate_alignments() {
 	let spec: ParsingSpec = test_spec();
-	// Interior and leading runs of wildcards collapse,
+	// Runs of wildcards collapse at parse,
 	// so they cannot enumerate the same decomposition more than once.
-	// (Note the engine strips only a single *trailing* wildcard,
-	// so `*ab*` and `**ab**` are genuinely different queries and are not compared here.)
 	let one: Outcome = align_query(&spec, "a%word%b", "*ab*");
-	let two: Outcome = align_query(&spec, "a%word%b", "**ab*");
+	let two: Outcome = align_query(&spec, "a%word%b", "**ab**");
 	assert_eq!(rendered(&one), rendered(&two));
 
 	let one: Outcome = align_query(&spec, "a%word%b", "*a*b*");
@@ -261,20 +245,19 @@ fn can_match_agrees_with_align() {
 		let model: ShapeModel = ShapeModel::new(&spec, shape);
 		for query in [
 			"*a*", "*abc*", "id=1*", "*id=x*", "a*b", "*INFO*", "*zzz*", "hello*", "*world",
-			"plain*", "*-*", "*1*2*", "*#*",
+			"plain*", "*-*", "*1*2*", "*#*", "*a", "*abc", "id=1", "*id=x", "*INFO", "*zzz",
+			"hello", "*world*", "plain", "*-", "*1*2", "*#", "*", "",
 		] {
 			let symbols: Vec<SymbolicChar> = symbols_of(query);
-			for anchored_at_end in [false, true] {
-				let cheap: bool = can_match(&model, &symbols, anchored_at_end);
-				let full: bool = !matches!(
-					align(&model, &symbols, anchored_at_end, Budget::default()),
-					Outcome::Rejected
-				);
-				assert_eq!(
-					full, cheap,
-					"can_match disagreed with align: shape={shape:?} query={query:?} anchored={anchored_at_end}"
-				);
-			}
+			let cheap: bool = can_match(&model, &symbols);
+			let full: bool = !matches!(
+				align(&model, &symbols, Budget::default()),
+				Outcome::Rejected
+			);
+			assert_eq!(
+				full, cheap,
+				"can_match disagreed with align: shape={shape:?} query={query:?}"
+			);
 		}
 	}
 }

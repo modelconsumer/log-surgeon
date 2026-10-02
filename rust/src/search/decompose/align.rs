@@ -5,19 +5,17 @@
 //!
 //! A message of a given shape is produced by walking the shape's parts left to right and emitting,
 //! for each part, either its static text verbatim or some string the part's rule can match.
-//! A query matches when its symbols consume such a message (a *prefix* of it,
-//! unless the query is anchored at the end).
+//! A query matches when its symbols consume the *whole* of such a message.
 //!
 //! The shape is flattened into [`Atom`]s -- one per static character, one per variable --
 //! so a position in the walk is just a pair of indices:
 //! how much of the query has been consumed, and how much of the shape has been produced.
 //!
-//! Start anchoring needs no special handling: a query that is not anchored at the start simply
-//! *begins* with a [`SymbolicChar::GlobStar`], which is what lets the shape emit unconsumed text.
-//! End anchoring is passed explicitly,
-//! because the engine expresses it by *not* simulating a trailing wildcard,
-//! rather than carrying one in the symbols
-//! -- there is nothing in `symbols` to read it off.
+//! Anchoring needs no special handling at either end.
+//! A query that is not anchored at the start simply *begins* with a [`SymbolicChar::GlobStar`],
+//! which is what lets the shape emit unconsumed text;
+//! one that is not anchored at the end *ends* with one, which absorbs the rest of the message.
+//! The query is taken exactly as written, wildcards included.
 //!
 //! # Structure and termination
 //!
@@ -137,29 +135,16 @@ impl ShapeModel {
 /// so it is much cheaper than [`align`] --
 /// use it whenever the decompositions themselves are not needed.
 ///
-/// `symbols` is the query as the engine sees it,
-/// i.e. with any single trailing wildcard already stripped.
-/// `anchored_at_end` states whether the query must consume the shape through to its end,
-/// which is exactly "the query had no trailing wildcard to strip".
+/// `symbols` is the query exactly as parsed, trailing wildcard and all;
+/// see [`crate::search::SearchString::parse`] for the canonical form this relies on.
 #[must_use]
-pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool {
-	// An empty query constrains nothing; never claim it cannot match.
-	if symbols.is_empty() {
-		return true;
-	}
-
-	let symbols: Vec<SymbolicChar> = collapse_wildcards(symbols);
-
-	if is_obviously_not_ruled_out(model, &symbols, anchored_at_end) {
+pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar]) -> bool {
+	if is_obviously_not_ruled_out(model, symbols) {
 		return true;
 	}
 
 	let atoms: Vec<Atom<'_>> = model.atoms();
-	let solver: Solver<'_> = Solver {
-		symbols: &symbols,
-		atoms: &atoms,
-		anchored_at_end,
-	};
+	let solver: Solver<'_> = Solver::new(symbols, &atoms);
 
 	solver.can_reach_acceptance()
 }
@@ -181,14 +166,11 @@ pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: 
 /// real log shapes are long (thousands of characters) and usually contain a permissive variable,
 /// so this is the common case,
 /// and paying for the full table there is what made the prefilter cost more than it saved.
-fn is_obviously_not_ruled_out(
-	model: &ShapeModel,
-	symbols: &[SymbolicChar],
-	anchored_at_end: bool,
-) -> bool {
-	if Some(&SymbolicChar::GlobStar) != symbols.first() {
+fn is_obviously_not_ruled_out(model: &ShapeModel, symbols: &[SymbolicChar]) -> bool {
+	if !symbols.first().is_some_and(SymbolicChar::is_wildcard) {
 		return false;
 	}
+	let anchored_at_end: bool = !symbols.last().is_some_and(SymbolicChar::is_wildcard);
 
 	model.parts.iter().enumerate().any(|(index, part)| {
 		let ShapePart::Variable(variable) = part else {
@@ -212,38 +194,20 @@ fn is_obviously_not_ruled_out(
 /// this additionally enumerates the decompositions,
 /// which costs proportionally to how many there are.
 ///
-/// `symbols` is the query with any single trailing wildcard already stripped; `anchored_at_end`
-/// carries what that wildcard meant,
-/// i.e. whether the query must consume the shape through to its end.
-/// The two are read off the same query by [`crate::search::SearchString::anchored`],
-/// so a trailing `*` must be stripped from `symbols` and reported as `anchored_at_end == false`,
-/// never one without the other.
+/// `symbols` is the query exactly as parsed, trailing wildcard and all.
+/// The transitions below rely on no two adjacent symbols being wildcards,
+/// which [`crate::search::SearchString::parse`] guarantees.
 #[must_use]
-pub fn align(
-	model: &ShapeModel,
-	symbols: &[SymbolicChar],
-	anchored_at_end: bool,
-	budget: Budget,
-) -> Outcome {
-	// An empty query constrains nothing, and the engine rejects it outright;
-	// do not claim otherwise.
-	if symbols.is_empty() {
-		return Outcome::Unknown;
-	}
-
-	// Collapsing runs of wildcards keeps alignments canonical: `**` constrains no more than `*`,
-	// so leaving both would enumerate the same decomposition twice.
-	// It also guarantees no two adjacent symbols are both wildcards,
-	// which the transitions below rely on.
-	let symbols: Vec<SymbolicChar> = collapse_wildcards(symbols);
-	let symbols: &[SymbolicChar] = &symbols;
+pub fn align(model: &ShapeModel, symbols: &[SymbolicChar], budget: Budget) -> Outcome {
+	debug_assert!(
+		!symbols
+			.windows(2)
+			.any(|pair| pair.iter().all(SymbolicChar::is_wildcard)),
+		"query is not canonical: adjacent wildcards"
+	);
 
 	let atoms: Vec<Atom<'_>> = model.atoms();
-	let solver: Solver<'_> = Solver {
-		symbols,
-		atoms: &atoms,
-		anchored_at_end,
-	};
+	let solver: Solver<'_> = Solver::new(symbols, &atoms);
 
 	let reachable: Vec<bool> = solver.reachability();
 	if !reachable[solver.index(0, 0)] {
@@ -257,10 +221,19 @@ pub fn align(
 struct Solver<'a> {
 	symbols: &'a [SymbolicChar],
 	atoms: &'a [Atom<'a>],
-	anchored_at_end: bool,
+	/// Index of the last static character in `atoms`, for [`Self::can_stop`].
+	last_static: Option<usize>,
 }
 
 impl<'a> Solver<'a> {
+	fn new(symbols: &'a [SymbolicChar], atoms: &'a [Atom<'a>]) -> Self {
+		Self {
+			symbols,
+			atoms,
+			last_static: atoms.iter().rposition(|atom| matches!(atom, Atom::Char(_))),
+		}
+	}
+
 	/// The number of query cursor positions (`0..=len`).
 	fn num_query_positions(&self) -> usize {
 		self.symbols.len() + 1
@@ -273,18 +246,22 @@ impl<'a> Solver<'a> {
 
 	/// Whether the shape, having produced `atom..`, can stop without emitting anything more.
 	///
-	/// Only relevant when anchored at the end. Remaining static characters must be produced,
-	/// so they block acceptance;
+	/// Remaining static characters must be produced, so they block acceptance;
 	/// a variable is conservatively assumed to be able to match the empty string.
+	/// So this is just "no static character at or after `atom`",
+	/// answered in `O(1)` from the precomputed last one --
+	/// it is asked once per atom, and a scan here would make the sweep quadratic.
+	///
+	/// A query ending in a wildcard never gets here with shape left over:
+	/// the wildcard's transitions walk the remaining atoms first, consuming them,
+	/// so anchoring at the end falls out of the query itself.
 	fn can_stop(&self, atom: usize) -> bool {
-		self.atoms[atom..]
-			.iter()
-			.all(|atom| matches!(atom, Atom::Variable(_)))
+		self.last_static.is_none_or(|last| last < atom)
 	}
 
 	/// Whether the query is fully consumed and the shape may stop here.
 	fn is_accepting(&self, query: usize, atom: usize) -> bool {
-		(query == self.symbols.len()) && (!self.anchored_at_end || self.can_stop(atom))
+		(query == self.symbols.len()) && self.can_stop(atom)
 	}
 
 	/// The longest block of query symbols, starting at `query`, that `variable` could emit.
@@ -324,7 +301,7 @@ impl<'a> Solver<'a> {
 					true
 				} else if query == self.symbols.len() {
 					// Query consumed,
-					// but the shape must still produce static text (end-anchored only).
+					// but the shape must still produce static text.
 					false
 				} else {
 					let symbol: SymbolicChar = self.symbols[query];
@@ -373,7 +350,7 @@ impl<'a> Solver<'a> {
 				}
 				if query == self.symbols.len() {
 					// Query consumed,
-					// but the shape must still produce static text (end-anchored only).
+					// but the shape must still produce static text.
 					continue;
 				}
 
@@ -620,16 +597,4 @@ fn prepend_symbol(fragments: &mut Vec<Fragment>, symbol: SymbolicChar) {
 	} else {
 		fragments.insert(0, Fragment::Static(vec![symbol]));
 	}
-}
-
-/// Removes redundant consecutive wildcards.
-fn collapse_wildcards(symbols: &[SymbolicChar]) -> Vec<SymbolicChar> {
-	let mut out: Vec<SymbolicChar> = Vec::with_capacity(symbols.len());
-	for &symbol in symbols.iter() {
-		if (SymbolicChar::GlobStar == symbol) && (Some(&SymbolicChar::GlobStar) == out.last()) {
-			continue;
-		}
-		out.push(symbol);
-	}
-	out
 }

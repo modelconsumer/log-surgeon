@@ -68,9 +68,18 @@ A query is created by [`SearchString::parse`][search-parse] into a `Vec<Symbolic
 where a symbol is either a literal character or `GlobStar` (`*`).
 `*` and `\` are the only metacharacters; `\*` and `\\` are the way to write them literally.
 
+The parsed form is **canonical**: adjacent wildcards are collapsed, so `a**b` is `a*b`.
+`**` says exactly what `*` does, and establishing the invariant once at parse
+means nothing downstream has to re-derive it --
+`align`'s transitions, `runs_of`, and the anchoring predicates below all rely on it.
+
 #### Anchoring
 
-Anchoring follows **one rule**, read off both ends the same way:
+A wildcard is a symbol like any other: the automata consume it as `.*`.
+Every match therefore runs from the start of the message to its end,
+and "unanchored" only means a `*` is there to absorb the slack.
+Anchoring is not a mode; it is a **predicate read off the query**,
+the same way at both ends:
 
 > A query is anchored at a boundary exactly when it does not have a wildcard there.
 
@@ -80,33 +89,32 @@ Anchoring follows **one rule**, read off both ends the same way:
 | `foo*` | yes | no | starts with `foo` |
 | `*foo` | no | yes | ends with `foo` |
 | `foo` | yes | yes | is exactly `foo` |
+| `*` | no | no | anything |
+| `` | yes | yes | the empty message |
 
-This is derived in exactly one place, [`SearchString::anchored`][search-anchored],
-which returns an `AnchoredQuery { view, anchored_end }`:
+These are [`SearchString::anchored_start`][search-anchored] / `anchored_end`.
+Nothing is stripped from the query and nothing is restored later;
+the engine, `align`, and composition all see the symbols exactly as parsed.
+The predicates are consulted only where a decision genuinely depends on them:
 
-- **Start anchoring is structural.** An unanchored query literally begins with a `GlobStar`,
-    so the automaton built from it begins with `.*`.
-    Nothing else is needed.
-- **End anchoring is structural too**, but the trailing wildcard is carried *out of band*.
-    It is dropped from the view --
-    so that `runs_of` sees the last run correctly unanchored --
-    and `anchored_end` records that it was there.
-    Tier 3 puts it back as a real `.*` when it builds the query's automaton.
+- `truncated_automata` -- an end-anchored query must reach the shape's end, so nothing may be cut;
+- `compose` -- an end-anchored query pins trailing nullable parts to the empty string,
+    which composition cannot render, so it defers to the engine
+    (this needs the query's predicate, not the last run's:
+    the empty query has no runs at all, yet is anchored);
+- `drop_trailing_unconstrained` -- only an unanchored query leaves the tail unconstrained;
+- `is_obviously_not_ruled_out` -- an end-anchored query must be able to *finish* at the variable.
 
-Both ends therefore mean the same kind of thing: a wildcard the automaton actually consumes.
-Nothing stops the intersection early and nothing is appended to a path afterwards.
-
-The cost of that trailing `.*`,
+The cost of a trailing `.*`,
 which must traverse whatever remains of the shape,
 is controlled by **not building the rest of the shape**,
 rather than by short-circuiting the automaton.
 See [Shape Truncation](#shape-truncation).
-This is the "don't fully simulate a trailing `*`" principle, relocated:
-deciding *how much shape matters* belongs to placement,
+Deciding *how much shape matters* belongs to placement,
 which knows where the query's text can sit,
 not to the intersection, which would otherwise have to guess.
 
-> **History.** Two hacks lived here.
+> **History.** Three hacks lived here.
 > First, the engine treated a missing trailing wildcard as if it were present,
 > making `foo` and `foo*` equivalent;
 > the uniform rule above replaced that.
@@ -114,7 +122,13 @@ not to the intersection, which would otherwise have to guess.
 > which made the intersection accept as soon as the query's automaton did,
 > and `compute_paths`'s `WILDCARD_END`,
 > which then glued a `*` onto the end of each path.
-> Both are gone: the parameters were removed and the wildcard made real.
+> Third, after those were removed the trailing wildcard was still *stripped* into an
+> `AnchoredQuery { view, anchored_end }` and threaded as a flag through `can_match`, `align`,
+> and the engine, which put it back as a `.*` when building the query's automaton --
+> a round trip. Along the way `**` was collapsed in `align` but not elsewhere,
+> `*` alone tripped an assertion on the engine path,
+> and the empty query slipped past `compose`'s nullable-tail check because it has no runs.
+> All of that is gone: the query is canonical from `parse`, and anchoring is a predicate.
 > See `tests/search_anchoring.rs`.
 
 #### Empty captures
@@ -134,6 +148,10 @@ For an end-anchored query,
 extra care must be taken to avoid losing this information in light of shape truncation.
 Start-anchored queries do not have this issue as simulation always begins from the very start;
 there is no prefix-truncation.
+
+The empty query is the extreme case: anchored at both ends with no literal text,
+it pins *every* variable to the empty string and matches only a shape that can produce nothing.
+Composition has no runs to place and so defers it to the engine on the same grounds.
 
 ### Architecture
 
@@ -175,9 +193,10 @@ Two pieces of per-query state are computed once and shared across all shapes:
 - **Runs** -- `decompose::runs_of(&self.symbols)`.
     A *run* is a maximal stretch of literal characters,
     carrying `anchored_start`/`anchored_end`.
-    Runs come from the **raw** symbols, never from the engine's view:
-    dropping the trailing wildcard is exactly what marks the last run as end-anchored,
-    so re-adding one would erase the information anchoring depends on.
+    Only the first run can be start-anchored and only the last end-anchored;
+    the flags are the query's own predicates, recorded on the run that needs them.
+    They cannot replace the query's predicates entirely,
+    because `*` and the empty query both have no runs.
 - **RunFitCache** -- see below.
 
 ### Shape Models
@@ -261,7 +280,7 @@ because they need a single simulation rather than one per split point.
 ### Tier 1: Rejection
 
 ```rust
-decompose::can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: bool) -> bool
+decompose::can_match(model: &ShapeModel, symbols: &[SymbolicChar]) -> bool
 ```
 
 `false` **proves** no message of the shape can match.
@@ -269,6 +288,8 @@ It runs the reachability pass of [`decompose::align`][align],
 a DP over `(query cursor, shape cursor)` where every transition advances one or the other,
 so the state space is a DAG solved in one reverse sweep.
 It allocates one bit per state and nothing per alignment.
+Acceptance is `query consumed && shape can stop`;
+a trailing wildcard walks the remaining atoms itself, so end anchoring needs no flag.
 
 Variables are approximated by their charset and permitted to match empty.
 Both **widen** the set of accepted alignments, so the result is a superset: a rejection is sound.
@@ -375,7 +396,7 @@ the parts and their attribution are already known,
 so it needs no automaton or simulation.
 
 Rule references after the last *constrained* one are omitted --
-the query's implicit trailing wildcard leaves them unconstrained,
+the query's trailing wildcard leaves them unconstrained,
 and each would only be a vacuous capture carrying no information.
 Their static text still appears, as `'*'`, since that is where the trailing wildcard applies.
 
@@ -447,12 +468,10 @@ Reached only when composition declines to conclude.
 It builds the shape's TNFA and intersects it with the query's, then enumerates paths.
 The intersection **always runs to the end** --
 a state accepts only when both sides accept --
-so `anchored_end` changes only what goes in, not how it is combined:
+and the query is used exactly as written, so a trailing `*` is a real `.*`:
 
 ```rust
-// `true` (`*foo`): used as written, so the match must reach the shape's end.
-// `false` (`*foo*`): the dropped trailing wildcard is restored as a real `.*`.
-let search_nfa = Tnfa::for_regex(&self.to_regex_ending(!anchored_end));
+let search_nfa = Tnfa::for_regex(&self.to_regex());
 let intersection = shape_nfa.intersect::<true>(&search_nfa);
 let paths = intersection.compute_paths(spec);
 ```

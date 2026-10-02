@@ -18,10 +18,8 @@ fn test_spec() -> ParsingSpec {
 	])
 }
 
-/// The query's symbols, exactly as written.
-///
-/// Runs are taken from the *raw* symbols, not the engine's view: a trailing wildcard is what tells
-/// [`runs_of`] the last run is unanchored, so stripping it here would silently anchor every query.
+/// The query's symbols, exactly as written:
+/// a trailing wildcard is what tells [`runs_of`] the last run is unanchored.
 fn symbols_of(query: &str) -> Vec<SymbolicChar> {
 	SearchString::parse(query).unwrap().as_slice().to_vec()
 }
@@ -75,12 +73,20 @@ fn splits_a_query_into_runs() {
 	assert!(runs[0].anchored_start);
 
 	// A query with no trailing wildcard anchors its last run.
-	// Note the engine strips one trailing wildcard, so `abc` and `abc*` both arrive here as `abc`.
 	let runs: Vec<Run> = runs_of(&symbols_of("*abc"));
 	assert!(runs[0].anchored_end);
 
-	// A wildcard-only query has no runs at all, so it constrains nothing.
+	// Adjacent wildcards collapse at parse, so they neither add runs nor change anchoring.
+	let runs: Vec<Run> = runs_of(&symbols_of("**abc**"));
+	assert_eq!(1, runs.len());
+	assert!(!runs[0].anchored_start);
+	assert!(!runs[0].anchored_end);
+
+	// A wildcard-only query has no runs at all, so it constrains nothing;
+	// so does the empty query, which constrains everything -- the runs cannot tell them apart,
+	// which is why `compose` takes the query's anchoring separately.
 	assert!(runs_of(&symbols_of("*")).is_empty());
+	assert!(runs_of(&symbols_of("")).is_empty());
 }
 
 #[test]

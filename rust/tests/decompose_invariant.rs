@@ -92,6 +92,7 @@ fn invariant_holds_on_corpus() {
 				&model,
 				&table,
 				&runs,
+				query.anchored_end(),
 				&fits,
 				ComposeBudget::default(),
 			);

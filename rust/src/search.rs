@@ -144,18 +144,6 @@ struct TruncatedShape {
 	dropped_static: bool,
 }
 
-/// A query as the engine sees it, with its end-anchoring made explicit.
-///
-/// See [`SearchString::anchored`], which is the only place these two are derived,
-/// so that every caller agrees about what `*foo` means.
-#[derive(Clone, Copy)]
-struct AnchoredQuery<'a> {
-	/// The query with a single trailing wildcard removed, if it had one.
-	view: SearchStringView<'a>,
-	/// Whether a match must run to the end of the message.
-	anchored_end: bool,
-}
-
 impl std::fmt::Debug for SearchStringView<'_> {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		fmt.debug_tuple("SearchStringView")
@@ -230,6 +218,14 @@ impl Interpretation {
 }
 
 impl SearchString {
+	/// Parses a query.
+	///
+	/// `*` and `\` are the only metacharacters; `\*` and `\\` write them literally.
+	///
+	/// The result is canonical: adjacent wildcards are collapsed, since `**` says exactly what
+	/// `*` does. Everything downstream relies on this -- anchoring is read off the first and
+	/// last symbol, and a wildcard is a symbol like any other that the automata consume --
+	/// so it is established once, here, rather than at every entry point.
 	pub fn parse(input: &str) -> Result<Self, SearchStringError<'_>> {
 		let mut symbols: Vec<SymbolicChar> = Vec::new();
 		let mut last_was_escape: bool = false;
@@ -240,7 +236,12 @@ impl SearchString {
 						SymbolicChar::Literal(ch)
 					} else {
 						match ch {
-							'*' => SymbolicChar::GlobStar,
+							'*' => {
+								if symbols.last().is_some_and(SymbolicChar::is_wildcard) {
+									continue;
+								}
+								SymbolicChar::GlobStar
+							},
 							'\\' => {
 								last_was_escape = true;
 								continue;
@@ -275,6 +276,31 @@ impl SearchString {
 		self.symbols.as_slice()
 	}
 
+	/// Whether a match must begin at the start of the message.
+	///
+	/// Anchoring is one uniform rule, read off both ends the same way:
+	/// a query is anchored at a boundary exactly when it does not have a wildcard there.
+	/// So `foo*` is anchored at the start, `*foo` at the end,
+	/// `foo` at both (an exact match), and `*foo*` at neither.
+	/// The empty query is anchored at both, and matches only an empty message.
+	///
+	/// Nothing is derived from this beyond the predicate itself:
+	/// a wildcard is a symbol the automata consume like any other,
+	/// so every match runs from the start of the message to its end,
+	/// and "unanchored" just means a `*` is there to absorb the slack.
+	#[must_use]
+	pub fn anchored_start(&self) -> bool {
+		!self.symbols.first().is_some_and(SymbolicChar::is_wildcard)
+	}
+
+	/// Whether a match must run through to the end of the message.
+	///
+	/// See [`Self::anchored_start`].
+	#[must_use]
+	pub fn anchored_end(&self) -> bool {
+		!self.symbols.last().is_some_and(SymbolicChar::is_wildcard)
+	}
+
 	pub fn search_by_name(&self, spec: &ParsingSpec, name: &str) -> Vec<Interpretation> {
 		let rows: Vec<(&RuleInfo, &Regex)> = spec.rules_for_name(name);
 
@@ -293,18 +319,12 @@ impl SearchString {
 		spec: &ParsingSpec,
 		log_shapes: &[&str],
 	) -> Vec<Vec<Interpretation>> {
-		let anchored: AnchoredQuery<'_> = self.anchored();
 		let cache: &ShapeModelCache = spec.shape_models();
 
 		// The query's runs and their fits are shared across every shape:
 		// this is where the composition path gets its leverage,
 		// since a corpus mentions the same few rules over and over,
 		// and a rule's behaviour on a run does not depend on the shape referencing it.
-		//
-		// Note the runs come from the *raw* symbols, not the engine's view:
-		// dropping the trailing wildcard is what tells [`decompose::runs_of`]
-		// the last run is anchored, and re-adding one would
-		// erase exactly the information anchoring depends on.
 		let runs: Vec<Run> = decompose::runs_of(&self.symbols);
 		let fits: RunFitCache = RunFitCache::new();
 
@@ -313,49 +333,12 @@ impl SearchString {
 		let models: Vec<Arc<ShapeModel>> =
 			Vec::from_iter(log_shapes.iter().map(|&shape| cache.get(spec, shape)));
 
+		let view: SearchStringView<'_> = self.view(0, self.symbols.len());
 		std::iter::zip(&models, log_shapes)
 			.map(|(model, &shape)| {
-				anchored.view.interpretations_for_log_shape(
-					spec,
-					model,
-					shape,
-					&runs,
-					&fits,
-					anchored.anchored_end,
-				)
+				view.interpretations_for_log_shape(spec, model, shape, &runs, &fits)
 			})
 			.collect::<Vec<_>>()
-	}
-
-	/// This query split into the engine's view of it, plus whether it is anchored at the end.
-	///
-	/// Anchoring is one uniform rule, read off both ends the same way:
-	/// a query is anchored at a boundary exactly when it does not have a wildcard there.
-	/// So `foo*` is anchored at the start, `*foo` at the end,
-	/// `foo` at both (an exact match), and `*foo*` at neither.
-	///
-	/// Start anchoring needs no flag because it is already *structural*:
-	/// an unanchored query literally begins with a [`SymbolicChar::GlobStar`],
-	/// so the automaton built from it begins with `.*`.
-	/// End anchoring cannot be structural in the same way --
-	/// a trailing `.*` would have to be simulated through the whole rest of the shape --
-	/// so it is carried as a flag,
-	/// the wildcard is dropped from the view,
-	/// and the automata are instead told not to require reaching the shape's end.
-	/// That keeps the unanchored case exactly as cheap as it was:
-	/// acceptance is decided the moment the query's own automaton accepts.
-	fn anchored(&self) -> AnchoredQuery<'_> {
-		match self.symbols.last() {
-			Some(&SymbolicChar::GlobStar) => AnchoredQuery {
-				view: self.view(0, self.symbols.len() - 1),
-				anchored_end: false,
-			},
-			// Also covers the empty query, which anchors vacuously.
-			_ => AnchoredQuery {
-				view: self.view(0, self.symbols.len()),
-				anchored_end: true,
-			},
-		}
 	}
 
 	/// Interpretations for `log_shape`, always via the automata,
@@ -387,15 +370,13 @@ impl SearchString {
 		automata: &Tnfa,
 		dropped_static: bool,
 	) -> Vec<Interpretation> {
-		let anchored: AnchoredQuery<'_> = self.anchored();
-		anchored.view.interpretations_for_shape(
+		self.view(0, self.symbols.len()).interpretations_for_shape(
 			spec,
 			&TruncatedShape {
 				// TODO: avoid this clone by borrowing the automaton instead.
 				automata: automata.clone(),
 				dropped_static,
 			},
-			anchored.anchored_end,
 		)
 	}
 
@@ -413,24 +394,20 @@ impl<'a> SearchStringView<'a> {
 		&self.full_string.symbols[self.start..self.end]
 	}
 
-	fn to_regex(&self) -> Regex {
-		self.to_regex_ending(false)
+	/// Whether a match must run through to the end of the message;
+	/// see [`SearchString::anchored_end`].
+	fn anchored_end(&self) -> bool {
+		!self.as_str().last().is_some_and(SymbolicChar::is_wildcard)
 	}
 
-	/// This query as a regex, optionally with a trailing `.*`.
+	/// This query as a regex, symbol for symbol: a wildcard is `.*`.
 	///
-	/// [`SearchString::anchored`] strips a query's trailing wildcard,
-	/// so that the rest of the pipeline sees its runs correctly unanchored.
-	/// `trailing_wildcard` puts it back for the automaton, which needs it explicitly:
-	/// the intersection always runs to the end,
-	/// so "and then anything" has to be something the query can actually consume.
-	fn to_regex_ending(&self, trailing_wildcard: bool) -> Regex {
-		let symbols = self.as_str().iter().map(SymbolicChar::to_regex);
-		Regex::Sequence(if trailing_wildcard {
-			Vec::from_iter(symbols.chain(std::iter::once(SymbolicChar::GlobStar.to_regex())))
-		} else {
-			Vec::from_iter(symbols)
-		})
+	/// The intersection always runs to the end of the shape,
+	/// so "and then anything" is something the query itself consumes.
+	fn to_regex(&self) -> Regex {
+		Regex::Sequence(Vec::from_iter(
+			self.as_str().iter().map(SymbolicChar::to_regex),
+		))
 	}
 
 	/// Interpretations of this query for a single log shape.
@@ -462,11 +439,10 @@ impl<'a> SearchStringView<'a> {
 		shape: &str,
 		runs: &[Run],
 		fits: &RunFitCache,
-		anchored_end: bool,
 	) -> Vec<Interpretation> {
 		now!(t0);
 
-		if !decompose::can_match(model, self.as_str(), anchored_end) {
+		if !decompose::can_match(model, self.as_str()) {
 			trace!("decompose rejected shape {shape:.256}");
 			return Vec::new();
 		}
@@ -477,7 +453,7 @@ impl<'a> SearchStringView<'a> {
 
 		if let Some(table) = maybe_table.as_ref()
 			&& let Some(interpretations) =
-				Self::composed_interpretations(spec, model, table, runs, fits)
+				self.composed_interpretations(spec, model, table, runs, fits)
 		{
 			now!(t1);
 			trace!("composed shape in {} ms {shape:.256}", millis!(t0, t1));
@@ -489,7 +465,7 @@ impl<'a> SearchStringView<'a> {
 		// which is enough to drop the shape's unreachable tail from the automaton.
 		let maybe_truncated: Option<TruncatedShape> = maybe_table
 			.as_ref()
-			.and_then(|table| self.truncated_automata(spec, model, table, anchored_end));
+			.and_then(|table| self.truncated_automata(spec, model, table));
 
 		let truncated: TruncatedShape = match maybe_truncated {
 			Some(truncated) => truncated,
@@ -499,8 +475,7 @@ impl<'a> SearchStringView<'a> {
 				dropped_static: false,
 			},
 		};
-		let interpretations: Vec<Interpretation> =
-			self.interpretations_for_shape(spec, &truncated, anchored_end);
+		let interpretations: Vec<Interpretation> = self.interpretations_for_shape(spec, &truncated);
 		now!(t1);
 		debug!("- took {} ms", millis!(t0, t1));
 		interpretations
@@ -531,11 +506,10 @@ impl<'a> SearchStringView<'a> {
 		spec: &ParsingSpec,
 		model: &ShapeModel,
 		table: &PlacementTable,
-		anchored_end: bool,
 	) -> Option<TruncatedShape> {
 		// A query anchored at the end must consume the shape through to its end, so nothing may be
 		// dropped: the truncated parts are precisely the ones it still has to match.
-		if anchored_end {
+		if self.anchored_end() {
 			return None;
 		}
 
@@ -575,13 +549,22 @@ impl<'a> SearchStringView<'a> {
 	/// `None` means composition declined to conclude and the caller must fall back to the engine.
 	/// An empty vector is a real answer -- the shape cannot match -- and is not the same thing.
 	fn composed_interpretations(
+		&self,
 		spec: &ParsingSpec,
 		model: &ShapeModel,
 		table: &PlacementTable,
 		runs: &[Run],
 		fits: &RunFitCache,
 	) -> Option<Vec<Interpretation>> {
-		match decompose::compose(spec, model, table, runs, fits, ComposeBudget::default()) {
+		match decompose::compose(
+			spec,
+			model,
+			table,
+			runs,
+			self.anchored_end(),
+			fits,
+			ComposeBudget::default(),
+		) {
 			Composed::Impossible => Some(Vec::new()),
 			Composed::Unknown => None,
 			Composed::Compositions(compositions) => {
@@ -627,16 +610,10 @@ impl<'a> SearchStringView<'a> {
 	/// The intersection always runs **to the end**:
 	/// a state accepts only when the shape's automaton and the query's accept together.
 	/// End-anchoring is therefore not a mode here --
-	/// it is simply whether the query ends in a wildcard,
-	/// which `anchored_end` reports and which decides what is fed in:
+	/// the query is used exactly as written,
+	/// and a trailing wildcard (`*foo*`, `foo*`) is a real `.*` the intersection consumes.
 	///
-	/// - `true` (`*foo`, `foo`): the query is used as written,
-	///   so the match must reach the shape's end.
-	/// - `false` (`*foo*`, `foo*`): the trailing wildcard,
-	///   dropped by [`SearchString::anchored`] so the rest of the pipeline sees the query's runs
-	///   unanchored, is put back -- as a real `.*` the intersection consumes.
-	///
-	/// Restoring the wildcard means the automaton must traverse whatever remains of the shape,
+	/// That wildcard means the automaton must traverse whatever remains of the shape,
 	/// which is why `shape_nfa` should already have been cut down to the part the query can reach;
 	/// see [`Self::truncated_automata`].
 	/// That division of labour is the point:
@@ -647,14 +624,13 @@ impl<'a> SearchStringView<'a> {
 		&self,
 		_spec: &ParsingSpec,
 		shape: &TruncatedShape,
-		anchored_end: bool,
 	) -> Vec<Interpretation> {
 		let shape_nfa: &Tnfa = &shape.automata;
-		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
+		let anchored_end: bool = self.anchored_end();
 
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
-		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex_ending(!anchored_end));
+		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());
 
 		now!(t0);
 		let intersection: Tnfa = shape_nfa.intersect::<true>(&search_nfa);
@@ -783,8 +759,6 @@ impl<'a> SearchStringView<'a> {
 		nfa: &Tnfa,
 		maybe_rule_info: Option<&RuleInfo>,
 	) -> Vec<Interpretation> {
-		assert_ne!(self.as_str(), [SymbolicChar::GlobStar]);
-
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
 		let search_nfa: Tnfa = Tnfa::for_regex(&self.to_regex());

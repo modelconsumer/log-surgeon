@@ -294,7 +294,7 @@ fn decompose_and_engine_agree_on_anchoring() {
 	let queries: &[&str] = &[
 		"*done", "*done*", "done*", "done", "*INFO", "*INFO*", "INFO", "INFO*", "*id=", "*id=*",
 		"id=1", "id=1*", "*hello", "*hello*", "hello*", "hello", "*end", "*end*", "*c", "*c*",
-		"a*c", "a*c*", "*b*c", "*1", "*1*", "*>", "*tail", "*tail*",
+		"a*c", "a*c*", "*b*c", "*1", "*1*", "*>", "*tail", "*tail*", "*", "",
 	];
 
 	for shape in shapes.iter() {
@@ -319,4 +319,83 @@ fn decompose_and_engine_agree_on_anchoring() {
 			);
 		}
 	}
+}
+
+/// `**` says exactly what `*` does, so it is collapsed at parse:
+/// anchoring is read off the first and last symbol, and nothing downstream sees a doubled
+/// wildcard.
+#[test]
+fn adjacent_wildcards_collapse_at_parse() {
+	let spec: ParsingSpec = test_spec();
+
+	for (doubled, single) in [
+		("**hello**", "*hello*"),
+		("hello**", "hello*"),
+		("**hello", "*hello"),
+		("a***c", "a*c"),
+		("***", "*"),
+	] {
+		let parsed: SearchString = SearchString::parse(doubled).unwrap();
+		assert_eq!(
+			single,
+			parsed.to_string(),
+			"{doubled:?} should parse to {single:?}"
+		);
+		assert_eq!(
+			SearchString::parse(single).unwrap().anchored_start(),
+			parsed.anchored_start()
+		);
+		assert_eq!(
+			SearchString::parse(single).unwrap().anchored_end(),
+			parsed.anchored_end()
+		);
+
+		for shape in ["hello %word%", "a%word%b%digits%c", "%word%"] {
+			assert_eq!(
+				search(&spec, single, shape),
+				search(&spec, doubled, shape),
+				"shape={shape:?}: {doubled:?} must search as {single:?}"
+			);
+		}
+	}
+
+	// An escaped star is a literal and is never collapsed.
+	assert_eq!(r"*\**", SearchString::parse(r"**\***").unwrap().to_string());
+}
+
+/// The two degenerate queries: `*` constrains nothing, `` constrains everything.
+///
+/// Both have no literal runs, so they are told apart only by anchoring,
+/// which is why it is derived from the query rather than from its runs.
+#[test]
+fn wildcard_only_and_empty_queries() {
+	let spec: ParsingSpec = test_spec();
+
+	// `*` matches every shape, with a single unconstrained interpretation.
+	for shape in ["hello %word%", "%optional.pad%", "abc", "%word%"] {
+		let results: Vec<Interpretation> = search(&spec, "*", shape);
+		assert_eq!(
+			vec!["'*'"],
+			results.iter().map(render).collect::<Vec<_>>(),
+			"shape={shape:?}"
+		);
+	}
+
+	// `` is anchored at both ends, so it matches only a shape that can produce nothing,
+	// and then pins every variable to the empty string.
+	assert!(
+		!matches(&spec, "", "hello %word%"),
+		"static text cannot vanish"
+	);
+	assert!(!matches(&spec, "", "abc"));
+	assert!(
+		!matches(&spec, "", "%word%"),
+		"`%word%` must emit a character"
+	);
+	let results: Vec<Interpretation> = search(&spec, "", "%optional.pad%");
+	assert_eq!(
+		vec!["<optional.pad=>"],
+		results.iter().map(render).collect::<Vec<_>>(),
+		"the nullable capture is pinned to nothing"
+	);
 }

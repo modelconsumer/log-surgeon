@@ -49,10 +49,19 @@ fn composed_and_runs_for(
 	query: &str,
 ) -> (ShapeModel, Composed, Vec<Run>) {
 	let model: ShapeModel = ShapeModel::new(spec, shape);
-	let runs: Vec<Run> = runs_of(&symbols_of(query));
+	let parsed: SearchString = SearchString::parse(query).unwrap();
+	let runs: Vec<Run> = runs_of(parsed.as_slice());
 	let fits: RunFitCache = RunFitCache::new();
 	let table: PlacementTable = PlacementTable::compute(spec, &model, &runs, &fits).unwrap();
-	let composed: Composed = compose(spec, &model, &table, &runs, &fits, ComposeBudget::default());
+	let composed: Composed = compose(
+		spec,
+		&model,
+		&table,
+		&runs,
+		parsed.anchored_end(),
+		&fits,
+		ComposeBudget::default(),
+	);
 	(model, composed, runs)
 }
 
@@ -192,6 +201,7 @@ fn exhausted_budget_is_unknown_not_impossible() {
 		&model,
 		&table,
 		&runs,
+		false,
 		&fits,
 		ComposeBudget {
 			max_compositions: 1,

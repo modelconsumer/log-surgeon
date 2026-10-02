@@ -133,7 +133,7 @@ impl Composition {
 	/// since [`Interpretation::invariants`] forbids two static sub-queries in a row.
 	///
 	/// Rule references after the last constrained one are **omitted**:
-	/// the query's implicit trailing wildcard leaves them unconstrained,
+	/// the query's trailing wildcard leaves them unconstrained,
 	/// and reporting each as a vacuous capture would add no information.
 	///
 	/// # Invariant
@@ -191,7 +191,7 @@ impl Composition {
 			.max();
 
 		// The last static part. Trailing static text is still reported, as `*`,
-		// because that is where the query's implicit trailing wildcard applies.
+		// because that is where the query's trailing wildcard applies.
 		let last_static: Option<usize> =
 			model.parts.iter().rposition(|part| !part.is_variable());
 
@@ -452,15 +452,25 @@ pub enum Composed {
 /// before being returned: [`PlacementTable`] places a run at a time, and a rule that
 /// admits each run separately need not admit them together. Verification lives here,
 /// rather than in the caller, so that an infeasible composition cannot escape.
+///
+/// `anchored_end` is [`crate::search::SearchString::anchored_end`] for the query the runs
+/// came from. It is passed separately because the runs alone cannot tell the empty query,
+/// which is anchored, from `*`, which is not: neither has any runs.
 #[must_use]
 pub fn compose(
 	spec: &ParsingSpec,
 	model: &ShapeModel,
 	table: &PlacementTable,
 	runs: &[Run],
+	anchored_end: bool,
 	fits: &RunFitCache,
 	budget: ComposeBudget,
 ) -> Composed {
+	debug_assert!(
+		runs.last()
+			.is_none_or(|run| run.anchored_end == anchored_end),
+		"runs disagree with the query about end anchoring"
+	);
 	if table.is_impossible() {
 		return Composed::Impossible;
 	}
@@ -468,19 +478,25 @@ pub fn compose(
 	// An end-anchored query pins the shape's trailing parts to producing *nothing*,
 	// which is a real constraint this module cannot express: rendering is truncated
 	// at the last constrained part (see `rendered_parts`), justified by the query's
-	// implicit trailing wildcard leaving the rest unconstrained. With no such wildcard
+	// trailing wildcard leaving the rest unconstrained. With no such wildcard
 	// those parts are constrained -- to the empty string -- and the engine reports
 	// that precisely, as an empty capture. Defer to it rather than render a `*` that
 	// claims the opposite.
-	if runs.last().is_some_and(|run| run.anchored_end)
-		&& model.parts.last().is_some_and(ShapePart::can_be_empty)
-	{
+	//
+	// Read off the query rather than the last run, so the empty query --
+	// anchored at both ends, with no runs at all -- is deferred too.
+	if anchored_end && model.parts.last().is_some_and(ShapePart::can_be_empty) {
 		return Composed::Unknown;
 	}
 
 	let num_runs: usize = table.placements.len();
 	if 0 == num_runs {
-		// A query of only wildcards constrains nothing; there is exactly one (empty) decomposition.
+		// With no runs the query is either `*`, which constrains nothing and has exactly one
+		// (empty) decomposition, or the empty query, which pins *every* part to producing
+		// nothing -- a constraint only the engine can express (as above).
+		if anchored_end {
+			return Composed::Unknown;
+		}
 		return Composed::Compositions(vec![Composition {
 			captures: Vec::new(),
 			literals: Vec::new(),
