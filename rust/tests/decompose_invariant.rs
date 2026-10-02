@@ -48,7 +48,7 @@ fn runs_accounted_for(interpretation: &Interpretation) -> Vec<String> {
 /// The invariant must hold across the whole real corpus, not just synthetic shapes.
 #[test]
 fn invariant_holds_on_corpus() {
-	let spec: String = std::fs::read_to_string("blk_id_full_log_message.spec.cached.txt").unwrap();
+	let spec: String = std::fs::read_to_string("spec3.txt").unwrap();
 	let spec: ParsingSpec = ParsingSpecBuilder::from_parsing_spec_definition(&spec)
 		.unwrap()
 		.build();

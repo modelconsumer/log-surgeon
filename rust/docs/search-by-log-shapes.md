@@ -1,22 +1,23 @@
 ## Searching Log Shapes
 
-A *log shape* is a template for a set of log messages:
-static text with rule references in it, e.g. `" %prefix.logLevel% %prefix.class%: "`.
-A *search string* is a query the user writes to find messages,
-using literal text and `*` wildcards, e.g. `*blk_1073746491_5667*`.
+A **log shape** is a template for a set of log messages:
+a sequence of fragments, where a fragment is either
 
-[`SearchString::search_by_log_shapes`][search-by-log-shapes] answers: for each shape, **which
-interpretations of the query does that shape admit?**
-An interpretation attributes each piece of the query's literal text
-to either a rule reference or a piece of static text,
-with the wildcards covering everything in between.
+- static text, e.g. `Scheduling blk_`, or
+- a rule reference, e.g. `%blockID.blockNum%`.
+
+A **search string** is a query using literal text and `*` globs, e.g. `*blk_1073746491_5667*`.
+
+[`SearchString::search_by_log_shapes`][search-by-log-shapes] answers:
+for each shape, **which interpretations of the query does that shape admit?**
+An interpretation attributes each literal character of the search string
+to a fragment of the log shape.
+Notably, a "run" of literal search text may span multiple fragments of a log shape,
+and globs may always span anything in between.
 It is the same decomposition a user would perform by hand to understand why their query matched.
 
-This document is the design of that function:
-the query semantics, the three paths it can take, the data structures, the caching,
-and the correctness invariants.
-It is intended for someone modifying the code, not for someone using it --
-see the [parsing specification][parsing-spec] for the user-facing concepts.
+This document covers the implementation details of search;
+users should see the [parsing specification][parsing-spec] for user-facing concepts.
 
 ### Index
 - Public API
@@ -26,7 +27,7 @@ see the [parsing specification][parsing-spec] for the user-facing concepts.
 - Tier 1: Rejection
 - Tier 2: Composition
 - Tier 3: The Engine
-  - Covering
+    - Covering
 - Shape Truncation
 - Correctness
 - Testing
@@ -37,11 +38,11 @@ see the [parsing specification][parsing-spec] for the user-facing concepts.
 ### Public API
 
 ```rust
-pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str]) -> Vec<Vec<Interpretation>>
+pub fn search_by_log_shapes(&self, spec: &ParsingSpec, log_shapes: &[&str])
+    -> Vec<Vec<Interpretation>>
 ```
 
-The result is **positional**: `result[i]` holds the interpretations for `log_shapes[i]`,
-so a caller can zip the two.
+The result is **positional**: `result[i]` holds the interpretations for `log_shapes[i]`.
 Each inner vector is a canonical, duplicate-free set.
 
 Shape models are cached in the spec's [`ShapeModelCache`][shape-model-cache],
@@ -55,15 +56,15 @@ and by direct searches on the spec.
 Two further methods expose the engine directly and exist for tests, not users:
 
 - `interpretations_for_log_shape_via_engine` -- bypasses `decompose` entirely,
-  so the [differential test][differential] can pin the fast paths against the engine they stand in
-  for.
+    so the [differential test][differential] can pin the fast paths against the engine they stand in
+    for.
 - `interpretations_for_automata` -- takes an already-built automaton plus a `dropped_static` flag
-  saying whether that automaton is a truncation of a longer shape,
-  so the [truncation test][narrowing] can compare a truncated shape against the full one.
+    saying whether that automaton is a truncation of a longer shape,
+    so the [truncation test][narrowing] can compare a truncated shape against the full one.
 
 ### Query Semantics
 
-A query is parsed by [`SearchString::parse`][search-parse] into a `Vec<SymbolicChar>`,
+A query is created by [`SearchString::parse`][search-parse] into a `Vec<SymbolicChar>`,
 where a symbol is either a literal character or `GlobStar` (`*`).
 `*` and `\` are the only metacharacters; `\*` and `\\` are the way to write them literally.
 
@@ -84,19 +85,19 @@ This is derived in exactly one place, [`SearchString::anchored`][search-anchored
 which returns an `AnchoredQuery { view, anchored_end }`:
 
 - **Start anchoring is structural.** An unanchored query literally begins with a `GlobStar`,
-  so the automaton built from it begins with `.*`.
-  Nothing else is needed.
+    so the automaton built from it begins with `.*`.
+    Nothing else is needed.
 - **End anchoring is structural too**, but the trailing wildcard is carried *out of band*.
-  It is dropped from the view --
-  so that `runs_of` sees the last run correctly unanchored --
-  and `anchored_end` records that it was there.
-  Tier 3 puts it back as a real `.*` when it builds the query's automaton.
+    It is dropped from the view --
+    so that `runs_of` sees the last run correctly unanchored --
+    and `anchored_end` records that it was there.
+    Tier 3 puts it back as a real `.*` when it builds the query's automaton.
 
 Both ends therefore mean the same kind of thing: a wildcard the automaton actually consumes.
 Nothing stops the intersection early and nothing is appended to a path afterwards.
 
-The cost of that trailing `.*` --
-which must traverse whatever remains of the shape --
+The cost of that trailing `.*`,
+which must traverse whatever remains of the shape,
 is controlled by **not building the rest of the shape**,
 rather than by short-circuiting the automaton.
 See [Shape Truncation](#shape-truncation).
@@ -118,7 +119,7 @@ not to the intersection, which would otherwise have to guess.
 
 #### Empty captures
 
-An end-anchored query can pin a rule to producing *nothing*.
+An anchored query can pin a rule to producing *nothing*.
 If a shape references a nullable sub-rule via `%foo.leaf%`
 and the query is `x` against shape `x%foo.leaf%`,
 the correct interpretation contains `(?<leaf>)` -- an empty capture.
@@ -129,17 +130,16 @@ Note that the spec builder *rejects a whole rule that can match empty*
 (`RegexErrorKind::NullableExpression`),
 so this arises from nullable **captures inside** a rule, not from nullable root rules.
 
+For an end-anchored query,
+extra care must be taken to avoid losing this information in light of shape truncation.
+Start-anchored queries do not have this issue as simulation always begins from the very start;
+there is no prefix-truncation.
+
 ### Architecture
 
+There are 3 "tiers" of decomposition, from cheapest to most expensive and complete.
 Tiers 1 and 2 live in [`search::decompose`][decompose],
-a submodule of `search` because it is an implementation detail of one function
-and has no other caller.
-It was once called `prefilter`, which described only tier 1:
-on the HDFS corpus tier 2 *answers* 1205 shapes while tier 1 rejects 38 and the engine never runs,
-so the module is primarily a decomposer that happens to begin with a filter.
-
-`interpretations_for_log_shape` is a cascade, cheapest path first.
-A shape is answered by the first tier that can conclude.
+Tier 3 lives in [`nfa::search_decomposition`][engine].
 
 ```
                       +-----------------------+
@@ -150,12 +150,12 @@ A shape is answered by the first tier that can conclude.
     per shape ---------------------v-----------------------------------------
                        +-----------------------+
                        | ShapeModel            |  parts + charsets + nullable flags
-                       |  (cached; asserts     |  panics if a placeholder is
+                       |  (cached; asserts     |  panics if a variable is
                        |   supported shape)    |  undefined or non-leaf
                        +-----------+-----------+
                                    |
                  +----------------v----------------+
-        Tier 1   | can_match?  ---- no --> REJECT  |  O(atoms x query), usually O(placeholders)
+        Tier 1   | can_match?  ---- no --> REJECT  |  O(atoms x query), usually O(variables)
                  +----------------+----------------+
                                   | yes
                  +----------------v----------------+
@@ -173,11 +173,11 @@ A shape is answered by the first tier that can conclude.
 Two pieces of per-query state are computed once and shared across all shapes:
 
 - **Runs** -- `decompose::runs_of(&self.symbols)`.
-  A *run* is a maximal stretch of literal characters,
-  carrying `anchored_start`/`anchored_end`.
-  Runs come from the **raw** symbols, never from the engine's view:
-  dropping the trailing wildcard is exactly what marks the last run as end-anchored,
-  so re-adding one would erase the information anchoring depends on.
+    A *run* is a maximal stretch of literal characters,
+    carrying `anchored_start`/`anchored_end`.
+    Runs come from the **raw** symbols, never from the engine's view:
+    dropping the trailing wildcard is exactly what marks the last run as end-anchored,
+    so re-adding one would erase the information anchoring depends on.
 - **RunFitCache** -- see below.
 
 ### Shape Models
@@ -185,31 +185,31 @@ Two pieces of per-query state are computed once and shared across all shapes:
 [`ShapeModel`][shape-model] is a coarse, allocation-light model of a shape,
 built by [`ParsingSpec::split_log_shape`][split-log-shape] --
 the same tokenizer the automaton builder uses,
-so the model and the automaton can never disagree about where the placeholders are.
+so the model and the automaton can never disagree about where the variables are.
 It is a sequence of [`ShapePart`][shape-part]s:
 
 - `Static(String)` -- text a match must reproduce verbatim. Never empty.
-- `Placeholder(Placeholder)` -- a rule reference, carrying:
-  - `name` -- the rule name as written in the shape, used to label the captures it produces.
-  - `charset` -- a **superset** of the characters any match of the rule can contain (see
-    [`Charset`][charset]).
-  - `alternatives` -- the sub-rules a capture could name, for positional identity.
-  - `can_match_empty` -- whether some alternative is nullable.
+- `Variable(Variable)` -- a rule reference, carrying:
+    - `name` -- the rule name as written in the shape, used to label the captures it produces.
+    - `charset` -- a **superset** of the characters any match of the rule can contain (see
+        [`Charset`][charset]).
+    - `alternatives` -- the sub-rules a capture could name, for positional identity.
+    - `can_match_empty` -- whether some alternative is nullable.
 
 #### Supported Shapes
 
-Building a model **asserts** that every placeholder names a rule the spec defines
+Building a model **asserts** that every variable names a rule the spec defines
 and that the rule is a leaf.
 Both failures are treated as errors in the shape, not conditions to recover from,
 so `search_by_log_shapes` panics with a message naming the shape and rule:
 
 - An **undefined rule** has no regex, so there is nothing to place a run into.
 - A **non-leaf rule** (one with nested captures) would have to be reported as its nested captures,
-  which the model does not carry;
-  reporting the whole rule instead would silently differ from the engine.
-  The shape must reference one of the leaf captures (`%blockID.num%`) instead.
+    which the model does not carry;
+    reporting the whole rule instead would silently differ from the engine.
+    The shape must reference one of the leaf captures (`%blockID.num%`) instead.
 
-A shape with **no placeholders** (pure static text) *is* supported:
+A shape with **no variables** (pure static text) *is* supported:
 its text is exactly what a query must reproduce,
 which placement and composition handle like any other part.
 This was previously mistaken for "nothing to attribute query text to",
@@ -232,7 +232,7 @@ model.can_start_at(part)         // every earlier part can emit nothing
 model.can_end_at(part)           // every later part can emit nothing
 ```
 
-They are what make anchoring correct in the presence of nullable placeholders:
+They are what make anchoring correct in the presence of nullable variables:
 a start-anchored run must be the first thing the *message* emits,
 which does not require it to be in the first shape *part*
 if the parts before it can vanish.
@@ -270,21 +270,21 @@ a DP over `(query cursor, shape cursor)` where every transition advances one or 
 so the state space is a DAG solved in one reverse sweep.
 It allocates one bit per state and nothing per alignment.
 
-Placeholders are approximated by their charset and permitted to match empty.
+Variables are approximated by their charset and permitted to match empty.
 Both **widen** the set of accepted alignments, so the result is a superset: a rejection is sound.
 
 There is a cheap sufficient fast path, `is_obviously_not_ruled_out`:
 if the query starts with a wildcard
-and some single placeholder's charset admits every literal in the query,
-that placeholder alone could emit the whole query,
+and some single variable's charset admits every literal in the query,
+that variable alone could emit the whole query,
 so the shape cannot be rejected.
-It is `O(placeholders + query)` against the walk's `O(atoms x query)`,
+It is `O(variables + query)` against the walk's `O(atoms x query)`,
 and it is the common case on real shapes --
 paying for the full table there once made the rejection tier cost more than it saved.
-When the query is end-anchored, the placeholder must additionally satisfy `can_end_at`.
+When the query is end-anchored, the variable must additionally satisfy `can_end_at`.
 
 > The `align` **decompositions** are deliberately not usable as the result.
-> Because placeholders are over-approximated,
+> Because variables are over-approximated,
 > they form a superset of the engine's answers.
 > Only the yes/no answer is taken from this tier.
 
@@ -299,17 +299,17 @@ A run must be produced in full, and there are only three possibilities:
 
 1. **wholly inside a rule** -- `RunFit::fits_wholly`;
 2. **wholly inside static text** -- a `match_indices` substring search
-   (`match_indices` yields byte offsets,
-   which are converted to the character offsets the `Placement` records use);
+    (`match_indices` yields byte offsets,
+    which are converted to the character offsets the `Placement` records use);
 3. **straddling** a boundary -- split between a rule and its neighbour,
-   recorded via `suffixes` / `prefixes`.
+    recorded via `suffixes` / `prefixes`.
 
 Anchoring constrains each in both directions:
 
 - A start-anchored run must satisfy `can_start_at(index)` *and* begin at offset 0 of its part;
-  inside a rule it must additionally be a **prefix** of the rule (`prefixes[0]`),
-  not merely contained --
-  otherwise `N*` would be placed in a rule matching `WARN`.
+    inside a rule it must additionally be a **prefix** of the rule (`prefixes[0]`),
+    not merely contained --
+    otherwise `N*` would be placed in a rule matching `WARN`.
 - The end is the mirror image, via `suffixes[len]` and `can_end_at`.
 - Anchored at **both** ends, a rule must match the run *exactly*, with nothing around it.
 
@@ -345,23 +345,23 @@ because they mean different things --
 this is `symbolic_value_of`'s `static_len` parameter:
 
 - A **rule** may emit text of its own around the query's characters,
-  so it is padded wherever the query permits:
-  suppressed where the run continues into a neighbouring part,
-  and where the query anchors the run to that end of the message.
+    so it is padded wherever the query permits:
+    suppressed where the run continues into a neighbouring part,
+    and where the query anchors the run to that end of the message.
 - **Static text** is reproduced verbatim,
-  so its value must glob-match the part's text *exactly*.
-  Padding is decided by the piece offsets recorded in `Placement` --
-  a `*` stands for the characters of the part the run does not cover,
-  and appears if and only if there are some.
-  Anchoring and run continuation need no special case:
-  a run flowing in from the previous part necessarily begins at offset 0,
-  and one flowing out necessarily reaches the text's end.
+    so its value must glob-match the part's text *exactly*.
+    Padding is decided by the piece offsets recorded in `Placement` --
+    a `*` stands for the characters of the part the run does not cover,
+    and appears if and only if there are some.
+    Anchoring and run continuation need no special case:
+    a run flowing in from the previous part necessarily begins at offset 0,
+    and one flowing out necessarily reaches the text's end.
 
-  This is the opposite of the intuition that "static text must match verbatim,
-  so it is never padded".
-  Precisely *because* it is verbatim,
-  a value covering only part of it must be free to skip the rest;
-  see [Correctness](#correctness).
+    This is the opposite of the intuition that "static text must match verbatim,
+    so it is never padded".
+    Precisely *because* it is verbatim,
+    a value covering only part of it must be free to skip the rest;
+    see [Correctness](#correctness).
 
 Static text is reported whether or not the query constrains it,
 matching the engine and `search_by_name`'s output shape:
@@ -472,17 +472,17 @@ Two renderings then reconcile the engine's output with composition's,
 both applied only when the query is unanchored (`drop_trailing_unconstrained`):
 
 - **Trailing captures are dropped.**
-  Past the query's last literal character every rule reference is unconstrained
-  and would be reported as a bare `*`.
-  Composition omits exactly these.
-  Positional identity is read left to right, so trimming the tail is safe --
-  a *leading* or *interior* vacuous capture is always kept,
-  since its position is what tells two references to one rule apart.
+    Past the query's last literal character every rule reference is unconstrained
+    and would be reported as a bare `*`.
+    Composition omits exactly these.
+    Positional identity is read left to right, so trimming the tail is safe --
+    a *leading* or *interior* vacuous capture is always kept,
+    since its position is what tells two references to one rule apart.
 - **Trailing static text is kept, and given a `*`.**
-  Unlike a capture it is not vacuous: it names text the message still contains.
-  A bare `'a'` for a shape continuing `a%word%b...`
-  would assert the message *ends* at `a`, which matches nothing;
-  see [Satisfiability of static values](#correctness).
+    Unlike a capture it is not vacuous: it names text the message still contains.
+    A bare `'a'` for a shape continuing `a%word%b...`
+    would assert the message *ends* at `a`, which matches nothing;
+    see [Satisfiability of static values](#correctness).
 
 The result is sorted, deduplicated,
 and `dedup_covered_interpretations` drops interpretations another already covers.
@@ -549,24 +549,24 @@ results.
 Four subtleties, all learned the hard way:
 
 - **It is the *last* run that bounds the reach**, not the union over all runs.
-  A composition lays its runs down left to right,
-  so an earlier run that *could* sit late in the shape
-  never does in a composition that also places the runs after it.
-  Taking the union truncates far less --
-  on the HDFS corpus it trimmed 377 parts to 375, i.e. not at all.
+    A composition lays its runs down left to right,
+    so an earlier run that *could* sit late in the shape
+    never does in a composition that also places the runs after it.
+    Taking the union truncates far less --
+    on the HDFS corpus it trimmed 377 parts to 375, i.e. not at all.
 - **Only the tail may be dropped.**
-  The head must be kept verbatim: the query's leading wildcard still has to traverse it.
-  Replacing the elided region with `.*` is **not** equivalent --
-  `.*` is a superset of the text it stands for,
-  so it lets runs straddle where the real static text forbids it
-  and invents interpretations the full shape does not have.
+    The head must be kept verbatim: the query's leading wildcard still has to traverse it.
+    Replacing the elided region with `.*` is **not** equivalent --
+    `.*` is a superset of the text it stands for,
+    so it lets runs straddle where the real static text forbids it
+    and invents interpretations the full shape does not have.
 - **Never truncate when end-anchored.**
-  The truncated parts are precisely the ones an end-anchored query still has to match.
-  `truncated_automata` returns `None` in that case.
+    The truncated parts are precisely the ones an end-anchored query still has to match.
+    `truncated_automata` returns `None` in that case.
 - **A dropped tail containing static text must still be reported**, as a trailing `'*'`,
-  because the full shape would have reported it.
-  `TruncatedShape::dropped_static` carries that fact to the rendering,
-  where the wildcard is merged into the final static sub-query if there already is one.
+    because the full shape would have reported it.
+    `TruncatedShape::dropped_static` carries that fact to the rendering,
+    where the wildcard is merged into the final static sub-query if there already is one.
 
 `PlacementTable` is therefore computed even for shapes composition will not answer,
 purely so the engine fallback can truncate.
@@ -578,51 +578,51 @@ rather than computing it.
 The properties the implementation must preserve, and where they are pinned:
 
 - **Soundness of rejection.**
-  A shape the rejection tier discards must produce no engine match.
-  A rejection must never drop a real result.
-  This is why every candidate cap that cannot be exhausted completely
-  must return "no conclusion" rather than an empty placement set;
-  see [Budgets](#budgets).
+    A shape the rejection tier discards must produce no engine match.
+    A rejection must never drop a real result.
+    This is why every candidate cap that cannot be exhausted completely
+    must return "no conclusion" rather than an empty placement set;
+    see [Budgets](#budgets).
 - **Containment.**
-  Where a decomposition is produced, it must cover every capture the engine reports --
-  a superset.
-  It is deliberately not an equality, because placeholders are over-approximated.
+    Where a decomposition is produced, it must cover every capture the engine reports --
+    a superset.
+    It is deliberately not an equality, because variables are over-approximated.
 - **Transparency.**
-  `search_by_log_shapes` must return exactly what the engine alone would.
-  This is what the differential test asserts, comparing rendered structures as sets.
+    `search_by_log_shapes` must return exactly what the engine alone would.
+    This is what the differential test asserts, comparing rendered structures as sets.
 - **Truncation transparency.**
-  A truncated automaton must give the same interpretations as the full one.
+    A truncated automaton must give the same interpretations as the full one.
 - **Invariant.**
-  Every literal character of the query appears in the result, in order,
-  however it was split between static text and rules;
-  a wildcard appears exactly where the query had one.
+    Every literal character of the query appears in the result, in order,
+    however it was split between static text and rules;
+    a wildcard appears exactly where the query had one.
 - **Normal form.**
-  No value carries adjacent wildcards, and no two static sub-queries are adjacent.
-  Both are asserted by `Interpretation::invariants`.
-  The first is not cosmetic: [`SubQuery::covers`] is reflexive and transitive only without `**`,
-  so dedup would silently misbehave on a value carrying it.
-  See [Covering](#covering).
+    No value carries adjacent wildcards, and no two static sub-queries are adjacent.
+    Both are asserted by `Interpretation::invariants`.
+    The first is not cosmetic: [`SubQuery::covers`] is reflexive and transitive only without `**`,
+    so dedup would silently misbehave on a value carrying it.
+    See [Covering](#covering).
 - **Satisfiability of static values.**
-  A static sub-query's value must glob-match its shape part's text exactly.
-  Reporting `'*ab'` for the run `ab` inside `abcdef` names the right characters
-  but asserts the text *ends* in `ab`, which is false and matches nothing.
-  A run covering only part of a stretch is therefore padded on both sides;
-  see [Rendering](#rendering) for how the offsets decide it.
-  Pinned by `static_sub_query_values_are_satisfiable` --
-  the structural comparison cannot see this,
-  because stripping wildcards is blind to where they sit.
+    A static sub-query's value must glob-match its shape part's text exactly.
+    Reporting `'*ab'` for the run `ab` inside `abcdef` names the right characters
+    but asserts the text *ends* in `ab`, which is false and matches nothing.
+    A run covering only part of a stretch is therefore padded on both sides;
+    see [Rendering](#rendering) for how the offsets decide it.
+    Pinned by `static_sub_query_values_are_satisfiable` --
+    the structural comparison cannot see this,
+    because stripping wildcards is blind to where they sit.
 - **Support.**
-  A shape either is supported -- every placeholder defined and leaf --
-  or the call fails up front.
-  It never silently falls back to the engine for an unsupported shape,
-  because that would make the same query return answers in a different form
-  depending on the shape.
+    A shape either is supported -- every variable defined and leaf --
+    or the call fails up front.
+    It never silently falls back to the engine for an unsupported shape,
+    because that would make the same query return answers in a different form
+    depending on the shape.
 
 ### Testing
 
 | Test | What it pins |
 | --- | --- |
-| `tests/decompose_differential.rs` | Transparency and containment over 447 queries x 18 shapes, including end-anchored forms, nullable placeholders, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_sub_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
+| `tests/decompose_differential.rs` | Transparency and containment over 447 queries x 18 shapes, including end-anchored forms, nullable variables, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_sub_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
 | `tests/search_anchoring.rs` | The anchoring semantics through the public entry point, plus `decompose`/engine agreement. |
 | `tests/search_shape_support.rs` | Which shapes are supported, pure-static handling, and the panic contract for unsupported shapes. |
 | `tests/shape_narrowing.rs` | Truncation is transparent, and actually reduces state count. |
@@ -645,37 +645,37 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 | --- | --- | --- |
 | Runs | `O(Q)` | once per query |
 | RunFit | `O(rule size)` per distinct `(rule, run)` | cached, shape-independent |
-| 1 (`can_match`) | `O(placeholders + Q)` fast, `O(P x Q)` worst | bits only |
+| 1 (`can_match`) | `O(variables + Q)` fast, `O(P x Q)` worst | bits only |
 | 2 (`compose`) | `O(R x positions x placements)` | plus enumeration, budgeted |
 | 3 (engine) | `O(shape NFA x query NFA)` | shape NFA truncated to the last reachable part when unanchored |
 
 ### Known Limitations
 
 - **`RunFit` re-simulates the rule per split point.**
-  For each split `k` of a run it asks whether the rule can end with `run[..k]`
-  / begin with `run[k..]`,
-  which is one automaton intersection per `k`
-  (`RunFit::compute`, `src/search/decompose/run_fit.rs`).
-  A single dynamic program over all substrings of the run would answer every split in one pass.
-  This is the largest remaining constant factor in tier 2;
-  correctness does not depend on it.
+    For each split `k` of a run it asks whether the rule can end with `run[..k]`
+    / begin with `run[k..]`,
+    which is one automaton intersection per `k`
+    (`RunFit::compute`, `src/search/decompose/run_fit.rs`).
+    A single dynamic program over all substrings of the run would answer every split in one pass.
+    This is the largest remaining constant factor in tier 2;
+    correctness does not depend on it.
 - **The engine fallback can abort on pathological input.**
-  `compute_paths` enforces `PATH_TIMEOUT_MILLIS` (2 s) and then calls `todo!()`
-  (`src/nfa/search_decomposition.rs`),
-  i.e. it panics rather than returning an error or degrading.
-  This predates the decomposition work
-  and is only reachable when tier 1 and tier 2 both decline,
-  which the tier-2 composition budget makes rare;
-  it is still a live crash for an input that gets there.
+    `compute_paths` enforces `PATH_TIMEOUT_MILLIS` (2 s) and then calls `todo!()`
+    (`src/nfa/search_decomposition.rs`),
+    i.e. it panics rather than returning an error or degrading.
+    This predates the decomposition work
+    and is only reachable when tier 1 and tier 2 both decline,
+    which the tier-2 composition budget makes rare;
+    it is still a live crash for an input that gets there.
 
 ### Related Code
 
 - `src/search.rs` -- the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
-  `SubQuery::covers` and `dedup_covered_interpretations`.
-- `src/search/decompose/shape.rs` -- `ShapeModel`, `Placeholder`, anchoring helpers.
+    `SubQuery::covers` and `dedup_covered_interpretations`.
+- `src/search/decompose/shape.rs` -- `ShapeModel`, `Variable`, anchoring helpers.
 - `src/search/decompose/align.rs` -- the reachability DP and its fast path.
 - `src/search/decompose/placement.rs` -- `Run`, `Placement`, `PlacementTable`,
-  `last_reachable_part`, composition DP.
+    `last_reachable_part`, composition DP.
 - `src/search/decompose/compose.rs` -- composition enumeration and rendering.
 - `src/search/decompose/run_fit.rs` -- per-rule run simulation and caches.
 - `src/search/decompose/cache.rs` -- `ShapeModelCache`.
@@ -693,6 +693,7 @@ Tests: `tests/search_anchoring.rs`, `tests/search_shape_support.rs`, `tests/shap
 [shape-model-cache]: ../src/search/decompose/cache.rs
 [charset]: ../src/search/decompose.rs
 [decompose]: ../src/search/decompose.rs
+[engine]: ../src/nfa/search_decomposition.rs
 [placement-compute]: ../src/search/decompose/placement.rs
 [compose]: ../src/search/decompose/compose.rs
 [to-interpretation]: ../src/search/decompose/compose.rs
