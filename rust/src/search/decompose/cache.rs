@@ -1,6 +1,6 @@
 //! A cache of [`ShapeModel`]s, keyed by log shape.
 //!
-//! Building a model walks the whole shape and resolves every placeholder against the spec.
+//! Building a model walks the whole shape and resolves every variable against the spec.
 //! Shapes are long (thousands of characters is normal),
 //! and a caller typically searches the same set of shapes repeatedly,
 //! so rebuilding per query dominates the cost of [`crate::search::decompose`].

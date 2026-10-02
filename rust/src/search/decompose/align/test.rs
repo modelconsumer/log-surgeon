@@ -88,9 +88,9 @@ fn static_text_must_match_verbatim() {
 }
 
 #[test]
-fn placeholder_charset_rejects_foreign_characters() {
+fn variable_charset_rejects_foreign_characters() {
 	let spec: ParsingSpec = test_spec();
-	// A digit-only placeholder cannot produce letters, and no static text supplies them either.
+	// A digit-only variable cannot produce letters, and no static text supplies them either.
 	assert!(is_rejected(&align_query(&spec, "id=%digits%", "*id=abc*")));
 	assert!(!is_rejected(&align_query(&spec, "id=%digits%", "*id=123*")));
 }
@@ -109,7 +109,7 @@ fn fixed_text_is_decomposed_into_static_and_capture() {
 }
 
 #[test]
-fn capture_spanning_a_whole_placeholder() {
+fn capture_spanning_a_whole_variable() {
 	let spec: ParsingSpec = test_spec();
 	let outcome: Outcome = align_query(&spec, "%level% ok", "INFO ok");
 	assert!(
@@ -120,7 +120,7 @@ fn capture_spanning_a_whole_placeholder() {
 }
 
 #[test]
-fn text_is_split_across_static_and_placeholder() {
+fn text_is_split_across_static_and_variable() {
 	let spec: ParsingSpec = test_spec();
 	// `abc` must be split: `a` from static text, `bc` captured by the rule.
 	let outcome: Outcome = align_query(&spec, "a%word%", "abc*");
@@ -132,9 +132,9 @@ fn text_is_split_across_static_and_placeholder() {
 }
 
 #[test]
-fn contiguity_is_enforced_across_a_placeholder() {
+fn contiguity_is_enforced_across_a_variable() {
 	let spec: ParsingSpec = test_spec();
-	// `a` and `b` are both producible, but `axb` requires the digit-only placeholder to emit `x`.
+	// `a` and `b` are both producible, but `axb` requires the digit-only variable to emit `x`.
 	assert!(is_rejected(&align_query(&spec, "a%digits%b", "*axb*")));
 	// With a digit between, it aligns.
 	assert!(!is_rejected(&align_query(&spec, "a%digits%b", "*a1b*")));
@@ -183,7 +183,7 @@ fn end_anchoring_requires_consuming_the_shape() {
 }
 
 #[test]
-fn wildcard_only_placeholder_is_not_reported_as_a_capture() {
+fn wildcard_only_variable_is_not_reported_as_a_capture() {
 	let spec: ParsingSpec = test_spec();
 	let outcome: Outcome = align_query(&spec, "a%word%b", "a*b*");
 	// A capture whose contents are only wildcards says nothing about the rule's value,

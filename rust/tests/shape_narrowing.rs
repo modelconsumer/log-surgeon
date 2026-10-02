@@ -1,6 +1,6 @@
 //! Truncating a shape's automaton must not change what the engine reports.
 //!
-//! Real log shapes carry very long tails of static text while their placeholders cluster near the
+//! Real log shapes carry very long tails of static text while their variables cluster near the
 //! front,
 //! and [`log_surgeon::parsing_spec::ParsingSpec::automata_for_fragments`] emits a state per
 //! literal character.
@@ -71,7 +71,7 @@ fn last_reachable_for(
 	table.last_reachable_part()
 }
 
-/// A shape whose placeholders sit at the front, followed by a long static tail --
+/// A shape whose variables sit at the front, followed by a long static tail --
 /// the corpus's shape.
 fn long_tailed_shape(tail_length: usize) -> String {
 	format!("%level% %word%: {}", "x".repeat(tail_length))
@@ -171,7 +171,7 @@ fn truncation_is_transparent() {
 			let truncated: Tnfa = spec.automata_for_fragments(&fragments).unwrap();
 			let dropped_static: bool = model.parts[(end + 1)..]
 				.iter()
-				.any(|part| !part.is_placeholder());
+				.any(|part| !part.is_variable());
 			let actual: Vec<Interpretation> =
 				query.interpretations_for_automata(&spec, &truncated, dropped_static);
 
@@ -224,7 +224,7 @@ fn long_tail_is_truncated_away() {
 	// And the answer must still be the same.
 	let dropped_static: bool = model.parts[(end + 1)..]
 		.iter()
-		.any(|part| !part.is_placeholder());
+		.any(|part| !part.is_variable());
 	let expected: Vec<Interpretation> =
 		query.interpretations_for_log_shape_via_engine(&spec, &shape);
 	let actual: Vec<Interpretation> =

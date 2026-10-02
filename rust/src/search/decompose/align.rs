@@ -1,5 +1,5 @@
 //! Aligns a query's fixed text against a [`ShapeModel`],
-//! decomposing it into the shape's static text and captures of the shape's placeholders.
+//! decomposing it into the shape's static text and captures of the shape's variables.
 //!
 //! # The model
 //!
@@ -8,7 +8,7 @@
 //! A query matches when its symbols consume such a message (a *prefix* of it,
 //! unless the query is anchored at the end).
 //!
-//! The shape is flattened into [`Atom`]s -- one per static character, one per placeholder --
+//! The shape is flattened into [`Atom`]s -- one per static character, one per variable --
 //! so a position in the walk is just a pair of indices:
 //! how much of the query has been consumed, and how much of the shape has been produced.
 //!
@@ -35,7 +35,7 @@
 //!
 //! # Soundness
 //!
-//! Placeholders are approximated by a [`crate::search::decompose::Charset`],
+//! Variables are approximated by a [`crate::search::decompose::Charset`],
 //! and are permitted to match the empty string
 //! (the model does not know a rule's minimum length).
 //! Both widen the set of accepted alignments,
@@ -48,7 +48,7 @@ mod test;
 
 use crate::parsing_spec::ResolvedCapture;
 use crate::search::SymbolicChar;
-use crate::search::decompose::Placeholder;
+use crate::search::decompose::Variable;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapePart;
 
@@ -63,7 +63,7 @@ pub struct Alignment {
 pub enum Fragment {
 	/// Query text matched against the shape's static text, and the wildcards between.
 	Static(Vec<SymbolicChar>),
-	/// Query text matched against a placeholder, i.e. a capture of that rule.
+	/// Query text matched against a variable, i.e. a capture of that rule.
 	Capture {
 		capture: ResolvedCapture,
 		contents: Vec<SymbolicChar>,
@@ -112,7 +112,7 @@ enum Atom<'a> {
 	/// A single static character, which a match must reproduce verbatim.
 	Char(char),
 	/// A rule reference, standing for any string the rule can match.
-	Placeholder(&'a Placeholder),
+	Variable(&'a Variable),
 }
 
 impl ShapeModel {
@@ -122,7 +122,7 @@ impl ShapeModel {
 		for part in self.parts.iter() {
 			match part {
 				ShapePart::Static(text) => atoms.extend(text.chars().map(Atom::Char)),
-				ShapePart::Placeholder(placeholder) => atoms.push(Atom::Placeholder(placeholder)),
+				ShapePart::Variable(variable) => atoms.push(Atom::Variable(variable)),
 			}
 		}
 		atoms
@@ -167,18 +167,18 @@ pub fn can_match(model: &ShapeModel, symbols: &[SymbolicChar], anchored_at_end: 
 /// A cheap *sufficient* condition for "not ruled out", used to skip the full walk.
 ///
 /// If the query may float freely (it starts with a wildcard)
-/// and some single placeholder's charset admits every literal the query contains,
-/// then as far as this model knows that placeholder alone could emit the entire query text,
+/// and some single variable's charset admits every literal the query contains,
+/// then as far as this model knows that variable alone could emit the entire query text,
 /// so the shape cannot be rejected.
 ///
-/// When the query is anchored at the end the placeholder must additionally be able to be *last*,
+/// When the query is anchored at the end the variable must additionally be able to be *last*,
 /// since the query has to consume the message through to its end;
-/// a placeholder with only nullable parts after it qualifies.
+/// a variable with only nullable parts after it qualifies.
 ///
 /// This only ever returns `true`, i.e. only ever causes a shape to be *kept*,
 /// so it cannot make the prefilter unsound.
-/// It matters because it is `O(placeholders + query)` against the walk's `O(atoms x query)`:
-/// real log shapes are long (thousands of characters) and usually contain a permissive placeholder,
+/// It matters because it is `O(variables + query)` against the walk's `O(atoms x query)`:
+/// real log shapes are long (thousands of characters) and usually contain a permissive variable,
 /// so this is the common case,
 /// and paying for the full table there is what made the prefilter cost more than it saved.
 fn is_obviously_not_ruled_out(
@@ -191,16 +191,16 @@ fn is_obviously_not_ruled_out(
 	}
 
 	model.parts.iter().enumerate().any(|(index, part)| {
-		let ShapePart::Placeholder(placeholder) = part else {
+		let ShapePart::Variable(variable) = part else {
 			return false;
 		};
 		// The query must be able to finish here, or it could not reach the end of the message.
 		if anchored_at_end && !model.can_end_at(index) {
 			return false;
 		}
-		placeholder.charset.is_universal()
+		variable.charset.is_universal()
 			|| symbols.iter().all(|symbol| match symbol {
-				SymbolicChar::Literal(c) => placeholder.charset.contains(*c),
+				SymbolicChar::Literal(c) => variable.charset.contains(*c),
 				SymbolicChar::GlobStar => true,
 			})
 	})
@@ -275,11 +275,11 @@ impl<'a> Solver<'a> {
 	///
 	/// Only relevant when anchored at the end. Remaining static characters must be produced,
 	/// so they block acceptance;
-	/// a placeholder is conservatively assumed to be able to match the empty string.
+	/// a variable is conservatively assumed to be able to match the empty string.
 	fn can_stop(&self, atom: usize) -> bool {
 		self.atoms[atom..]
 			.iter()
-			.all(|atom| matches!(atom, Atom::Placeholder(_)))
+			.all(|atom| matches!(atom, Atom::Variable(_)))
 	}
 
 	/// Whether the query is fully consumed and the shape may stop here.
@@ -287,16 +287,16 @@ impl<'a> Solver<'a> {
 		(query == self.symbols.len()) && (!self.anchored_at_end || self.can_stop(atom))
 	}
 
-	/// The longest block of query symbols, starting at `query`, that `placeholder` could emit.
+	/// The longest block of query symbols, starting at `query`, that `variable` could emit.
 	///
 	/// A wildcard stands for arbitrary rule output, so it never bounds the block;
 	/// a literal does unless the rule's charset admits it.
-	fn max_capture_length(&self, placeholder: &Placeholder, query: usize) -> usize {
+	fn max_capture_length(&self, variable: &Variable, query: usize) -> usize {
 		let mut length: usize = 0;
 		while let Some(&symbol) = self.symbols.get(query + length) {
 			match symbol {
 				SymbolicChar::Literal(c) => {
-					if !placeholder.charset.contains(c) {
+					if !variable.charset.contains(c) {
 						break;
 					}
 				},
@@ -335,8 +335,8 @@ impl<'a> Solver<'a> {
 							SymbolicChar::Literal(c) => (c == *expected) && next[query + 1],
 							SymbolicChar::GlobStar => next[query] || current[query + 1],
 						},
-						Some(Atom::Placeholder(placeholder)) => {
-							let longest: usize = self.max_capture_length(placeholder, query);
+						Some(Atom::Variable(variable)) => {
+							let longest: usize = self.max_capture_length(variable, query);
 							(0..=longest).any(|length| next[query + length])
 						},
 					}
@@ -400,9 +400,9 @@ impl<'a> Solver<'a> {
 								|| reachable[self.index(query + 1, atom)]
 						},
 					},
-					Atom::Placeholder(placeholder) => {
-						let longest: usize = self.max_capture_length(placeholder, query);
-						// `length == 0` means the placeholder's output
+					Atom::Variable(variable) => {
+						let longest: usize = self.max_capture_length(variable, query);
+						// `length == 0` means the variable's output
 					// is not described by the query.
 						(0..=longest).any(|length| reachable[self.index(query + length, atom + 1)])
 					},
@@ -487,23 +487,23 @@ impl<'a> Solver<'a> {
 								);
 							},
 						},
-						Some(Atom::Placeholder(placeholder)) => {
-							let longest: usize = self.max_capture_length(placeholder, query);
+						Some(Atom::Variable(variable)) => {
+							let longest: usize = self.max_capture_length(variable, query);
 							for length in 0..=longest {
 								let consumed: &[SymbolicChar] =
 									&self.symbols[query..(query + length)];
 								let prepend: Prepend<'_> = if consumed.is_empty() {
-									// Nothing attributed to this placeholder,
+									// Nothing attributed to this variable,
 								// so no capture is emitted.
 									Prepend::Nothing
 								} else if consumed.iter().all(SymbolicChar::is_wildcard) {
 								// A capture of only wildcards says nothing about
-								// the placeholder's value;
+								// the variable's value;
 								// record an unconstrained gap rather than a vacuous
 								// "this rule matched" result.
 									Prepend::Symbol(SymbolicChar::GlobStar)
 								} else {
-									Prepend::Capture(placeholder, consumed)
+									Prepend::Capture(variable, consumed)
 								};
 								self.extend_from(
 									&mut collected,
@@ -577,9 +577,9 @@ impl<'a> Solver<'a> {
 					prepend_symbol(&mut fragments, symbol);
 					collected.push(fragments);
 				},
-				Prepend::Capture(placeholder, contents) => {
+				Prepend::Capture(variable, contents) => {
 					// One decomposition per alternative this name resolves to.
-					for capture in placeholder.alternatives.iter() {
+					for capture in variable.alternatives.iter() {
 						let mut fragments: Vec<Fragment> = Vec::with_capacity(tail.len() + 1);
 						fragments.push(Fragment::Capture {
 							capture: capture.clone(),
@@ -601,8 +601,8 @@ enum Prepend<'a> {
 	Nothing,
 	/// A single symbol of static text (or an unconstrained gap).
 	Symbol(SymbolicChar),
-	/// A capture of `contents` by one of the placeholder's alternatives.
-	Capture(&'a Placeholder, &'a [SymbolicChar]),
+	/// A capture of `contents` by one of the variable's alternatives.
+	Capture(&'a Variable, &'a [SymbolicChar]),
 }
 
 /// Prepends `symbol` to `fragments`, merging into a leading static fragment.

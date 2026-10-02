@@ -13,7 +13,7 @@
 //!    This tier is a true prefilter: it only ever answers "no" or "maybe".
 //!    Its soundness rests on [`Charset`] being a **superset**
 //!    of the characters a rule can emit,
-//!    and on placeholders being allowed to match empty; both only widen what is
+//!    and on variables being allowed to match empty; both only widen what is
 //!    accepted, so a rejection is never wrong. For the same reason its *decompositions* are not
 //!    usable as a result -- only the yes/no answer is.
 //! 2. **Composition** ([`placement`] then [`compose`]) --
@@ -61,7 +61,7 @@ pub use placement::can_compose;
 pub use placement::runs_of;
 pub use run_fit::RunFit;
 pub use run_fit::RunFitCache;
-pub use shape::Placeholder;
+pub use shape::Variable;
 pub use shape::ShapeModel;
 pub use shape::ShapePart;
 

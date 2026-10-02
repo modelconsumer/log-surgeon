@@ -449,7 +449,7 @@ impl<'a> SearchStringView<'a> {
 	///    budget). This is the slow path that the other two exist to avoid.
 	///
 	/// Note the [`crate::search::decompose::align`] decompositions are *not* usable as a result:
-	/// placeholders there are over-approximated
+	/// variables there are over-approximated
 	/// (notably they may match the empty string,
 	/// which a rule like `[a-z]+` cannot),
 	/// so they form a superset of the engine's interpretations.
@@ -509,7 +509,7 @@ impl<'a> SearchStringView<'a> {
 	/// The shape's automaton, truncated to the parts the query can actually reach.
 	///
 	/// Real shapes carry very long tails of static text -- tens of thousands of characters --
-	/// while their placeholders cluster near the front,
+	/// while their variables cluster near the front,
 	/// and one state is emitted per literal character.
 	/// A query that is not anchored at the end ends in a wildcard,
 	/// and that wildcard consumes everything past its last literal run,
@@ -562,7 +562,7 @@ impl<'a> SearchStringView<'a> {
 		// those are unconstrained captures, which are omitted either way.
 		let dropped_static: bool = model.parts[(end + 1)..]
 			.iter()
-			.any(|part| !part.is_placeholder());
+			.any(|part| !part.is_variable());
 
 		Some(TruncatedShape {
 			automata: truncated,

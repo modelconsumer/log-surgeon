@@ -23,7 +23,7 @@ fn test_spec() -> ParsingSpec {
 		("digits", "[0-9]+"),
 		// The rule cannot match empty (the spec builder forbids that),
 		// but the `pad` capture can,
-		// so `%optional.pad%` is a placeholder that can stand aside entirely.
+		// so `%optional.pad%` is a variable that can stand aside entirely.
 		("optional", r"<(?<pad>[!?]*)>"),
 	] {
 		builder.add_rule(name, pattern).unwrap();
@@ -126,9 +126,9 @@ fn bare_query_is_anchored_at_both_ends() {
 	assert!(matches(&spec, "ab*", "abc"), "`ab*` is a prefix match");
 }
 
-/// An end-anchored query may finish before a trailing placeholder that can produce nothing.
+/// An end-anchored query may finish before a trailing variable that can produce nothing.
 #[test]
-fn end_anchoring_allows_a_trailing_nullable_placeholder() {
+fn end_anchoring_allows_a_trailing_nullable_variable() {
 	let spec: ParsingSpec = test_spec();
 	let shape: &str = "msg=%word%%optional.pad%";
 
@@ -136,33 +136,33 @@ fn end_anchoring_allows_a_trailing_nullable_placeholder() {
 	let results: Vec<Interpretation> = search(&spec, "*hello", shape);
 	assert!(
 		!results.is_empty(),
-		"the trailing placeholder can be empty, so the message can end with `hello`"
+		"the trailing variable can be empty, so the message can end with `hello`"
 	);
 
 	// And the engine reports that precisely, as an *empty* capture rather than a `*`.
 	let rendered: Vec<String> = results.iter().map(render).collect::<Vec<_>>();
 	assert!(
 		rendered.iter().any(|r| r.contains("<optional.pad=>")),
-		"expected an empty capture pinning the placeholder to nothing, got {rendered:?}"
+		"expected an empty capture pinning the variable to nothing, got {rendered:?}"
 	);
 }
 
-/// A start-anchored query may begin after a leading placeholder that can produce nothing.
+/// A start-anchored query may begin after a leading variable that can produce nothing.
 #[test]
-fn start_anchoring_allows_a_leading_nullable_placeholder() {
+fn start_anchoring_allows_a_leading_nullable_variable() {
 	let spec: ParsingSpec = test_spec();
 	let shape: &str = "%optional.pad%%word% tail";
 
 	assert!(
 		matches(&spec, "hello*", shape),
-		"the leading placeholder can be empty, so the message can start with `hello`"
+		"the leading variable can be empty, so the message can start with `hello`"
 	);
 }
 
-/// A non-nullable trailing placeholder must still emit something,
+/// A non-nullable trailing variable must still emit something,
 /// so the query cannot end before it.
 #[test]
-fn end_anchoring_rejects_a_trailing_non_nullable_placeholder() {
+fn end_anchoring_rejects_a_trailing_non_nullable_variable() {
 	let spec: ParsingSpec = test_spec();
 
 	assert!(

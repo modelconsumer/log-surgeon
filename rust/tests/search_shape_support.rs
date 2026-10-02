@@ -1,12 +1,12 @@
 //! Which shapes `search_by_log_shapes` supports, and what it does with the rest.
 //!
-//! A shape is **supported** when every placeholder names a rule the spec defines and that rule is a
+//! A shape is **supported** when every variable names a rule the spec defines and that rule is a
 //! leaf.
 //! Unsupported shapes are a programming error, not a condition to recover from,
 //! so the search panics with a message naming the shape and rule
 //! rather than silently answering differently from the engine.
 //!
-//! A shape with *no* placeholders (pure static text) is supported:
+//! A shape with *no* variables (pure static text) is supported:
 //! its text is exactly what a query must reproduce,
 //! which placement and composition already handle.
 
@@ -133,12 +133,12 @@ fn leaf_capture_reference_is_supported() {
 	);
 }
 
-/// A placeholder naming a rule with nested captures is unsupported:
+/// A variable naming a rule with nested captures is unsupported:
 /// it would have to report the inner captures,
 /// which the decomposition does not carry.
 #[test]
 #[should_panic(expected = "references non-leaf rule")]
-fn non_leaf_placeholder_panics() {
+fn non_leaf_variable_panics() {
 	let spec: ParsingSpec = test_spec();
 	let _ = search(&spec, "*123*", "%blockID%");
 }
@@ -172,10 +172,10 @@ fn non_leaf_name_is_still_supported_by_search_by_name() {
 	assert!(!query.search_by_name(&spec, "blockID.num").is_empty());
 }
 
-/// A placeholder naming a rule the spec does not define is unsupported.
+/// A variable naming a rule the spec does not define is unsupported.
 #[test]
 #[should_panic(expected = "references undefined rule")]
-fn undefined_placeholder_panics() {
+fn undefined_variable_panics() {
 	let spec: ParsingSpec = test_spec();
 	let _ = search(&spec, "*x*", "%nonexistent%");
 }

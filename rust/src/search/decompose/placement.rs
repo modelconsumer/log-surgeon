@@ -276,8 +276,8 @@ impl PlacementTable {
 							spec, model, run, index, text, fits,
 						)?);
 					},
-					ShapePart::Placeholder(placeholder) => {
-						let fit: Arc<RunFit> = fits.get(spec, &placeholder.name, &run.text);
+					ShapePart::Variable(variable) => {
+						let fit: Arc<RunFit> = fits.get(spec, &variable.name, &run.text);
 
 						// Anchoring demands more than containment. A start-anchored run must be
 						// the first thing the message emits, so every earlier part must be able to
@@ -300,7 +300,7 @@ impl PlacementTable {
 								model.can_start_at(index)
 									&& model.can_end_at(index) && fits.matches_exactly(
 									spec,
-									&placeholder.name,
+									&variable.name,
 									&run.text,
 								)
 							},
@@ -437,7 +437,7 @@ impl PlacementTable {
 				// otherwise `NIn*` would be split as `level=N` even though no level is just `N`.
 			let fits_here: bool = if run.anchored_start {
 				model.parts[index]
-					.placeholder_name()
+					.variable_name()
 					.is_some_and(|name| fits.matches_exactly(spec, name, &head))
 			} else {
 				fit.suffixes.get(split).copied().unwrap_or(false)
@@ -513,7 +513,7 @@ impl PlacementTable {
 			// and must leave something for the following parts,
 			// so there are `available - 1` candidates; if that exceeds the cap,
 			// not all of them are tried and no conclusion may be drawn.
-			Some(ShapePart::Placeholder(_)) => {
+			Some(ShapePart::Variable(_)) => {
 				if (available - 1) > MAX_UNPINNED_SPLITS {
 					info!(
 						"falling back to the engine: a run spans back-to-back rules with {} characters \
@@ -641,7 +641,7 @@ impl PlacementTable {
 					fits,
 				)
 			},
-			ShapePart::Placeholder(placeholder) => {
+			ShapePart::Variable(variable) => {
 				let mut results: Vec<Placement> = Vec::new();
 
 				// The rule finishes the run: it can begin with everything that remains.
@@ -649,10 +649,10 @@ impl PlacementTable {
 					// `prefixes[consumed]` only says the rule can *begin* with the remainder,
 					// leaving it free to emit more afterwards. An end-anchored run forbids that,
 					// so the rule must match the remainder exactly and nothing may follow it.
-				let fit: Arc<RunFit> = fits.get(spec, &placeholder.name, &run.text);
+				let fit: Arc<RunFit> = fits.get(spec, &variable.name, &run.text);
 				let finishes_here: bool = if run.anchored_end {
 					model.can_end_at(part)
-						&& fits.matches_exactly(spec, &placeholder.name, &remaining)
+						&& fits.matches_exactly(spec, &variable.name, &remaining)
 				} else {
 					fit.prefixes.get(consumed).copied().unwrap_or(false)
 				};
@@ -694,7 +694,7 @@ impl PlacementTable {
 					let middle: String = characters[consumed..(consumed + take)]
 						.iter()
 						.collect::<String>();
-					if !fits.matches_exactly(spec, &placeholder.name, &middle) {
+					if !fits.matches_exactly(spec, &variable.name, &middle) {
 						continue;
 					}
 					let mut pieces: Vec<Piece> = pieces.clone();

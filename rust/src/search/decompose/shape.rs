@@ -1,18 +1,18 @@
 //! A coarse model of a log shape.
 //!
-//! A log shape is a sequence of static text and references to rules (placeholders).
+//! A log shape is a sequence of static text and references to rules (variables).
 //! [`ShapeModel`] keeps that structure,
-//! pairing each placeholder with a [`Charset`] bounding the characters the rule can emit,
+//! pairing each variable with a [`Charset`] bounding the characters the rule can emit,
 //! plus the sub-rule(s) needed to report a capture.
 //!
 //! The model is built from [`ParsingSpec::split_log_shape`],
 //! the same tokenizer [`ParsingSpec::automata_for_shape`] uses,
-//! so the model and the automaton can never disagree about where the placeholders are.
+//! so the model and the automaton can never disagree about where the variables are.
 //!
 //! # Preconditions
 //!
 //! A shape is expected to be *decomposable*:
-//! every placeholder must name a rule the spec defines,
+//! every variable must name a rule the spec defines,
 //! and every such rule must be a **leaf** (no nested captures).
 //! Both are asserted when the model is built,
 //! so callers never have to ask whether a shape can be decomposed -- the type says it can.
@@ -36,33 +36,33 @@ pub enum ShapePart {
 	/// Fixed text, which a match must reproduce verbatim.
 	Static(String),
 	/// A reference to a rule, standing for any string that rule can match.
-	Placeholder(Placeholder),
+	Variable(Variable),
 }
 
 impl ShapePart {
 	/// Whether this part is a rule reference.
 	#[must_use]
-	pub fn is_placeholder(&self) -> bool {
-		matches!(self, Self::Placeholder(_))
+	pub fn is_variable(&self) -> bool {
+		matches!(self, Self::Variable(_))
 	}
 
 	/// Whether this part can emit nothing at all.
 	///
 	/// Static text is never empty (the tokenizer does not emit empty fragments), so only a nullable
-	/// placeholder can.
+	/// variable can.
 	#[must_use]
 	pub fn can_be_empty(&self) -> bool {
 		match self {
-			Self::Placeholder(placeholder) => placeholder.can_match_empty,
+			Self::Variable(variable) => variable.can_match_empty,
 			Self::Static(text) => text.is_empty(),
 		}
 	}
 
 	/// The rule name this part references, if it is a reference at all.
 	#[must_use]
-	pub fn placeholder_name(&self) -> Option<&str> {
+	pub fn variable_name(&self) -> Option<&str> {
 		match self {
-			Self::Placeholder(placeholder) => Some(&placeholder.name),
+			Self::Variable(variable) => Some(&variable.name),
 			Self::Static(_) => None,
 		}
 	}
@@ -70,19 +70,19 @@ impl ShapePart {
 
 /// A rule reference in a log shape.
 #[derive(Clone, Debug)]
-pub struct Placeholder {
+pub struct Variable {
 	/// The name as written in the shape, e.g. `kv.key`.
 	pub name: String,
-	/// A superset of the characters any match of this placeholder can contain.
+	/// A superset of the characters any match of this variable can contain.
 	pub charset: Charset,
 	/// The alternatives this name resolves to, each with the capture to attribute a capture to.
 	///
 	/// A name can resolve to several rules (same name, different definitions), so a single
-	/// placeholder may be reported as any one of them.
+	/// variable may be reported as any one of them.
 	pub alternatives: Vec<ResolvedCapture>,
 	/// Whether some alternative can match the empty string.
 	///
-	/// A nullable placeholder can stand entirely aside,
+	/// A nullable variable can stand entirely aside,
 	/// so a part *before* it can still be the first thing a message emits,
 	/// and a part *after* it can still be the last.
 	/// Anchoring therefore cannot simply demand the first or last shape part;
@@ -92,7 +92,7 @@ pub struct Placeholder {
 
 /// A log shape, modelled as a sequence of [`ShapePart`]s.
 ///
-/// Every placeholder has been resolved and checked to be a leaf rule; see [`Self::new`].
+/// Every variable has been resolved and checked to be a leaf rule; see [`Self::new`].
 #[derive(Clone, Debug)]
 pub struct ShapeModel {
 	pub parts: Vec<ShapePart>,
@@ -103,7 +103,7 @@ impl ShapeModel {
 	///
 	/// # Panics
 	///
-	/// Panics if a placeholder names a rule the spec does not define,
+	/// Panics if a variable names a rule the spec does not define,
 	/// or names a rule with nested captures (i.e. one that is not a leaf).
 	/// Both make the shape unsupported for direct decomposition,
 	/// and continuing past them would silently produce a different answer than the engine --
@@ -121,7 +121,7 @@ impl ShapeModel {
 					parts.push(ShapePart::Static(text));
 				},
 				LogShapeFragment::Rule(name) => {
-					parts.push(ShapePart::Placeholder(Placeholder::new(spec, name, shape)));
+					parts.push(ShapePart::Variable(Variable::new(spec, name, shape)));
 				},
 			}
 		}
@@ -137,7 +137,7 @@ impl ShapeModel {
 	pub fn fragments_in(&self, start: usize, end: usize) -> Vec<LogShapeFragment> {
 		Vec::from_iter(self.parts[start..=end].iter().map(|part| match part {
 			ShapePart::Static(text) => LogShapeFragment::Text(text.clone()),
-			ShapePart::Placeholder(placeholder) => LogShapeFragment::Rule(placeholder.name.clone()),
+			ShapePart::Variable(variable) => LogShapeFragment::Rule(variable.name.clone()),
 		}))
 	}
 
@@ -145,7 +145,7 @@ impl ShapeModel {
 	///
 	/// True when every earlier part can emit nothing at all.
 	/// Static text is never empty -- the tokenizer does not produce empty fragments --
-	/// so only nullable placeholders can stand aside.
+	/// so only nullable variables can stand aside.
 	/// This is what a start-anchored run needs:
 	/// it must be the first thing in the message,
 	/// which does not require it to be in the first *part* if the parts before it can vanish.
@@ -162,22 +162,22 @@ impl ShapeModel {
 		self.parts[(part + 1)..].iter().all(ShapePart::can_be_empty)
 	}
 
-	/// The placeholders of this shape, in order.
-	pub fn placeholders(&self) -> impl Iterator<Item = &Placeholder> {
+	/// The variables of this shape, in order.
+	pub fn variables(&self) -> impl Iterator<Item = &Variable> {
 		self.parts.iter().filter_map(|part| match part {
-			ShapePart::Placeholder(placeholder) => Some(placeholder),
+			ShapePart::Variable(variable) => Some(variable),
 			ShapePart::Static(_) => None,
 		})
 	}
 
-	/// The number of placeholders.
+	/// The number of variables.
 	#[must_use]
-	pub fn num_placeholders(&self) -> usize {
-		self.placeholders().count()
+	pub fn num_variables(&self) -> usize {
+		self.variables().count()
 	}
 }
 
-impl Placeholder {
+impl Variable {
 	/// Resolves `name` against `spec`.
 	///
 	/// # Panics
@@ -200,7 +200,7 @@ impl Placeholder {
 			charset.add_regex(regex);
 			// Conservative in the direction that keeps anchoring sound:
 			// if *any* alternative is nullable,
-			// the placeholder is treated as able to stand aside.
+			// the variable is treated as able to stand aside.
 			can_match_empty |= regex.is_nullable().is_some();
 
 			assert!(

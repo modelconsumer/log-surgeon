@@ -11,7 +11,7 @@
 //! - **Containment**: where the rejection tier's `align` does produce a decomposition,
 //!   it must *cover* every capture the engine reports, i.e. be a superset.
 //!   It is deliberately not an equality:
-//!   placeholders are over-approximated (they may match the empty string, which `[a-z]+` cannot).
+//!   variables are over-approximated (they may match the empty string, which `[a-z]+` cannot).
 //!   This is why only `align`'s yes/no answer is used, never its decompositions.
 //! - **Transparency**: the public entry point must return exactly what the engine alone would.
 //! - **Satisfiability**: a static sub-query's value must actually be matchable by the shape's
@@ -46,7 +46,7 @@ fn test_spec() -> ParsingSpec {
 		// A *nullable capture*: the rule itself cannot match empty,
 		// (the spec builder rejects that),
 		// but `optional.pad` can.
-		// Referenced as `%optional.pad%` it is a placeholder that can stand aside,
+		// Referenced as `%optional.pad%` it is a variable that can stand aside,
 		// which is what makes anchoring interesting --
 		// a run can be last in the message without being in the last shape part.
 		("optional", r"<(?<pad>[!?]*)>"),
@@ -64,7 +64,7 @@ const SHAPES: &[&str] = &[
 	"hello %word% world",
 	"%word%",
 	"plain literal text",
-	// Pure-static shapes: no placeholders at all,
+	// Pure-static shapes: no variables at all,
 	// so decomposition must come entirely from the static text.
 	// These previously went to the engine.
 	"a static shape with no rules",
@@ -77,10 +77,10 @@ const SHAPES: &[&str] = &[
 	"a%word%b%digits%c",
 	"%level%%word%",
 	"100%% of %digits%",
-	// Trailing nullable placeholder: an end-anchored query can finish before it.
+	// Trailing nullable variable: an end-anchored query can finish before it.
 	"%word%%optional.pad%",
 	"id=%digits%%optional.pad%",
-	// Leading nullable placeholder: a start-anchored query can begin after it.
+	// Leading nullable variable: a start-anchored query can begin after it.
 	"%optional.pad%%word%",
 ];
 

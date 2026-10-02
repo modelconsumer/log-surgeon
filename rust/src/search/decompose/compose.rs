@@ -23,7 +23,7 @@
 //! [`Composition::to_interpretation`] renders that positionally:
 //! every rule reference up to the last constrained one contributes a sub-query,
 //! with unconstrained references appearing as a bare `*`. The position of a capture
-//! among those placeholders is what identifies which reference it is,
+//! among those variables is what identifies which reference it is,
 //! so `A%foo%B%foo%C` distinguishes its two `foo`s by whether a vacuous `foo=*`
 //! precedes the constrained one.
 //!
@@ -122,7 +122,7 @@ impl Composition {
 	///
 	/// Shape parts are emitted in order: static text as a static sub-query,
 	/// rule references as captures. A reference with no query text attributed to it
-	/// becomes a vacuous `*` capture, so a capture's position among the placeholders
+	/// becomes a vacuous `*` capture, so a capture's position among the variables
 	/// identifies which reference it is -- this is how two references to
 	/// one rule name are told apart.
 	///
@@ -161,8 +161,8 @@ impl Composition {
 				// A name can resolve to several rules, but they occupy the same position,
 				// so emitting more than one would duplicate the slot
 				// and break the positional correspondence.
-				ShapePart::Placeholder(placeholder) => {
-					if let Some(capture) = placeholder.alternatives.first() {
+				ShapePart::Variable(variable) => {
+					if let Some(capture) = variable.alternatives.first() {
 						sub_queries.push(SubQuery::new_rule(
 							capture.fully_qualified_name.clone(),
 							part.value,
@@ -193,7 +193,7 @@ impl Composition {
 		// The last static part. Trailing static text is still reported, as `*`,
 		// because that is where the query's implicit trailing wildcard applies.
 		let last_static: Option<usize> =
-			model.parts.iter().rposition(|part| !part.is_placeholder());
+			model.parts.iter().rposition(|part| !part.is_variable());
 
 		let Some(last_emitted) = last_constrained.max(last_static) else {
 			return Vec::new();
@@ -201,7 +201,7 @@ impl Composition {
 
 		// Every static part is reported, whether or not the query constrains it --
 		// an unconstrained one becomes the value `*`, matching the engine
-		// and `search_by_name`'s output shape. Placeholders are reported only
+		// and `search_by_name`'s output shape. Variables are reported only
 		// up to the last constrained part; beyond that they are unconstrained and omitted.
 		//
 		// Collecting first makes the *next* part's pieces available,
@@ -210,7 +210,7 @@ impl Composition {
 			.map(|part| (part, self.pieces_for(part)))
 			.filter(|&(part, pieces)| {
 				!pieces.is_empty()
-					|| !model.parts[part].is_placeholder()
+					|| !model.parts[part].is_variable()
 					|| Some(part) <= last_constrained
 			})
 			.collect::<Vec<_>>();
@@ -223,7 +223,7 @@ impl Composition {
 			// See `symbolic_value_of`.
 			let static_len: Option<usize> = match &model.parts[part] {
 				ShapePart::Static(text) => Some(text.chars().count()),
-				ShapePart::Placeholder(_) => None,
+				ShapePart::Variable(_) => None,
 			};
 
 			// The run holding the character emitted just before this part, if any.
@@ -254,15 +254,15 @@ impl Composition {
 		// - genuinely adjacent in the shape (`a%%b` escapes a `%` as text):
 		//   each value glob-matches its own text exactly,
 		//   so the concatenation glob-matches the concatenated text exactly;
-		// - separated by an omitted placeholder,
+		// - separated by an omitted variable,
 		//   which happens only past the last constrained part -- so the later part
 		//   has no attributed text and its value is a bare `*`,
-		//   which is exactly the wildcard the omitted placeholder's output requires.
+		//   which is exactly the wildcard the omitted variable's output requires.
 		let mut merged: Vec<RenderedPart> = Vec::with_capacity(rendered.len());
 		for part in rendered.into_iter() {
-			if !model.parts[part.part].is_placeholder()
+			if !model.parts[part.part].is_variable()
 				&& let Some(last) = merged.last_mut()
-				&& !model.parts[last.part].is_placeholder()
+				&& !model.parts[last.part].is_variable()
 			{
 				last.value =
 					condense_wildcards(last.value.iter().chain(part.value.iter()).cloned());
@@ -293,12 +293,12 @@ impl Composition {
 				.into_iter()
 				.filter_map(|rendered| {
 					match &model.parts[rendered.part] {
-						ShapePart::Placeholder(placeholder) if rendered.piece_count > 1 => {
+						ShapePart::Variable(variable) if rendered.piece_count > 1 => {
 							// `Display` escapes the characters a query treats specially,
 							// so the value round-trips through `SearchString::parse`
 							// as the literal text it stands for.
 							Some((
-								placeholder.name.clone(),
+								variable.name.clone(),
 								String::from_iter(rendered.value.iter().map(ToString::to_string)),
 							))
 						},
@@ -653,9 +653,9 @@ fn build_composition(model: &ShapeModel, table: &PlacementTable, choices: &[usiz
 
 	for (part, pieces) in by_part.into_iter() {
 		match &model.parts[part] {
-			ShapePart::Placeholder(placeholder) => captures.push(Capture {
+			ShapePart::Variable(variable) => captures.push(Capture {
 				part,
-				name: placeholder.name.clone(),
+				name: variable.name.clone(),
 				pieces,
 			}),
 			ShapePart::Static(_) => literals.push(Literal { part, pieces }),
