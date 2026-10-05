@@ -97,7 +97,7 @@ fn pure_static_matches_the_engine() {
 			let rendered = |xs: &[Interpretation]| {
 				xs.iter()
 					.map(|x| {
-						x.sub_queries
+						x.leaf_queries
 							.iter()
 							.map(|sq| sq.string_value.replace('*', ""))
 							.collect::<Vec<_>>()
@@ -126,7 +126,7 @@ fn leaf_capture_reference_is_supported() {
 	assert!(!results.is_empty(), "the leaf capture can hold `123`");
 	assert!(
 		results.iter().any(|r| r
-			.sub_queries
+			.leaf_queries
 			.iter()
 			.any(|sq| &*sq.fully_qualified_name == "blockID.num")),
 		"expected a `blockID.num` capture, got {results:?}"
@@ -160,8 +160,8 @@ fn non_leaf_name_is_still_supported_by_search_by_name() {
 
 	let names: std::collections::BTreeSet<String> = by_name
 		.iter()
-		.flat_map(|interpretation| interpretation.sub_queries.iter())
-		.map(|sub_query| sub_query.fully_qualified_name.to_string())
+		.flat_map(|interpretation| interpretation.leaf_queries.iter())
+		.map(|leaf_query| leaf_query.fully_qualified_name.to_string())
 		.collect();
 	assert!(
 		names.contains("blockID.num") || names.contains("blockID.gen"),

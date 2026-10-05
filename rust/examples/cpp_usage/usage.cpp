@@ -59,18 +59,18 @@ static void try_interpretations() {
 
     ParsingSpec spec{builder.build()};
 
-    std::vector<std::vector<SubQuery>> interpretations{
+    std::vector<std::vector<LeafQuery>> interpretations{
             spec.search_by_name("a*@*com"_rust, "email"_rust)
     };
 
     std::cout << "== Interpretations" << std::endl;
-    for (std::vector<SubQuery> const& sub_queries : interpretations) {
+    for (std::vector<LeafQuery> const& queries : interpretations) {
         std::cout << "- ";
-        for (SubQuery const& sub_query : sub_queries) {
-            if (sub_query.name.empty()) {
-                std::cout << sub_query.value;
+        for (LeafQuery const& leaf_query : queries) {
+            if (leaf_query.name.empty()) {
+                std::cout << leaf_query.value;
             } else {
-                std::cout << "(?<" << sub_query.name << ">" << sub_query.value << ")";
+                std::cout << "(?<" << leaf_query.name << ">" << leaf_query.value << ")";
             }
         }
         std::cout << std::endl;

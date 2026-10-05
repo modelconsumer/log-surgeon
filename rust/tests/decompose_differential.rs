@@ -178,13 +178,13 @@ fn queries() -> Vec<String> {
 /// The set of `(fully_qualified_name, string_value)` captures in an interpretation.
 fn captures_of(interpretation: &Interpretation) -> Vec<(String, String)> {
 	interpretation
-		.sub_queries
+		.leaf_queries
 		.iter()
-		.filter(|sub_query| !sub_query.is_static_text())
-		.map(|sub_query| {
+		.filter(|leaf_query| !leaf_query.is_static_text())
+		.map(|leaf_query| {
 			(
-				sub_query.fully_qualified_name.to_string(),
-				sub_query.string_value.clone(),
+				leaf_query.fully_qualified_name.to_string(),
+				leaf_query.string_value.clone(),
 			)
 		})
 		.collect::<Vec<_>>()
@@ -206,19 +206,19 @@ fn fixed_text(value: &str) -> String {
 fn structure_of(interpretation: &Interpretation) -> Vec<String> {
 	Vec::from_iter(
 		interpretation
-			.sub_queries
+			.leaf_queries
 			.iter()
-			.filter(|sub_query| {
-				!sub_query.is_static_text() || !fixed_text(&sub_query.string_value).is_empty()
+			.filter(|leaf_query| {
+				!leaf_query.is_static_text() || !fixed_text(&leaf_query.string_value).is_empty()
 			})
-			.map(|sub_query| {
-				if sub_query.is_static_text() {
-					format!("'{}'", fixed_text(&sub_query.string_value))
+			.map(|leaf_query| {
+				if leaf_query.is_static_text() {
+					format!("'{}'", fixed_text(&leaf_query.string_value))
 				} else {
 					format!(
 						"<{}={}>",
-						sub_query.fully_qualified_name,
-						fixed_text(&sub_query.string_value)
+						leaf_query.fully_qualified_name,
+						fixed_text(&leaf_query.string_value)
 					)
 				}
 			}),
@@ -235,19 +235,19 @@ fn structure_of(interpretation: &Interpretation) -> Vec<String> {
 fn without_vacuous_text(interpretation: &Interpretation) -> Vec<String> {
 	Vec::from_iter(
 		interpretation
-			.sub_queries
+			.leaf_queries
 			.iter()
-			.filter(|sub_query| {
-				!sub_query.is_static_text() || !fixed_text(&sub_query.string_value).is_empty()
+			.filter(|leaf_query| {
+				!leaf_query.is_static_text() || !fixed_text(&leaf_query.string_value).is_empty()
 			})
-			.map(|sub_query| {
-				if !sub_query.is_static_text() {
+			.map(|leaf_query| {
+				if !leaf_query.is_static_text() {
 					format!(
 						"<{}={}>",
-						sub_query.fully_qualified_name, sub_query.string_value
+						leaf_query.fully_qualified_name, leaf_query.string_value
 					)
 				} else {
-					format!("'{}'", sub_query.string_value)
+					format!("'{}'", leaf_query.string_value)
 				}
 			}),
 	)
@@ -426,7 +426,7 @@ fn glob_matches(pattern: &[char], text: &[char]) -> bool {
 /// the shape has exactly one part,
 /// so an interpretation's single static sub-query must glob-match the whole shape text.
 #[test]
-fn static_sub_query_values_are_satisfiable() {
+fn static_leaf_query_values_are_satisfiable() {
 	let spec: ParsingSpec = test_spec();
 
 	let shapes: &[&str] = &[
@@ -455,19 +455,19 @@ fn static_sub_query_values_are_satisfiable() {
 				// A pure-static shape decomposes into exactly one static sub-query.
 				assert_eq!(
 					1,
-					interpretation.sub_queries.len(),
+					interpretation.leaf_queries.len(),
 					"a pure-static shape should yield one sub-query: \
 					 shape={shape:?} query={query_text:?}"
 				);
-				let sub_query: &log_surgeon::search::SubQuery = &interpretation.sub_queries[0];
-				assert!(sub_query.is_static_text(), "expected a static sub-query");
+				let leaf_query: &log_surgeon::search::LeafQuery = &interpretation.leaf_queries[0];
+				assert!(leaf_query.is_static_text(), "expected a static sub-query");
 
-				let pattern: Vec<char> = sub_query.string_value.chars().collect::<Vec<_>>();
+				let pattern: Vec<char> = leaf_query.string_value.chars().collect::<Vec<_>>();
 				assert!(
 					glob_matches(&pattern, &text),
 					"static value {:?} cannot match the shape's text {shape:?}: \
 					 query={query_text:?}",
-					sub_query.string_value
+					leaf_query.string_value
 				);
 				checked += 1;
 			}

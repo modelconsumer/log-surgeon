@@ -214,16 +214,16 @@ fn exhausted_budget_is_unknown_not_impossible() {
 /// Renders an interpretation the way the engine's `Debug` does, but compactly.
 fn render_interpretation(interpretation: &crate::search::Interpretation) -> String {
 	interpretation
-		.sub_queries
+		.leaf_queries
 		.iter()
-		.map(|sub_query| {
-			if !sub_query.is_static_text() {
+		.map(|leaf_query| {
+			if !leaf_query.is_static_text() {
 				format!(
 					"<{}={}>",
-					sub_query.fully_qualified_name, sub_query.string_value
+					leaf_query.fully_qualified_name, leaf_query.string_value
 				)
 			} else {
-				format!("'{}'", sub_query.string_value)
+				format!("'{}'", leaf_query.string_value)
 			}
 		})
 		.collect::<Vec<_>>()
@@ -251,8 +251,8 @@ fn interpretations_of(spec: &ParsingSpec, shape: &str, query: &str) -> Vec<Strin
 /// which is what the invariant compares against.
 fn runs_accounted_for(interpretation: &crate::search::Interpretation) -> Vec<String> {
 	let mut runs: Vec<String> = vec![String::new()];
-	for sub_query in interpretation.sub_queries.iter() {
-		for symbol in sub_query.symbolic_value.iter() {
+	for leaf_query in interpretation.leaf_queries.iter() {
+		for symbol in leaf_query.symbolic_value.iter() {
 			match symbol {
 				SymbolicChar::Literal(character) => {
 					runs.last_mut().expect("non-empty").push(*character)
@@ -514,7 +514,7 @@ fn unconstrained_static_text_is_reported_as_a_wildcard() {
 }
 
 #[test]
-fn a_run_split_between_text_and_a_rule_yields_two_sub_queries() {
+fn a_run_split_between_text_and_a_rule_yields_two_leaf_queries() {
 	let spec: ParsingSpec = test_spec();
 	// A run of `foobar` against `foo%word%`:
 	// `foo` is the shape's static text and `bar` is the rule's.

@@ -20,6 +20,8 @@ struct DfsIndex;
 
 struct Interpretation;
 
+struct LeafQuery;
+
 /// Newtype wrapper around a `usize` index.
 struct NfaIdx;
 
@@ -45,8 +47,6 @@ struct Parser;
 struct ParsingSpec;
 
 struct ParsingSpecBuilder;
-
-struct SubQuery;
 
 /// Index in the parsing specification, offset by/starting at 1.
 /// `Option<RuleIdx>` is ABI equivalent to `u16` (for FFI);
@@ -239,6 +239,8 @@ extern "C" {
 
     void log_surgeon_parsing_spec_drop(Box<Arc<ParsingSpec>> value);
 
+    CCharArray log_surgeon_parsing_spec_get_delimiters(Arc<ParsingSpec> const* spec);
+
     Box<Vec<Vec<Interpretation>>> log_surgeon_search_by_log_shapes(
             Arc<ParsingSpec> const* spec,
             CCharArray input,
@@ -256,16 +258,16 @@ extern "C" {
             size_t i
     );
 
-    SubQuery const*
-    log_surgeon_search_get_sub_query(Interpretation const* interpretation, size_t i);
+    LeafQuery const*
+    log_surgeon_search_get_leaf_query(Interpretation const* interpretation, size_t i);
 
     void log_surgeon_search_interpretations_by_log_shapes_drop(Box<Vec<Vec<Interpretation>>> value);
 
     void log_surgeon_search_interpretations_by_name_drop(Box<Vec<Interpretation>> value);
 
-    CCharArray log_surgeon_search_sub_query_get_name(SubQuery const* sub_query);
+    CCharArray log_surgeon_search_leaf_query_get_name(LeafQuery const* leaf_query);
 
-    CCharArray log_surgeon_search_sub_query_get_value(SubQuery const* sub_query);
+    CCharArray log_surgeon_search_leaf_query_get_value(LeafQuery const* leaf_query);
 
 }  // extern "C"
 }  // namespace log_surgeon::imp

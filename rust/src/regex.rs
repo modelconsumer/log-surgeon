@@ -1,4 +1,3 @@
-mod derivative_decomposition;
 mod pattern_parsing;
 
 use std::sync::Arc;

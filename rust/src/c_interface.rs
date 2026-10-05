@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::ffi::CArray;
 use crate::ffi::CCharArray;
+use crate::ffi::CUtf8;
 use crate::log_event::LogEvent;
 use crate::log_event::Match;
 use crate::parser::Parser;
@@ -25,8 +26,8 @@ use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::ParsingSpecBuilder;
 use crate::regex::Regex;
 use crate::search::Interpretation;
+use crate::search::LeafQuery;
 use crate::search::SearchString;
-use crate::search::SubQuery;
 
 /// Enable tracing debugging logs; see [`README.md#Debugging`].
 #[unsafe(no_mangle)]
@@ -152,6 +153,11 @@ mod parsing_spec {
 	extern "C" fn log_surgeon_parsing_spec_create_parser(spec: &Arc<ParsingSpec>) -> Box<Parser> {
 		Box::new(spec.create_parser())
 	}
+
+	#[unsafe(no_mangle)]
+	extern "C" fn log_surgeon_parsing_spec_get_delimiters(spec: &Arc<ParsingSpec>) -> CUtf8<'_> {
+		CUtf8::new(&spec.delimiters)
+	}
 }
 
 mod parser {
@@ -259,25 +265,27 @@ mod search {
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_get_sub_query(
+	extern "C" fn log_surgeon_search_get_leaf_query(
 		interpretation: &Interpretation,
 		i: usize,
-	) -> Option<&SubQuery> {
-		interpretation.sub_queries.get(i)
+	) -> Option<&LeafQuery> {
+		interpretation.leaf_queries.get(i)
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_sub_query_get_name(sub_query: &SubQuery) -> CCharArray<'_> {
-		if !sub_query.fully_qualified_name.is_empty() {
-			CCharArray::from_utf8(&sub_query.fully_qualified_name)
+	extern "C" fn log_surgeon_search_leaf_query_get_name(leaf_query: &LeafQuery) -> CCharArray<'_> {
+		if !leaf_query.fully_qualified_name.is_empty() {
+			CCharArray::from_utf8(&leaf_query.fully_qualified_name)
 		} else {
 			CCharArray::null()
 		}
 	}
 
 	#[unsafe(no_mangle)]
-	extern "C" fn log_surgeon_search_sub_query_get_value(sub_query: &SubQuery) -> CCharArray<'_> {
-		CCharArray::from_utf8(&sub_query.string_value)
+	extern "C" fn log_surgeon_search_leaf_query_get_value(
+		leaf_query: &LeafQuery,
+	) -> CCharArray<'_> {
+		CCharArray::from_utf8(&leaf_query.string_value)
 	}
 }
 

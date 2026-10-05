@@ -430,7 +430,7 @@ impl ParsingSpec {
 					let branches: Tnfa = rules
 						.iter()
 						.map(|&(info, regex)| Tnfa::for_single_rule(info.root_idx, regex, &[]))
-						.fold(Tnfa::BLANK, |accum, x| accum.or(&x));
+						.fold(Tnfa::BLANK, |accum, x| accum.alternate(&x));
 					sequence.push(branches);
 				},
 			}

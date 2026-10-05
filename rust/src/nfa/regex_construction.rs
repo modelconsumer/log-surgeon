@@ -182,7 +182,9 @@ impl Tnfa {
 					))));
 				BTreeSet::new()
 			},
-			Regex::Capture(capture) => self.capture(rule_idx, capture, encodings, current, target),
+			Regex::Capture(capture) => {
+				self.build_capture_nfa(rule_idx, capture, encodings, current, target)
+			},
 			Regex::BracketedRanges { negated, items } => {
 				let intervals: Vec<Interval<u32>> = if *negated {
 					let mut intervals: Vec<Interval<u32>> = Vec::with_capacity(items.len());
@@ -219,7 +221,7 @@ impl Tnfa {
 				self[item_end].transitions = Transitions::Spontaneous(vec![item_start, target]);
 
 				let after_negative_tags: NfaIdx =
-					self.negative_tags(tags.iter().cloned(), item_skip);
+					self.build_negative_tags(tags.iter().cloned(), item_skip);
 				self[after_negative_tags].transitions = Transitions::Spontaneous(vec![target]);
 
 				tags
@@ -269,7 +271,7 @@ impl Tnfa {
 					);
 
 					if i == 0 {
-						sub_skip = self.negative_tags(tags.iter().cloned(), sub_skip)
+						sub_skip = self.build_negative_tags(tags.iter().cloned(), sub_skip)
 					}
 					self[sub_skip].transitions = Transitions::Spontaneous(vec![target]);
 
@@ -300,7 +302,7 @@ impl Tnfa {
 				tags
 			},
 			Regex::Alternation(items) => {
-				self.alternate(rule_idx, items, encodings, current, target)
+				self.build_alternation_nfa(rule_idx, items, encodings, current, target)
 			},
 			Regex::Placeholder { item, .. } => {
 				self.build_regex_nfa(rule_idx, item, encodings, current, target)
@@ -313,7 +315,7 @@ impl Tnfa {
 	/// The root capture is never split by encoding here: for a capture-less root rule,
 	/// [`Tnfa::for_rules`] already splits the rule by encodings at its accepting states,
 	/// which is where the lexer reads them from.
-	fn capture(
+	fn build_capture_nfa(
 		&mut self,
 		rule: RuleIdx,
 		capture: &Capture,
@@ -445,7 +447,7 @@ impl Tnfa {
 					continue;
 				}
 
-				sub_current = self.negative_tags(other_tags.iter().cloned(), sub_current);
+				sub_current = self.build_negative_tags(other_tags.iter().cloned(), sub_current);
 			}
 
 			self[sub_current].transitions = Transitions::Spontaneous(vec![target]);
@@ -455,7 +457,7 @@ impl Tnfa {
 	}
 
 	/// Build the sub-TNFA for a regex alternation.
-	fn alternate(
+	fn build_alternation_nfa(
 		&mut self,
 		rule_idx: RuleIdx,
 		items: &[Regex],
@@ -487,7 +489,7 @@ impl Tnfa {
 					continue;
 				}
 
-				sub_current = self.negative_tags(other_tags.iter().cloned(), sub_current);
+				sub_current = self.build_negative_tags(other_tags.iter().cloned(), sub_current);
 			}
 
 			self[sub_current].transitions = Transitions::Spontaneous(vec![target]);
@@ -501,7 +503,7 @@ impl Tnfa {
 	}
 
 	/// Build the negative tag sequence, as per the TDFA paper.
-	fn negative_tags(
+	fn build_negative_tags(
 		&mut self,
 		tags: impl IntoIterator<Item = CaptureTag>,
 		mut current: NfaIdx,
@@ -516,48 +518,6 @@ impl Tnfa {
 			current = next;
 		}
 		current
-	}
-}
-
-impl Tnfa {
-	fn splice(&mut self, other: &Tnfa, current: NfaIdx, target: NfaIdx) {
-		let my_states: Vec<NfaIdx> = other
-			.states
-			.iter()
-			.map(|state| self.new_state(state.name.clone()))
-			.collect::<Vec<_>>();
-
-		assert_eq!(self[current].transitions.len(), 0);
-		self[current].transitions = Transitions::Spontaneous(vec![my_states[0]]);
-
-		for (i, other_state) in other.states.iter().enumerate() {
-			let idx: NfaIdx = my_states[i];
-			if other_state.is_accepting() {
-				assert_eq!(self[idx].transitions.len(), 0);
-				self[idx].transitions = Transitions::Spontaneous(vec![target]);
-			} else {
-				match &other_state.transitions {
-					Transitions::Interval(transitions) => {
-						let mut transitions: IntervalTree<u32, NfaIdx> = transitions.clone();
-						transitions.iter_mut().for_each(|(_, target)| {
-							*target = my_states[target.0];
-						});
-						self[idx].transitions = Transitions::Interval(transitions);
-					},
-					Transitions::Spontaneous(transitions) => {
-						self[idx].transitions = Transitions::Spontaneous(
-							transitions
-								.iter()
-								.map(|target| my_states[target.0])
-								.collect::<Vec<_>>(),
-						);
-					},
-					Transitions::Tagged { .. } => {
-						unreachable!("encoding pattern should not have captures");
-					},
-				}
-			}
-		}
 	}
 }
 

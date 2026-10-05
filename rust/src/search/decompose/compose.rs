@@ -48,7 +48,7 @@ mod test;
 
 use crate::parsing_spec::ParsingSpec;
 use crate::search::Interpretation;
-use crate::search::SubQuery;
+use crate::search::LeafQuery;
 use crate::search::SymbolicChar;
 use crate::search::decompose::Placement;
 use crate::search::decompose::PlacementTable;
@@ -150,11 +150,11 @@ impl Composition {
 		// Nothing is constrained, so the query is satisfied without attributing text anywhere.
 		if rendered.is_empty() {
 			return Interpretation {
-				sub_queries: vec![SubQuery::new_static_text(vec![SymbolicChar::GlobStar])],
+				leaf_queries: vec![LeafQuery::new_static_text(vec![SymbolicChar::GlobStar])],
 			};
 		}
 
-		let mut sub_queries: Vec<SubQuery> = Vec::new();
+		let mut leaf_queries: Vec<LeafQuery> = Vec::new();
 
 		for part in rendered.into_iter() {
 			match &model.parts[part.part] {
@@ -163,17 +163,17 @@ impl Composition {
 				// and break the positional correspondence.
 				ShapePart::Variable(variable) => {
 					if let Some(capture) = variable.alternatives.first() {
-						sub_queries.push(SubQuery::new_rule(
+						leaf_queries.push(LeafQuery::new_rule(
 							capture.fully_qualified_name.clone(),
 							part.value,
 						));
 					}
 				},
-				ShapePart::Static(_) => sub_queries.push(SubQuery::new_static_text(part.value)),
+				ShapePart::Static(_) => leaf_queries.push(LeafQuery::new_static_text(part.value)),
 			}
 		}
 
-		Interpretation { sub_queries }
+		Interpretation { leaf_queries }
 	}
 
 	/// The shape parts that contribute a sub-query, with their rendered values.
@@ -192,8 +192,7 @@ impl Composition {
 
 		// The last static part. Trailing static text is still reported, as `*`,
 		// because that is where the query's trailing wildcard applies.
-		let last_static: Option<usize> =
-			model.parts.iter().rposition(|part| !part.is_variable());
+		let last_static: Option<usize> = model.parts.iter().rposition(|part| !part.is_variable());
 
 		let Some(last_emitted) = last_constrained.max(last_static) else {
 			return Vec::new();

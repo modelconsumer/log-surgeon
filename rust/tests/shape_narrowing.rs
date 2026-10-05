@@ -46,7 +46,7 @@ fn test_spec() -> ParsingSpec {
 
 fn render(interpretation: &Interpretation) -> String {
 	interpretation
-		.sub_queries
+		.leaf_queries
 		.iter()
 		.map(|sq| {
 			if !sq.is_static_text() {
@@ -175,12 +175,12 @@ fn truncation_is_transparent() {
 			let actual: Vec<Interpretation> =
 				query.interpretations_for_automata(&spec, &truncated, dropped_static);
 
-		assert_eq!(
-			expected.iter().map(render).collect::<Vec<_>>(),
-			actual.iter().map(render).collect::<Vec<_>>(),
-			"truncation changed the result: \
+			assert_eq!(
+				expected.iter().map(render).collect::<Vec<_>>(),
+				actual.iter().map(render).collect::<Vec<_>>(),
+				"truncation changed the result: \
 			 shape={shape:?} query={query_text:?} kept 0..={end} of {last}"
-		);
+			);
 		}
 	}
 

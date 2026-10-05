@@ -64,8 +64,8 @@ fn whole_fit_carries_interpretations() {
 	assert!(
 		fit.whole
 			.iter()
-			.flat_map(|interpretation| interpretation.sub_queries.iter())
-			.any(|sub_query| &*sub_query.fully_qualified_name == "digits")
+			.flat_map(|interpretation| interpretation.leaf_queries.iter())
+			.any(|leaf_query| &*leaf_query.fully_qualified_name == "digits")
 	);
 }
 

@@ -53,7 +53,8 @@ pub struct Tdfa {
 	pub number_of_registers: usize,
 }
 
-/// This struct caches memory for [`Tdfa::execute_with_captures`].
+/// Captures are unbounded; e.g. with the regex `(?<digit>[0-9]+)*`,
+/// so this struct caches memory for [`Tdfa::execute_with_captures`].
 #[derive(Debug, Clone)]
 pub struct TdfaExecution {
 	pub captures: Vec<MatchedCapture>,
@@ -211,6 +212,10 @@ impl Tdfa {
 		number_of_registers: 0,
 	};
 
+	/// Similar to [`Tdfa::execute_without_captures`],
+	/// but without anchor transitions/lookaround characters.
+	/// Only relevant for testing.
+	#[cfg(test)]
 	pub fn execute(&self, input: &str) -> bool {
 		let mut current_state: usize = 0;
 		for (_pos, ch) in input.char_indices() {
@@ -224,7 +229,7 @@ impl Tdfa {
 	}
 
 	/// Used for determining which rule matched.
-	/// Assumes the DFA was constructed with anchor transitions.
+	/// Assumes the DFA was constructed **with** anchor transitions.
 	///
 	/// [`TdfaExecution::captures`] is sorted:
 	/// 1. left to right w.r.t. the input,
@@ -233,6 +238,7 @@ impl Tdfa {
 	///
 	/// `last_was_delimited` should be the "previous" character in the input,
 	/// or newline (`'\n'`) if at the very start of input.
+	///
 	/// Newline is "always" an anchor character,
 	/// since newlines are already (and necessarily) used to terminate/separate log events;
 	/// an anchored rule should match the same in a log event,

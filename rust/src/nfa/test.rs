@@ -98,7 +98,7 @@ fn concat() {
 
 #[test]
 fn or() {
-	let alternated: Tnfa = for_pattern("abc").or(&for_pattern("de"));
+	let alternated: Tnfa = for_pattern("abc").alternate(&for_pattern("de"));
 
 	assert!(matches(&alternated, "abc"));
 	assert!(matches(&alternated, "de"));

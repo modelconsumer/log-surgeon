@@ -14,7 +14,7 @@ use log_surgeon::search::decompose::runs_of;
 
 fn render(interpretation: &Interpretation) -> String {
 	interpretation
-		.sub_queries
+		.leaf_queries
 		.iter()
 		.map(|sq| {
 			if !sq.is_static_text() {
@@ -29,8 +29,8 @@ fn render(interpretation: &Interpretation) -> String {
 
 fn runs_accounted_for(interpretation: &Interpretation) -> Vec<String> {
 	let mut runs: Vec<String> = vec![String::new()];
-	for sub_query in interpretation.sub_queries.iter() {
-		for symbol in sub_query.symbolic_value.iter() {
+	for leaf_query in interpretation.leaf_queries.iter() {
+		for symbol in leaf_query.symbolic_value.iter() {
 			match symbol {
 				SymbolicChar::Literal(c) => runs.last_mut().unwrap().push(*c),
 				SymbolicChar::GlobStar => {

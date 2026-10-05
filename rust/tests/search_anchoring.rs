@@ -45,7 +45,7 @@ fn matches(spec: &ParsingSpec, query: &str, shape: &str) -> bool {
 
 fn render(interpretation: &Interpretation) -> String {
 	interpretation
-		.sub_queries
+		.leaf_queries
 		.iter()
 		.map(|sq| {
 			if sq.is_static_text() {

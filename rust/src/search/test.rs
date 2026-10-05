@@ -40,29 +40,29 @@ fn search_block_id() {
 		}
 
 		assert_eq!(interpretations.len(), 2);
-		assert_eq!(interpretations[0].sub_queries[0].string_value, "blk_");
-		assert_eq!(interpretations[0].sub_queries[1].string_value, "566*");
+		assert_eq!(interpretations[0].leaf_queries[0].string_value, "blk_");
+		assert_eq!(interpretations[0].leaf_queries[1].string_value, "566*");
 		assert_eq!(
-			&*interpretations[0].sub_queries[1].fully_qualified_name,
+			&*interpretations[0].leaf_queries[1].fully_qualified_name,
 			"block_id.blockNum"
 		);
-		assert_eq!(interpretations[0].sub_queries[2].string_value, "*");
-		assert_eq!(interpretations[0].sub_queries[3].string_value, "*");
+		assert_eq!(interpretations[0].leaf_queries[2].string_value, "*");
+		assert_eq!(interpretations[0].leaf_queries[3].string_value, "*");
 		assert_eq!(
-			&*interpretations[0].sub_queries[3].fully_qualified_name,
+			&*interpretations[0].leaf_queries[3].fully_qualified_name,
 			"block_id.genStamp"
 		);
 
-		assert_eq!(interpretations[1].sub_queries[0].string_value, "blk*");
-		assert_eq!(interpretations[1].sub_queries[1].string_value, "*");
+		assert_eq!(interpretations[1].leaf_queries[0].string_value, "blk*");
+		assert_eq!(interpretations[1].leaf_queries[1].string_value, "*");
 		assert_eq!(
-			&*interpretations[1].sub_queries[1].fully_qualified_name,
+			&*interpretations[1].leaf_queries[1].fully_qualified_name,
 			"block_id.blockNum"
 		);
-		assert_eq!(interpretations[1].sub_queries[2].string_value, "_");
-		assert_eq!(interpretations[1].sub_queries[3].string_value, "566*");
+		assert_eq!(interpretations[1].leaf_queries[2].string_value, "_");
+		assert_eq!(interpretations[1].leaf_queries[3].string_value, "566*");
 		assert_eq!(
-			&*interpretations[1].sub_queries[3].fully_qualified_name,
+			&*interpretations[1].leaf_queries[3].fully_qualified_name,
 			"block_id.genStamp"
 		);
 	}
@@ -85,9 +85,9 @@ fn search_nested_name_without_leaf_capture() {
 		}
 
 		assert_eq!(interpretations.len(), 1);
-		assert_eq!(interpretations[0].sub_queries[0].string_value, "_a*b_");
+		assert_eq!(interpretations[0].leaf_queries[0].string_value, "_a*b_");
 		assert_eq!(
-			&*interpretations[0].sub_queries[0].fully_qualified_name,
+			&*interpretations[0].leaf_queries[0].fully_qualified_name,
 			"foo"
 		);
 	}
@@ -101,11 +101,14 @@ fn search_nested_name_without_leaf_capture() {
 		}
 
 		assert_eq!(interpretations.len(), 2);
-		assert_eq!(interpretations[0].sub_queries[0].string_value, "*a*b*");
-		assert_eq!(&*interpretations[0].sub_queries[0].fully_qualified_name, "");
-		assert_eq!(interpretations[1].sub_queries[0].string_value, "*a*b*");
+		assert_eq!(interpretations[0].leaf_queries[0].string_value, "*a*b*");
 		assert_eq!(
-			&*interpretations[1].sub_queries[0].fully_qualified_name,
+			&*interpretations[0].leaf_queries[0].fully_qualified_name,
+			""
+		);
+		assert_eq!(interpretations[1].leaf_queries[0].string_value, "*a*b*");
+		assert_eq!(
+			&*interpretations[1].leaf_queries[0].fully_qualified_name,
 			"foo"
 		);
 	}
@@ -119,9 +122,9 @@ fn search_nested_name_without_leaf_capture() {
 		}
 
 		assert_eq!(interpretations.len(), 1);
-		assert_eq!(interpretations[0].sub_queries[0].string_value, "0*1");
+		assert_eq!(interpretations[0].leaf_queries[0].string_value, "0*1");
 		assert_eq!(
-			&*interpretations[0].sub_queries[0].fully_qualified_name,
+			&*interpretations[0].leaf_queries[0].fully_qualified_name,
 			"foo.bar.baz"
 		);
 	}
@@ -129,14 +132,14 @@ fn search_nested_name_without_leaf_capture() {
 
 #[test]
 fn test_covers() {
-	let a: SubQuery =
-		SubQuery::new_static_text(vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar]);
-	let b: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
-	let c: SubQuery =
-		SubQuery::new_static_text(vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')]);
-	let d: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
-	let e: SubQuery = SubQuery::new_static_text(vec![SymbolicChar::GlobStar]);
-	let f: SubQuery = SubQuery::new_static_text(vec![
+	let a: LeafQuery =
+		LeafQuery::new_static_text(vec![SymbolicChar::Literal('a'), SymbolicChar::GlobStar]);
+	let b: LeafQuery = LeafQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
+	let c: LeafQuery =
+		LeafQuery::new_static_text(vec![SymbolicChar::GlobStar, SymbolicChar::Literal('a')]);
+	let d: LeafQuery = LeafQuery::new_static_text(vec![SymbolicChar::Literal('a')]);
+	let e: LeafQuery = LeafQuery::new_static_text(vec![SymbolicChar::GlobStar]);
+	let f: LeafQuery = LeafQuery::new_static_text(vec![
 		SymbolicChar::GlobStar,
 		SymbolicChar::Literal('a'),
 		SymbolicChar::GlobStar,
@@ -235,8 +238,8 @@ fn covers_never_claims_an_unsound_containment() {
 	let mut checked: usize = 0;
 	for (general, general_language) in values.iter().zip(languages.iter()) {
 		for (specific, specific_language) in values.iter().zip(languages.iter()) {
-			if !SubQuery::new_static_text(general.clone())
-				.covers(&SubQuery::new_static_text(specific.clone()))
+			if !LeafQuery::new_static_text(general.clone())
+				.covers(&LeafQuery::new_static_text(specific.clone()))
 			{
 				continue;
 			}
@@ -268,9 +271,9 @@ fn covers_never_claims_an_unsound_containment() {
 /// `dedup_covered_interpretations` reach a fixpoint.
 #[test]
 fn covers_is_a_partial_order_in_normal_form() {
-	let values: Vec<SubQuery> = values_in_normal_form(&['a', 'b'], 3)
+	let values: Vec<LeafQuery> = values_in_normal_form(&['a', 'b'], 3)
 		.into_iter()
-		.map(SubQuery::new_static_text)
+		.map(LeafQuery::new_static_text)
 		.collect::<Vec<_>>();
 
 	for value in values.iter() {

@@ -71,28 +71,26 @@ impl std::fmt::Display for SymbolicChar {
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Interpretation {
-	pub sub_queries: Vec<SubQuery>,
+	pub leaf_queries: Vec<LeafQuery>,
 }
 
 impl std::fmt::Debug for Interpretation {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		self.sub_queries
+		self.leaf_queries
 			.iter()
-			.fold(&mut fmt.debug_list(), |list, sub_query| {
-				list.entry(sub_query)
-			})
+			.fold(&mut fmt.debug_list(), |list, query| list.entry(query))
 			.finish()
 	}
 }
 
 #[derive(Clone)]
-pub struct SubQuery {
+pub struct LeafQuery {
 	pub fully_qualified_name: Arc<str>,
 	pub symbolic_value: Vec<SymbolicChar>,
 	pub string_value: String,
 }
 
-impl std::fmt::Debug for SubQuery {
+impl std::fmt::Debug for LeafQuery {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if !self.is_static_text() {
 			fmt.write_fmt(format_args!(
@@ -105,22 +103,22 @@ impl std::fmt::Debug for SubQuery {
 	}
 }
 
-impl Eq for SubQuery {}
+impl Eq for LeafQuery {}
 
-impl Ord for SubQuery {
+impl Ord for LeafQuery {
 	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
 		(&self.fully_qualified_name, &self.symbolic_value)
 			.cmp(&(&other.fully_qualified_name, &other.symbolic_value))
 	}
 }
 
-impl PartialOrd for SubQuery {
+impl PartialOrd for LeafQuery {
 	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
 		Some(self.cmp(other))
 	}
 }
 
-impl PartialEq for SubQuery {
+impl PartialEq for LeafQuery {
 	fn eq(&self, other: &Self) -> bool {
 		self.cmp(other).is_eq()
 	}
@@ -174,14 +172,14 @@ impl Interpretation {
 	/// Positional, so it presumes both decompose the shape the same way;
 	/// a difference in length means they are different decompositions and neither covers the other.
 	fn covers(&self, other: &Self) -> bool {
-		(self.sub_queries.len() == other.sub_queries.len())
-			&& std::iter::zip(self.sub_queries.iter(), other.sub_queries.iter())
+		(self.leaf_queries.len() == other.leaf_queries.len())
+			&& std::iter::zip(self.leaf_queries.iter(), other.leaf_queries.iter())
 				.all(|(mine, theirs)| mine.covers(theirs))
 	}
 
 	/// Drops interpretations that another already covers.
 	///
-	/// [`SubQuery::covers`] is a *conservative* test,
+	/// [`LeafQuery::covers`] is a *conservative* test,
 	/// so the result is not guaranteed to be a minimal antichain:
 	/// a redundant interpretation the test cannot see through is kept.
 	/// That costs an extra result, never a wrong one,
@@ -650,15 +648,15 @@ impl<'a> SearchStringView<'a> {
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
 
-			let mut sub_queries: Vec<SubQuery> = Vec::new();
+			let mut leaf_queries: Vec<LeafQuery> = Vec::new();
 
 			for token in path.components.iter() {
 				match token {
 					PathComponent::Literal(contents) => {
-						sub_queries.push(SubQuery::new_static_text(contents.clone()));
+						leaf_queries.push(LeafQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { capture, contents } => {
-						sub_queries.push(SubQuery::new_rule(
+						leaf_queries.push(LeafQuery::new_rule(
 							capture.fully_qualified_name.clone(),
 							contents.clone(),
 						));
@@ -677,16 +675,16 @@ impl<'a> SearchStringView<'a> {
 				// so the wildcard joins that value instead of becoming a sub-query of its own --
 				// the same merge composition performs.
 				if shape.dropped_static {
-					match sub_queries.last_mut() {
+					match leaf_queries.last_mut() {
 						Some(last) if last.is_static_text() => last.append_wildcard(),
-						_ => sub_queries
-							.push(SubQuery::new_static_text(vec![SymbolicChar::GlobStar])),
+						_ => leaf_queries
+							.push(LeafQuery::new_static_text(vec![SymbolicChar::GlobStar])),
 					}
 				}
-				Self::drop_trailing_unconstrained(&mut sub_queries);
+				Self::drop_trailing_unconstrained(&mut leaf_queries);
 			}
 
-			interpretations.push(Interpretation { sub_queries });
+			interpretations.push(Interpretation { leaf_queries });
 		}
 
 		interpretations.iter().for_each(Interpretation::invariants);
@@ -719,9 +717,9 @@ impl<'a> SearchStringView<'a> {
 	/// The wildcard is what the query's own trailing wildcard means at that position,
 	/// and it is added here rather than in the automaton,
 	/// because that is where the shape's remaining text stops being reported.
-	fn drop_trailing_unconstrained(sub_queries: &mut Vec<SubQuery>) {
-		let last_constrained: Option<usize> = sub_queries.iter().rposition(|sub_query| {
-			sub_query
+	fn drop_trailing_unconstrained(leaf_queries: &mut Vec<LeafQuery>) {
+		let last_constrained: Option<usize> = leaf_queries.iter().rposition(|leaf_query| {
+			leaf_query
 				.symbolic_value
 				.iter()
 				.any(|symbol| !symbol.is_wildcard())
@@ -729,27 +727,27 @@ impl<'a> SearchStringView<'a> {
 
 		let Some(last) = last_constrained else {
 			// Nothing is constrained at all; a single `*` says exactly that.
-			sub_queries.clear();
-			sub_queries.push(SubQuery::new_static_text(vec![SymbolicChar::GlobStar]));
+			leaf_queries.clear();
+			leaf_queries.push(LeafQuery::new_static_text(vec![SymbolicChar::GlobStar]));
 			return;
 		};
 
 		// Keep a trailing static sub-query: unlike a capture, it is not vacuous --
 		// it names text the message must still contain,
 		// and the query's trailing wildcard covers only what follows *it*.
-		let keep: usize = match sub_queries.get(last + 1) {
+		let keep: usize = match leaf_queries.get(last + 1) {
 			Some(next) if next.is_static_text() => last + 2,
 			_ => last + 1,
 		};
-		sub_queries.truncate(keep);
+		leaf_queries.truncate(keep);
 
 		// The last sub-query is now where the query's trailing wildcard applies,
 		// so it must permit anything after it.
 		// A capture is already padded by the path itself; static text may not be.
-		if let Some(final_sub_query) = sub_queries.last_mut()
-			&& final_sub_query.is_static_text()
+		if let Some(final_leaf_query) = leaf_queries.last_mut()
+			&& final_leaf_query.is_static_text()
 		{
-			final_sub_query.append_wildcard();
+			final_leaf_query.append_wildcard();
 		}
 	}
 
@@ -770,7 +768,7 @@ impl<'a> SearchStringView<'a> {
 		for path in paths.iter() {
 			assert!(!path.components.is_empty());
 
-			let mut sub_queries: Vec<SubQuery> = Vec::new();
+			let mut leaf_queries: Vec<LeafQuery> = Vec::new();
 
 			if let PathComponent::Literal(contents) = path.components.first().unwrap()
 				&& (path.components.len() == 1)
@@ -783,25 +781,25 @@ impl<'a> SearchStringView<'a> {
 					&rule[None]
 				};
 
-				let mut implicit_capture: SubQuery =
-					SubQuery::new_rule(rule.name.clone(), contents.clone());
+				let mut implicit_capture: LeafQuery =
+					LeafQuery::new_rule(rule.name.clone(), contents.clone());
 
 				if !rule_info.is_root() {
 					assert!(!rule_info.is_leaf());
-					let mut static_text: SubQuery = SubQuery::new_static_text(contents.clone());
+					let mut static_text: LeafQuery = LeafQuery::new_static_text(contents.clone());
 
 					implicit_capture.surround_with_wildcards();
 					static_text.surround_with_wildcards();
 
 					interpretations.push(Interpretation {
-						sub_queries: vec![implicit_capture],
+						leaf_queries: vec![implicit_capture],
 					});
 					interpretations.push(Interpretation {
-						sub_queries: vec![static_text],
+						leaf_queries: vec![static_text],
 					});
 				} else {
 					interpretations.push(Interpretation {
-						sub_queries: vec![implicit_capture],
+						leaf_queries: vec![implicit_capture],
 					});
 				}
 
@@ -811,10 +809,10 @@ impl<'a> SearchStringView<'a> {
 			for token in path.components.iter() {
 				match token {
 					PathComponent::Literal(contents) => {
-						sub_queries.push(SubQuery::new_static_text(contents.clone()));
+						leaf_queries.push(LeafQuery::new_static_text(contents.clone()));
 					},
 					PathComponent::Capture { capture, contents } => {
-						sub_queries.push(SubQuery::new_rule(
+						leaf_queries.push(LeafQuery::new_rule(
 							capture.fully_qualified_name.clone(),
 							contents.clone(),
 						));
@@ -822,7 +820,7 @@ impl<'a> SearchStringView<'a> {
 				}
 			}
 
-			interpretations.push(Interpretation { sub_queries });
+			interpretations.push(Interpretation { leaf_queries });
 		}
 
 		interpretations.iter().for_each(Interpretation::invariants);
@@ -857,8 +855,8 @@ impl SymbolicChar {
 impl Interpretation {
 	fn invariants(&self) {
 		let mut last_was_static_text: bool = false;
-		for sub_query in self.sub_queries.iter() {
-			if sub_query.is_static_text() {
+		for query in self.leaf_queries.iter() {
+			if query.is_static_text() {
 				assert!(!last_was_static_text);
 				last_was_static_text = true;
 			} else {
@@ -866,23 +864,23 @@ impl Interpretation {
 			}
 
 			// No value carries adjacent wildcards:
-			// `**` says exactly what `*` does, and [`SubQuery::covers`]
+			// `**` says exactly what `*` does, and [`LeafQuery::covers`]
 			// is reflexive and transitive only on values without it --
 			// its fast path recognises a lone `*` as universal,
 			// but `**` falls through to the segment loop and fails even against itself.
 			assert!(
-				!sub_query
+				!query
 					.symbolic_value
 					.windows(2)
 					.any(|pair| pair.iter().all(SymbolicChar::is_wildcard)),
 				"adjacent wildcards in {:?}",
-				sub_query.string_value
+				query.string_value
 			);
 		}
 	}
 }
 
-impl SubQuery {
+impl LeafQuery {
 	pub(crate) fn new_static_text(symbolic_value: Vec<SymbolicChar>) -> Self {
 		// `Arc::default()` special-cases ZSTs; no allocation needed.
 		Self::new(Arc::<str>::default(), symbolic_value)

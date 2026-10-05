@@ -508,7 +508,7 @@ and `dedup_covered_interpretations` drops interpretations another already covers
 
 #### Covering
 
-[`SubQuery::covers`][covers] decides
+[`LeafQuery::covers`][covers] decides
 whether one sub-query's value describes everything another's does.
 It is a **conservative syntactic test, not glob containment**:
 it compares the two values wildcard-segment by wildcard-segment,
@@ -618,7 +618,7 @@ The properties the implementation must preserve, and where they are pinned:
 - **Normal form.**
     No value carries adjacent wildcards, and no two static sub-queries are adjacent.
     Both are asserted by `Interpretation::invariants`.
-    The first is not cosmetic: [`SubQuery::covers`] is reflexive and transitive only without `**`,
+    The first is not cosmetic: [`LeafQuery::covers`] is reflexive and transitive only without `**`,
     so dedup would silently misbehave on a value carrying it.
     See [Covering](#covering).
 - **Satisfiability of static values.**
@@ -627,7 +627,7 @@ The properties the implementation must preserve, and where they are pinned:
     but asserts the text *ends* in `ab`, which is false and matches nothing.
     A run covering only part of a stretch is therefore padded on both sides;
     see [Rendering](#rendering) for how the offsets decide it.
-    Pinned by `static_sub_query_values_are_satisfiable` --
+    Pinned by `static_leaf_query_values_are_satisfiable` --
     the structural comparison cannot see this,
     because stripping wildcards is blind to where they sit.
 - **Support.**
@@ -641,7 +641,7 @@ The properties the implementation must preserve, and where they are pinned:
 
 | Test | What it pins |
 | --- | --- |
-| `tests/decompose_differential.rs` | Transparency and containment over 447 queries x 18 shapes, including end-anchored forms, nullable variables, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_sub_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
+| `tests/decompose_differential.rs` | Transparency and containment over 447 queries x 18 shapes, including end-anchored forms, nullable variables, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_leaf_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
 | `tests/search_anchoring.rs` | The anchoring semantics through the public entry point, plus `decompose`/engine agreement. |
 | `tests/search_shape_support.rs` | Which shapes are supported, pure-static handling, and the panic contract for unsupported shapes. |
 | `tests/shape_narrowing.rs` | Truncation is transparent, and actually reduces state count. |
@@ -690,7 +690,7 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 ### Related Code
 
 - `src/search.rs` -- the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
-    `SubQuery::covers` and `dedup_covered_interpretations`.
+    `LeafQuery::covers` and `dedup_covered_interpretations`.
 - `src/search/decompose/shape.rs` -- `ShapeModel`, `Variable`, anchoring helpers.
 - `src/search/decompose/align.rs` -- the reachability DP and its fast path.
 - `src/search/decompose/placement.rs` -- `Run`, `Placement`, `PlacementTable`,

@@ -28,7 +28,7 @@ class ParsingSpecBuilder;
 class ParsingSpec;
 class Parser;
 class LogEvent;
-struct SubQuery;
+struct LeafQuery;
 
 class ParsingSpecBuilder {
 public:
@@ -51,6 +51,13 @@ public:
     auto operator=(ParsingSpecBuilder other) noexcept -> ParsingSpecBuilder&;
     auto operator=(ParsingSpecBuilder&& other) noexcept -> ParsingSpecBuilder&;
 
+    /**
+     * Conventional `swap` function, declared using `friend` for ADL.
+     * Also the second critical piece for the copy-and-swap idiom.
+     *
+     * @param first
+     * @param second
+     */
     friend auto swap(ParsingSpecBuilder& first, ParsingSpecBuilder& second) noexcept -> void;
 
     /**
@@ -103,23 +110,37 @@ public:
     [[nodiscard]] auto create_parser() const -> Parser;
 
     /**
-     * Computes interpretations for a named query.
+     * Computes interpretations for a (non-empty) named query.
      *
      * @param query
      * @param name
      */
     [[nodiscard]] auto search_by_name(std::string_view query, std::string_view name) const
-            -> std::vector<std::vector<SubQuery>>;
+            -> std::vector<std::vector<LeafQuery>>;
 
     /**
      * Computes interpretations for full-log search.
+     * The return value has 3 layers of vectors:
+     *
+     * ```
+     * std::vector< // One-to-one with `log_shapes`.
+     *   std::vector< // List of interpretations corresponding to one log shape.
+     *     std::vector<LeafQuery> // Each of these is 1 interpretation.
+     *   >
+     * >
+     * ```
      *
      * @param query
      * @param log_shapes
      */
     [[nodiscard]] auto
     search_by_log_shapes(std::string_view query, std::span<CCharArray const> log_shapes) const
-            -> std::vector<std::vector<std::vector<SubQuery>>>;
+            -> std::vector<std::vector<std::vector<LeafQuery>>>;
+
+    /**
+     * Get the delimiters for this parsing spec.
+     */
+    [[nodiscard]] auto get_delimiters() const -> std::string_view;
 
 private:
     friend class ParsingSpecBuilder;
@@ -142,13 +163,13 @@ private:
      */
     [[nodiscard]] static auto convert_interpretations(
             Vec<Interpretation> const* rust_interpretation
-    ) -> std::vector<std::vector<SubQuery>>;
+    ) -> std::vector<std::vector<LeafQuery>>;
 
     /**
      * Conversion of FFI compatible Rust type to native C++ type.
      */
     [[nodiscard]] static auto convert_interpretation(Interpretation const* interpretation)
-            -> std::vector<SubQuery>;
+            -> std::vector<LeafQuery>;
 };
 
 class Parser {
@@ -232,7 +253,7 @@ private:
     std::span<size_t const> m_leaf_indices;
 };
 
-struct SubQuery {
+struct LeafQuery {
     std::string name;
     std::string value;
 };
@@ -403,14 +424,14 @@ inline auto ParsingSpec::create_parser() const -> Parser {
 }
 
 inline auto ParsingSpec::search_by_name(std::string_view query, std::string_view name) const
-        -> std::vector<std::vector<SubQuery>> {
+        -> std::vector<std::vector<LeafQuery>> {
     Box<Vec<Interpretation>> rust_interpretations{imp::log_surgeon_search_by_name(
             m_spec,
             CCharArray::from_string_view(query),
             CCharArray::from_string_view(name)
     )};
 
-    std::vector<std::vector<SubQuery>> interpretations{
+    std::vector<std::vector<LeafQuery>> interpretations{
             ParsingSpec::convert_interpretations(rust_interpretations)
     };
 
@@ -422,8 +443,8 @@ inline auto ParsingSpec::search_by_name(std::string_view query, std::string_view
 inline auto ParsingSpec::search_by_log_shapes(
         std::string_view query,
         std::span<CCharArray const> log_shapes
-) const -> std::vector<std::vector<std::vector<SubQuery>>> {
-    std::vector<std::vector<std::vector<SubQuery>>> interpretations_by_shapes;
+) const -> std::vector<std::vector<std::vector<LeafQuery>>> {
+    std::vector<std::vector<std::vector<LeafQuery>>> interpretations_by_shapes;
     interpretations_by_shapes.reserve(log_shapes.size());
 
     Box<Vec<Vec<Interpretation>>> rust_interpretations{imp::log_surgeon_search_by_log_shapes(
@@ -452,8 +473,8 @@ inline auto ParsingSpec::search_by_log_shapes(
 }
 
 inline auto ParsingSpec::convert_interpretations(Vec<Interpretation> const* rust_interpretations)
-        -> std::vector<std::vector<SubQuery>> {
-    std::vector<std::vector<SubQuery>> interpretations;
+        -> std::vector<std::vector<LeafQuery>> {
+    std::vector<std::vector<LeafQuery>> interpretations;
     size_t i{0};
     while (true) {
         Interpretation const* interpretation{
@@ -471,26 +492,30 @@ inline auto ParsingSpec::convert_interpretations(Vec<Interpretation> const* rust
 }
 
 inline auto ParsingSpec::convert_interpretation(Interpretation const* interpretation)
-        -> std::vector<SubQuery> {
-    std::vector<SubQuery> sub_queries;
+        -> std::vector<LeafQuery> {
+    std::vector<LeafQuery> leaf_queries;
     size_t i{0};
     while (true) {
-        imp::SubQuery const* sub_query{log_surgeon_search_get_sub_query(interpretation, i)};
-        if (nullptr == sub_query) {
+        imp::LeafQuery const* query{log_surgeon_search_get_leaf_query(interpretation, i)};
+        if (nullptr == query) {
             break;
         }
 
-        std::string_view const name{imp::log_surgeon_search_sub_query_get_name(sub_query)};
-        std::string_view const value{imp::log_surgeon_search_sub_query_get_value(sub_query)};
+        std::string_view const name{imp::log_surgeon_search_leaf_query_get_name(query)};
+        std::string_view const value{imp::log_surgeon_search_leaf_query_get_value(query)};
 
-        sub_queries.push_back({
+        leaf_queries.push_back({
                 .name = std::string{name},
                 .value = std::string{value},
         });
 
         i++;
     }
-    return sub_queries;
+    return leaf_queries;
+}
+
+inline auto ParsingSpec::get_delimiters() const -> std::string_view {
+    return imp::log_surgeon_parsing_spec_get_delimiters(m_spec);
 }
 
 inline Parser::Parser(Arc<imp::ParsingSpec> const* spec) : Parser{} {
