@@ -25,7 +25,7 @@ pub struct AnchoredRegex {
 }
 
 #[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(try_from = "&str", into = "String")]
+#[serde(try_from = "String", into = "String")]
 pub enum Regex {
 	/// Any character, including newline.
 	AnyChar,
@@ -232,6 +232,14 @@ impl TryFrom<&str> for Regex {
 	}
 }
 
+impl TryFrom<String> for Regex {
+	type Error = RegexError;
+
+	fn try_from(pattern: String) -> Result<Self, Self::Error> {
+		<Regex as TryFrom<&str>>::try_from(&pattern)
+	}
+}
+
 impl From<Regex> for String {
 	fn from(regex: Regex) -> Self {
 		regex.to_pattern()
@@ -283,11 +291,13 @@ impl Regex {
 					if SPECIAL_CHARACTERS_IN_BRACKETED_RANGES.contains(ch) {
 						buffer.push('\\');
 						buffer.push(ch);
-					} else if ch == '-' {
-						// This is needed, for example, for `[a\-z]` as 3 characters,
-						// but not `[a-]`.
-						// However, we always escape it for simplicity and clarity.
-						buffer.push_str("\\-");
+					} else if ch == '-' || ch == '^' {
+						// This is needed, for example,
+						// for `[a\-z]` as 3 characters but not `[a-]`,
+						// and for `[\^a]` as a literal caret but not `[a^]`.
+						// However, we always escape them for simplicity and clarity.
+						buffer.push('\\');
+						buffer.push(ch);
 					} else {
 						buffer.push_str(&Escaped::escape(ch).to_string());
 					}
@@ -352,9 +362,13 @@ impl Regex {
 	}
 
 	/// Parenthesizes a subexpression if necessary; see [`Regex::precedence`].
+	///
+	/// Repetition suffixes can't be stacked (e.g. `a++` or `a{2}{3}` are invalid),
+	/// so a repetition directly inside another repetition is also parenthesized.
 	fn surround(&self, item: &Self) -> String {
 		let sub_pattern: String = item.to_pattern_internal();
-		if item.precedence() < self.precedence() {
+		if (item.precedence() < self.precedence()) || (self.is_repetition() && item.is_repetition())
+		{
 			format!("({sub_pattern})")
 		} else {
 			sub_pattern
@@ -376,6 +390,13 @@ impl Regex {
 			| Self::Literal(_)
 			| Self::BracketedRanges { .. } => 3,
 		}
+	}
+
+	fn is_repetition(&self) -> bool {
+		matches!(
+			self,
+			Self::KleeneClosure(_) | Self::KleenePlus(_) | Self::BoundedRepetition { .. }
+		)
 	}
 }
 

@@ -417,14 +417,18 @@ impl ParsingSpec {
 				},
 				LogShapeFragment::Rule(rule_name) => {
 					let rules: Vec<(&RuleInfo, &Regex)> = self.rules_for_name(rule_name);
-					if rules.is_empty() {
-						return Err(rule_name.clone());
-					}
 
 					let branches: Tnfa = rules
 						.iter()
-						.map(|&(info, regex)| Tnfa::for_single_rule(info.root_idx, regex, &[]))
-						.fold(Tnfa::BLANK, |accum, x| accum.alternate(&x));
+						.map(|&(info, regex)| {
+							// Capture tags need the actual root rule (to resolve capture names),
+							// but the fragment's accepting states must be `NIL` for `concat`.
+							Tnfa::for_single_rule(info.root_idx, regex, &[])
+								.with_accepting_rule(RuleIdx::NIL)
+						})
+						.reduce(|lhs, rhs| lhs.alternate(&rhs))
+						.ok_or_else(|| rule_name.clone())?;
+
 					sequence.push(branches);
 				},
 			}
@@ -432,9 +436,11 @@ impl ParsingSpec {
 
 		Ok(sequence
 			.into_iter()
-			.fold(Tnfa::BLANK, |accum, x| accum.concat(&x)))
+			.fold(Tnfa::epsilon(), |accum, x| accum.concat(&x)))
 	}
 
+	/// Parses/splits a log shape string into fragments.
+	/// Panics on invalid input.
 	pub fn split_log_shape(&self, shape: &str) -> Vec<LogShapeFragment> {
 		const SEPARATOR: char = '%';
 

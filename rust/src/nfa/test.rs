@@ -133,6 +133,36 @@ fn intersect_with_no_common_language() {
 	assert!(!matches(&intersection, "a"));
 }
 
+#[test]
+fn epsilon_intersection_can_accept() {
+	let intersection: Tnfa = Tnfa::epsilon().intersect::<false>(&Tnfa::epsilon());
+
+	assert_eq!(intersection.states.len(), 1);
+	assert!(intersection.can_accept());
+	assert!(!intersection.definitely_cannot_accept());
+	assert!(matches(&intersection, ""));
+}
+
+#[test]
+fn definitely_cannot_accept_agrees_with_can_accept_after_intersect() {
+	let nfas: [Tnfa; 5] = [
+		Tnfa::epsilon(),
+		for_pattern("a"),
+		for_pattern(r"\d+"),
+		for_pattern("[a-z]+"),
+		for_pattern("..."),
+	];
+	for lhs in nfas.iter() {
+		for rhs in nfas.iter() {
+			let intersection: Tnfa = lhs.intersect::<false>(rhs);
+			assert_eq!(
+				intersection.definitely_cannot_accept(),
+				!intersection.can_accept()
+			);
+		}
+	}
+}
+
 #[track_caller]
 fn for_pattern(pattern: &str) -> Tnfa {
 	let regex: Regex = Regex::from_pattern(pattern).unwrap();

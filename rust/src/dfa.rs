@@ -34,22 +34,18 @@ use crate::parsing_spec::RuleIdx;
 use crate::parsing_spec::RuleInfo;
 use crate::regex::Regex;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Tdfa {
 	states: Vec<DfaState>,
-	#[serde(skip)]
 	kernels: BTreeMap<Kernel, usize>,
-	#[serde(skip)]
 	pub tags: Vec<CaptureTag>,
 	/// Bijection between indices of start/end capture pair tags.
-	#[serde(skip)]
 	tag_pairs: Vec<usize>,
 	/// During construction, this is the "current" count;
 	/// after construction, this is the "total required".
 	/// The first `tags.len()` are initial registers for the corresponding tags.
 	/// The second `tags.len()` (i.e. `tags.len()..(2 * tags.len())`)
 	/// are the corresponding final registers.
-	#[serde(skip)]
 	pub number_of_registers: usize,
 }
 
@@ -82,9 +78,8 @@ pub struct MatchedCapture {
 	pub range: Range<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct DfaState {
-	#[serde(skip, default = "Kernel::empty")]
 	kernel: Kernel,
 	transitions: IntervalTree<u32, Transition>,
 	/// If this is a final state (the kernel contains an accepting NFA state),
@@ -92,11 +87,9 @@ struct DfaState {
 	accepting_rule: Option<(RuleIdx, Option<EncodingIdx>)>,
 	/// Register operations upon finalizing a match (if applicable);
 	/// copy to the final registers.
-	#[serde(skip)]
 	final_operations: Vec<RegisterOperation>,
 	/// Cache/combined map from this state's configurations of "register -> which tag it holds".
 	/// Present for debugging.
-	#[serde(skip)]
 	tag_for_register: BTreeMap<usize, CaptureTag>,
 	/// We cache the outgoing transitions for the first so many "common" characters;
 	/// ASCII is most common and happens to be the first 0x80 unicode code points.
@@ -105,7 +98,6 @@ struct DfaState {
 	/// than the full range of unicode code points;
 	/// but technically the code should work for any value here
 	/// (comments in the relevant parts of the implementation explain why).
-	#[serde(skip, default = "DfaState::default_ascii_cache")]
 	ascii_cache: [Transition; 0x80],
 }
 
@@ -124,32 +116,26 @@ struct DfaState {
 ///
 /// However, both of the aforementioned procedures operate more naturally on a list
 /// of `Configuration`s, and `Vec<Configuration>` naturally has better memory locality.
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 struct Kernel(Vec<Configuration>);
 
 /// A "configuration" is essentially an augmented NFA state (as documented per field).
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 struct Configuration {
 	nfa_state: NfaIdx,
 	/// A mapping "tag (by ID/index) -> register";
 	/// answers "which register holds this tag?".
-	#[serde(skip)]
 	register_for_tag: Vec<usize>,
 	/// Sequence of tags accumulated to reach this state during [`Tdfa::epsilon_closure`]
 	/// (corresponding to the execution of positive/negative tags during NFA simulation).
-	#[serde(skip)]
 	tag_path_in_closure: Vec<(CaptureTag, SymbolicPosition)>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct Transition {
 	/// `usize::MAX` is used as an "invalid/empty" marker value.
 	/// See [`NfaIdx`] for a note on why this is "safe".
 	target: usize,
-	#[serde(skip)]
 	operations: Vec<RegisterOperation>,
 }
 
@@ -322,6 +308,10 @@ impl Tdfa {
 			} else {
 				return false;
 			}
+		}
+
+		if self.states[current_state].accepting_rule.is_none() {
+			return false;
 		}
 
 		self.apply_operations(
@@ -1142,10 +1132,6 @@ impl TdfaExecution {
 }
 
 impl Kernel {
-	fn empty() -> Self {
-		Self(Vec::new())
-	}
-
 	/// There should be no duplicate NFA states; see comment above on [`Kernel`].
 	fn invariants(configurations: &[(Configuration, Vec<(CaptureTag, SymbolicPosition)>)]) {
 		let states: Vec<NfaIdx> = configurations

@@ -110,7 +110,7 @@ impl AnchoredRegex {
 		T: RegexPlaceholderLookup,
 	{
 		let mut anchor_before: bool = false;
-		let mut anchor_after: bool = false;
+		let anchor_after: bool;
 
 		if let Some(suffix) = pattern.strip_prefix('^') {
 			anchor_before = true;
@@ -118,13 +118,9 @@ impl AnchoredRegex {
 		}
 
 		// We can't strip the suffix the same way, because it may be escaped.
-		let regex: Regex = match parse_alternation(pattern) {
-			Ok((remaining, mut regex)) => {
-				if remaining == "$" {
-					anchor_after = true;
-				} else {
-					assert_eq!(remaining, "");
-				}
+		let regex: Regex = match parse_to_end_possibly_anchor(pattern) {
+			Ok((remaining, (mut regex, anchor))) => {
+				assert_eq!(remaining, "");
 
 				regex
 					.replace_with_placeholders(lookup)
@@ -133,6 +129,8 @@ impl AnchoredRegex {
 						remaining: String::new(),
 						kind,
 					})?;
+
+				anchor_after = anchor;
 
 				regex
 			},
@@ -376,6 +374,22 @@ impl RegexErrorKind {
 	/// Used in [`nom::branch::alt`] fallbacks to generate more intuitive error messages.
 	fn diagnostic<'a, T>(self) -> impl Fn(&'a str) -> ParsingResult<'a, T> {
 		move |input| Err(self.clone().error(input))
+	}
+}
+
+/// Same as [`parse_to_end`], but possibly with an ending `$` anchor.
+/// Unlike the leading `^` anchor, it cannot be trivially stripped,
+/// since the pattern is parsed left to right
+/// (we don't know if a trailing `$` has been escaped or not without processing left to right).
+fn parse_to_end_possibly_anchor(input: &str) -> ParsingResult<'_, (Regex, bool)> {
+	let (input, regex): (&str, Regex) = parse_alternation(input)?;
+
+	if input == "$" {
+		Ok(("", (regex, true)))
+	} else if input.is_empty() {
+		Ok(("", (regex, false)))
+	} else {
+		Err(RegexErrorKind::InvalidTerm.error(input))
 	}
 }
 
@@ -1283,6 +1297,63 @@ mod test {
 					Regex::Literal('b')
 				),)))
 			);
+		}
+	}
+
+	#[test]
+	fn to_pattern_round_trips() {
+		const PATTERNS: &[&str] = &[
+			// Literal caret in brackets.
+			r"[\^a]",
+			r"[\^^]",
+			r"[a^]",
+			r"[^^]",
+			r"[^\^a]",
+			r"[\^-a]",
+			// Nested repetitions.
+			r"(a+)+",
+			r"(a+)?b",
+			r"(a*)+b",
+			r"(a?)*b",
+			r"(a{2}){3}",
+			r"(a{2,3})+",
+			r"((a+)+)+",
+			r"(?<x>a+)+",
+			// Non-ASCII characters with an odd number of minimal hex digits.
+			"\u{434}+",
+			"[\u{434}-\u{44f}]",
+			"\u{1f600}",
+			"[\u{1}-\u{1f600}]",
+			r"\u{00}",
+		];
+
+		for &pattern in PATTERNS.iter() {
+			let regex: Regex = Regex::from_pattern(pattern).unwrap();
+			let serialized: String = regex.to_pattern();
+			let reparsed: Regex = Regex::from_pattern(&serialized)
+				.unwrap_or_else(|e| panic!("{pattern:?} -> {serialized:?}: {e:?}"));
+			assert_eq!(regex, reparsed, "{pattern:?} -> {serialized:?}");
+		}
+	}
+
+	#[test]
+	fn literal_caret_in_brackets_stays_literal() {
+		let regex: Regex = Regex::from_pattern(r"[\^a]").unwrap();
+		assert_eq!(regex.to_pattern(), r"[\^a]");
+		std::assert_matches!(regex, Regex::BracketedRanges { negated: false, .. });
+	}
+
+	#[test]
+	fn nested_repetitions_are_parenthesized() {
+		const CASES: &[(&str, &str)] = &[
+			("(a+)+", "(a+)+"),
+			("(a+)?b", "(a+)?b"),
+			("(a{2}){3}", "(a{2}){3}"),
+			("(ab)+", "(ab)+"),
+			("a+b", "a+b"),
+		];
+		for &(pattern, expected) in CASES.iter() {
+			assert_eq!(Regex::from_pattern(pattern).unwrap().to_pattern(), expected);
 		}
 	}
 

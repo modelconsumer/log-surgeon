@@ -3,6 +3,18 @@ use crate::log_event::LogEvent;
 use crate::parser::Parser;
 
 #[test]
+fn non_ascii_definition_round_trips() {
+	let definition: &str = concat!(
+		"delimiters: \" \\u{0434}\\u{01f600}\"\n",
+		"cyrillic: \"\\u{0434}+\"\n",
+		"emoji: \"[\\u{01f600}-\\u{01f64f}]+\"\n",
+	);
+	let spec: ParsingSpec = crate::spec! { definition };
+	let roundtrip: String = spec.to_parsing_spec_definition();
+	ParsingSpecBuilder::from_parsing_spec_definition(&roundtrip).unwrap();
+}
+
+#[test]
 fn number_encoding() {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
 	builder

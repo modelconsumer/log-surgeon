@@ -85,8 +85,10 @@ impl TarjanSccs {
 			// i.e., the SCC containing the entry state of an NFA/DFA would be ordered last.
 			this.sccs.reverse();
 
-			for vertex in this.vertices.iter_mut() {
-				vertex.scc = this.sccs.len() - vertex.scc - 1;
+			for (scc_idx, scc) in this.sccs.iter().enumerate() {
+				for &i in scc.iter() {
+					this.vertices[i].scc = scc_idx;
+				}
 			}
 		}
 
@@ -153,7 +155,6 @@ impl TarjanSccs {
 					loop {
 						let j: usize = stack.pop().unwrap();
 						self.vertices[j].on_stack = false;
-						self.vertices[j].scc = self.sccs.len();
 						scc.push(j);
 						if j == i {
 							break;
@@ -238,7 +239,6 @@ impl TarjanSccs {
 			loop {
 				let j: usize = stack.pop().unwrap();
 				self.vertices[j].on_stack = false;
-				self.vertices[j].scc = self.sccs.len();
 				scc.push(j);
 				if j == i {
 					break;

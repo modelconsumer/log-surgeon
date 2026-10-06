@@ -3,6 +3,7 @@
 
 use std::ffi::c_char;
 use std::marker::PhantomData;
+use std::ptr::NonNull;
 use std::str::Utf8Error;
 
 /// Represents a C `T const*` pointer + `size_t` length as a single ABI-stable value;
@@ -98,7 +99,7 @@ unsafe impl<T> Sync for UncheckedCArray<T> {}
 impl<'lifetime, T> CArray<'lifetime, T> {
 	pub const fn null() -> Self {
 		Self {
-			pointer: std::ptr::null(),
+			pointer: NonNull::dangling().as_ptr(),
 			length: 0,
 			_lifetime: PhantomData,
 		}
@@ -155,7 +156,7 @@ impl<'lifetime> CCharArray<'lifetime> {
 
 impl<T> UncheckedCArray<T> {
 	pub const NULL: Self = Self {
-		pointer: std::ptr::null(),
+		pointer: NonNull::dangling().as_ptr(),
 		length: 0,
 	};
 }
@@ -180,7 +181,7 @@ impl UncheckedCArray<c_char> {
 
 impl<'lifetime> CUtf8<'lifetime> {
 	pub const NULL: Self = Self {
-		pointer: std::ptr::null(),
+		pointer: NonNull::dangling().as_ptr(),
 		length: 0,
 		_lifetime: PhantomData,
 	};

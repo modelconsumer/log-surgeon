@@ -101,9 +101,43 @@ impl Tnfa {
 		}
 	}
 
-	// TODO
+	pub fn epsilon() -> Self {
+		Self {
+			states: vec![NfaState {
+				idx: NfaIdx::BEGIN,
+				name: Cow::Borrowed("begin"),
+				transitions: Transitions::Interval(IntervalTree::new()),
+				maybe_accepting_data: Some((RuleIdx::NIL, None)),
+			}],
+			tags: BTreeSet::new(),
+		}
+	}
+
+	/// Set the [`RuleIdx`] of all accepting states (clearing any encoding),
+	/// leaving capture tags (which carry their own [`CaptureTag::rule_idx`]) untouched.
+	pub fn with_accepting_rule(mut self, rule_idx: RuleIdx) -> Self {
+		for state in self.states.iter_mut() {
+			if let Some(accepting_data) = &mut state.maybe_accepting_data {
+				*accepting_data = (rule_idx, None);
+			}
+		}
+		self
+	}
+
+	// XXX: Can we refactor/redesign the outside code so this isn't needed?
+	/// A constant-time check, sound for any `Tnfa`: `true` only if no string is accepted;
+	/// i.e. there are no states, or the only state is non-accepting
+	/// (any transitions can only loop back to itself).
+	///
+	/// Exact (equivalent to `!self.can_accept()`) for the output of [`Tnfa::intersect`],
+	/// which prunes all states that cannot reach an accepting state,
+	/// leaving a single non-accepting state if the intersection is empty.
 	pub fn definitely_cannot_accept(&self) -> bool {
-		self.states.len() <= 1
+		match self.states.as_slice() {
+			[] => true,
+			[only] => !only.is_accepting(),
+			_ => false,
+		}
 	}
 
 	pub fn tags(&self) -> &BTreeSet<CaptureTag> {

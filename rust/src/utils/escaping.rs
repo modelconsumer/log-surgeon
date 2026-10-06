@@ -9,9 +9,10 @@ use std::str::Chars;
 ///   and non-ASCII Unicode characters (e.g. `\u{80}`),
 /// - single and double quotes (`\'`, `\"`).
 ///
-/// Currently, the implementation simply calls [`char::escape_default`],
-/// but this struct still exists as a layer of abstraction;
-/// it also provides [`Escaped::unescape`] for parsing such escape sequences.
+/// This matches [`char::escape_default`],
+/// except Unicode escapes are zero-padded to an even number of hex digits
+/// (e.g. `\u{0434}` rather than `\u{434}`),
+/// as required by [`Escaped::unescape`].
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Escaped {
 	ch: char,
@@ -125,7 +126,24 @@ impl Escaped {
 
 impl std::fmt::Display for Escaped {
 	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		self.ch.escape_default().fmt(fmt)
+		use std::fmt::Write;
+
+		// `char::escape_default` emits the minimal number of hex digits for Unicode escapes,
+		// but `Escaped::unescape` requires them in pairs.
+		let escaped: std::char::EscapeDefault = self.ch.escape_default();
+		if escaped.len() <= 2 {
+			return escaped.fmt(fmt);
+		}
+
+		let code_point: u32 = u32::from(self.ch);
+		let width: usize = match code_point {
+			0..=0xFF => 2,
+			0x100..=0xFFFF => 4,
+			_ => 6,
+		};
+		fmt.write_str("\\u{")?;
+		write!(fmt, "{code_point:0width$x}")?;
+		fmt.write_char('}')
 	}
 }
 
@@ -142,4 +160,41 @@ fn parse_hex_digit_pair(chars: &mut Chars<'_>) -> Option<u32> {
 	}
 
 	None
+}
+
+#[cfg(test)]
+mod test {
+	use crate::utils::Escaped;
+
+	#[test]
+	fn unicode_escapes_are_padded_to_hex_digit_pairs() {
+		const CASES: &[(char, &str)] = &[
+			('\0', r"\u{00}"),
+			('\u{1}', r"\u{01}"),
+			('\u{e9}', r"\u{e9}"),
+			('\u{434}', r"\u{0434}"),
+			('\u{4e16}', r"\u{4e16}"),
+			('\u{1f600}', r"\u{01f600}"),
+			('\u{10ffff}', r"\u{10ffff}"),
+		];
+		for &(ch, expected) in CASES.iter() {
+			assert_eq!(Escaped::escape(ch).to_string(), expected);
+		}
+	}
+
+	#[test]
+	fn escape_round_trips() {
+		let interesting: [char; 12] = [
+			'a', ' ', '~', '\\', '\'', '"', '\t', '\r', '\n', '\u{7f}', '\u{d7ff}', '\u{e000}',
+		];
+		let chars = interesting
+			.into_iter()
+			.chain((0..=0x1100).filter_map(char::from_u32))
+			.chain((0xFFF0..=0x10100).filter_map(char::from_u32))
+			.chain(['\u{10ffff}']);
+		for ch in chars {
+			let escaped: String = Escaped::escape(ch).to_string();
+			assert_eq!(Escaped::unescape(&escaped), Ok(("", ch)), "{escaped}");
+		}
+	}
 }
