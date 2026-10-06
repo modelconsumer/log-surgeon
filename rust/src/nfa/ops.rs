@@ -47,43 +47,26 @@ impl Tnfa {
 	///
 	/// Currently only used to splice the intersection of encoding NFAs when constructing by regex.
 	pub fn splice(&mut self, other: &Tnfa, current: NfaIdx, target: NfaIdx) {
-		let my_states: Vec<NfaIdx> = other
-			.states
-			.iter()
-			.map(|state| self.new_state(state.name.clone()))
-			.collect::<Vec<_>>();
+		assert!(!other.states.is_empty());
+		let offset: usize = self.states.len();
 
 		assert_eq!(self[current].transitions.len(), 0);
-		self[current].transitions = Transitions::Spontaneous(vec![my_states[0]]);
+		self[current].transitions = Transitions::Spontaneous(vec![NfaIdx(offset)]);
 
-		for (i, other_state) in other.states.iter().enumerate() {
-			let idx: NfaIdx = my_states[i];
-			if other_state.is_accepting() {
-				assert_eq!(self[idx].transitions.len(), 0);
-				self[idx].transitions = Transitions::Spontaneous(vec![target]);
+		self.states.extend(other.states.iter().map(|other_state| {
+			let mut state: NfaState = other_state.offset_idxes(offset);
+			if state.is_accepting() {
+				assert_eq!(state.transitions.len(), 0);
+				state.maybe_accepting_data = None;
+				state.transitions = Transitions::Spontaneous(vec![target]);
 			} else {
-				match &other_state.transitions {
-					Transitions::Interval(transitions) => {
-						let mut transitions: IntervalTree<u32, NfaIdx> = transitions.clone();
-						transitions.iter_mut().for_each(|(_, target)| {
-							*target = my_states[target.0];
-						});
-						self[idx].transitions = Transitions::Interval(transitions);
-					},
-					Transitions::Spontaneous(transitions) => {
-						self[idx].transitions = Transitions::Spontaneous(
-							transitions
-								.iter()
-								.map(|target| my_states[target.0])
-								.collect::<Vec<_>>(),
-						);
-					},
-					Transitions::Tagged { .. } => {
-						unreachable!("encoding pattern should not have captures");
-					},
-				}
+				assert!(
+					!matches!(state.transitions, Transitions::Tagged { .. }),
+					"encoding pattern should not have captures"
+				);
 			}
-		}
+			state
+		}));
 	}
 }
 

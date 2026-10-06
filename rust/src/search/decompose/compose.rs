@@ -46,19 +46,19 @@
 #[cfg(test)]
 mod test;
 
+use std::collections::BTreeMap;
+
 use crate::parsing_spec::ParsingSpec;
 use crate::search::Interpretation;
 use crate::search::LeafQuery;
 use crate::search::SymbolicChar;
 use crate::search::decompose::Placement;
 use crate::search::decompose::PlacementTable;
-use crate::search::decompose::Position;
 use crate::search::decompose::Run;
 use crate::search::decompose::RunFitCache;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapePart;
-use crate::search::decompose::placement::index_of;
-use crate::search::decompose::placement::positions_of;
+use crate::search::decompose::placement::Reachability;
 
 /// One complete way the query's literal text maps onto a shape.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -502,45 +502,18 @@ pub fn compose(
 		}]);
 	}
 
-	let num_parts: usize = model.parts.len();
-	// States are *positions* (part plus character offset), not bare part indices:
-	// several runs can sit in one static part, distinguished only by where in it they begin.
-	// See [`crate::search::decompose::placement`].
-	let positions: Vec<Position> = positions_of(table, num_parts);
+	// Feasibility first, as *bits*. Keeping this separate from enumeration is what bounds
+	// memory: materializing the compositions at every state instead would cost
+	// `states x compositions`, and a shape can have tens of thousands of parts.
+	// See [`Reachability`].
+	let reachability: Reachability = Reachability::compute(table, model.parts.len());
 
-	// Feasibility first, as *bits*: `reachable[(run * width) + position]` is true
-	// when runs `run..` can all be placed without starting before `position`.
-	//
-	// Keeping this separate from enumeration is what bounds memory. Materializing the
-	// compositions at every state instead would cost `states x compositions`,
-	// and a shape can have tens of thousands of parts, so that is not viable.
-	let width: usize = positions.len();
-	let mut reachable: Vec<bool> = vec![false; (num_runs + 1) * width];
-	for position in 0..width {
-		reachable[(num_runs * width) + position] = true;
-	}
-	for run in (0..num_runs).rev() {
-		for position in 0..width {
-			reachable[(run * width) + position] = table.placements[run].iter().any(|placement| {
-				((placement.start_part, placement.start_offset) >= positions[position])
-					&& reachable[((run + 1) * width)
-						+ index_of(
-							&positions,
-							(
-								placement.next_available_part(),
-								placement.next_available_offset(),
-							),
-						)]
-			});
-		}
-	}
-
-	if !reachable[0] {
+	if !reachability.is_reachable(0, 0) {
 		return Composed::Impossible;
 	}
 
 	// Then enumerate, walking only states already known to lead to a complete assignment.
-	// Pruning on `reachable` means every branch entered yields at least one composition,
+	// Pruning on `reachability` means every branch entered yields at least one composition,
 	// so the work is proportional to the number of compositions
 	// rather than to the search space.
 	let mut compositions: Vec<Composition> = Vec::new();
@@ -548,9 +521,7 @@ pub fn compose(
 	if !enumerate(
 		model,
 		table,
-		&reachable,
-		width,
-		&positions,
+		&reachability,
 		0,
 		0,
 		&mut choices,
@@ -580,16 +551,14 @@ pub fn compose(
 	Composed::Compositions(compositions)
 }
 
-/// Depth-first enumeration of compositions, pruned by `reachable`.
+/// Depth-first enumeration of compositions, pruned by `reachability`.
 ///
 /// Returns `false` if the budget was exceeded.
 #[allow(clippy::too_many_arguments)]
 fn enumerate(
 	model: &ShapeModel,
 	table: &PlacementTable,
-	reachable: &[bool],
-	width: usize,
-	positions: &[Position],
+	reachability: &Reachability,
 	run: usize,
 	position: usize,
 	choices: &mut Vec<usize>,
@@ -605,17 +574,11 @@ fn enumerate(
 	}
 
 	for (choice, placement) in table.placements[run].iter().enumerate() {
-		if (placement.start_part, placement.start_offset) < positions[position] {
+		if placement.start() < reachability.positions()[position] {
 			continue;
 		}
-		let next: usize = index_of(
-			positions,
-			(
-				placement.next_available_part(),
-				placement.next_available_offset(),
-			),
-		);
-		if !reachable[((run + 1) * width) + next] {
+		let next: usize = reachability.index_of(placement.next_available());
+		if !reachability.is_reachable(run + 1, next) {
 			continue;
 		}
 
@@ -623,9 +586,7 @@ fn enumerate(
 		let ok: bool = enumerate(
 			model,
 			table,
-			reachable,
-			width,
-			positions,
+			reachability,
 			run + 1,
 			next,
 			choices,
@@ -649,8 +610,7 @@ fn enumerate(
 /// (they are separated by text the rule also produces).
 fn build_composition(model: &ShapeModel, table: &PlacementTable, choices: &[usize]) -> Composition {
 	// Keyed by part index to merge pieces, then flattened in shape order.
-	let mut by_part: std::collections::BTreeMap<usize, Vec<PieceRef>> =
-		std::collections::BTreeMap::new();
+	let mut by_part: BTreeMap<usize, Vec<PieceRef>> = BTreeMap::new();
 
 	for (run, &choice) in choices.iter().enumerate() {
 		let placement: &Placement = &table.placements[run][choice];

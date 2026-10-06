@@ -646,23 +646,7 @@ impl<'a> SearchStringView<'a> {
 		let paths: Vec<Path> = intersection.compute_paths(_spec);
 
 		for path in paths.iter() {
-			assert!(!path.components.is_empty());
-
-			let mut leaf_queries: Vec<LeafQuery> = Vec::new();
-
-			for token in path.components.iter() {
-				match token {
-					PathComponent::Literal(contents) => {
-						leaf_queries.push(LeafQuery::new_static_text(contents.clone()));
-					},
-					PathComponent::Capture { capture, contents } => {
-						leaf_queries.push(LeafQuery::new_rule(
-							capture.fully_qualified_name.clone(),
-							contents.clone(),
-						));
-					},
-				}
-			}
+			let mut leaf_queries: Vec<LeafQuery> = LeafQuery::from_path(path);
 
 			if !anchored_end {
 				// A truncated tail containing static text was reported by the full shape
@@ -766,13 +750,7 @@ impl<'a> SearchStringView<'a> {
 		let paths: Vec<Path> = intersection.compute_paths(spec);
 
 		for path in paths.iter() {
-			assert!(!path.components.is_empty());
-
-			let mut leaf_queries: Vec<LeafQuery> = Vec::new();
-
-			if let PathComponent::Literal(contents) = path.components.first().unwrap()
-				&& (path.components.len() == 1)
-			{
+			if let [PathComponent::Literal(contents)] = path.components.as_slice() {
 				let rule: &RootRule = &spec[path.rule_idx];
 				let rule_info: &RuleInfo = if let Some(rule_info) = maybe_rule_info {
 					assert_eq!(rule_info.root_idx, rule.idx);
@@ -806,21 +784,9 @@ impl<'a> SearchStringView<'a> {
 				continue;
 			}
 
-			for token in path.components.iter() {
-				match token {
-					PathComponent::Literal(contents) => {
-						leaf_queries.push(LeafQuery::new_static_text(contents.clone()));
-					},
-					PathComponent::Capture { capture, contents } => {
-						leaf_queries.push(LeafQuery::new_rule(
-							capture.fully_qualified_name.clone(),
-							contents.clone(),
-						));
-					},
-				}
-			}
-
-			interpretations.push(Interpretation { leaf_queries });
+			interpretations.push(Interpretation {
+				leaf_queries: LeafQuery::from_path(path),
+			});
 		}
 
 		interpretations.iter().for_each(Interpretation::invariants);
@@ -895,15 +861,24 @@ impl LeafQuery {
 	}
 
 	fn new(fully_qualified_name: Arc<str>, symbolic_value: Vec<SymbolicChar>) -> Self {
-		let string_value: String = symbolic_value.iter().fold(String::new(), |mut accum, &ch| {
-			accum.push_str(&ch.to_string());
-			accum
-		});
+		let string_value: String =
+			String::from_iter(symbolic_value.iter().map(SymbolicChar::to_string));
 		Self {
 			fully_qualified_name,
 			symbolic_value,
 			string_value,
 		}
+	}
+
+	/// One sub-query per path component, in order.
+	fn from_path(path: &Path) -> Vec<Self> {
+		assert!(!path.components.is_empty());
+		Vec::from_iter(path.components.iter().map(|token| match token {
+			PathComponent::Literal(contents) => Self::new_static_text(contents.clone()),
+			PathComponent::Capture { capture, contents } => {
+				Self::new_rule(capture.fully_qualified_name.clone(), contents.clone())
+			},
+		}))
 	}
 
 	pub fn is_static_text(&self) -> bool {
@@ -1015,9 +990,6 @@ impl LeafQuery {
 			self.symbolic_value.insert(0, SymbolicChar::GlobStar);
 			self.string_value.insert(0, '*');
 		}
-		if *self.symbolic_value.last().expect("non-empty") != SymbolicChar::GlobStar {
-			self.symbolic_value.push(SymbolicChar::GlobStar);
-			self.string_value.push('*');
-		}
+		self.append_wildcard();
 	}
 }

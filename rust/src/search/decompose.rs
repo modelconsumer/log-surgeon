@@ -61,9 +61,9 @@ pub use placement::can_compose;
 pub use placement::runs_of;
 pub use run_fit::RunFit;
 pub use run_fit::RunFitCache;
-pub use shape::Variable;
 pub use shape::ShapeModel;
 pub use shape::ShapePart;
+pub use shape::Variable;
 
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;

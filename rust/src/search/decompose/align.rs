@@ -46,9 +46,9 @@ mod test;
 
 use crate::parsing_spec::ResolvedCapture;
 use crate::search::SymbolicChar;
-use crate::search::decompose::Variable;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapePart;
+use crate::search::decompose::Variable;
 
 /// One way the query's fixed text lines up with a shape.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -357,8 +357,8 @@ impl<'a> Solver<'a> {
 				let symbol: SymbolicChar = self.symbols[query];
 
 				let Some(&current) = self.atoms.get(atom) else {
-				// Past the end of the shape: there is no more message to consume,
-				// so only a wildcard can remain, and only by matching nothing.
+					// Past the end of the shape: there is no more message to consume,
+					// so only a wildcard can remain, and only by matching nothing.
 					reachable[state] = (SymbolicChar::GlobStar == symbol)
 						&& reachable[self.index(query + 1, atom)];
 					continue;
@@ -371,7 +371,7 @@ impl<'a> Solver<'a> {
 							(c == expected) && reachable[self.index(query + 1, atom + 1)]
 						},
 						// The wildcard absorbs this character,
-					// or stops and leaves it to the next symbol.
+						// or stops and leaves it to the next symbol.
 						SymbolicChar::GlobStar => {
 							reachable[self.index(query, atom + 1)]
 								|| reachable[self.index(query + 1, atom)]
@@ -380,7 +380,7 @@ impl<'a> Solver<'a> {
 					Atom::Variable(variable) => {
 						let longest: usize = self.max_capture_length(variable, query);
 						// `length == 0` means the variable's output
-					// is not described by the query.
+						// is not described by the query.
 						(0..=longest).any(|length| reachable[self.index(query + length, atom + 1)])
 					},
 				};
@@ -471,13 +471,13 @@ impl<'a> Solver<'a> {
 									&self.symbols[query..(query + length)];
 								let prepend: Prepend<'_> = if consumed.is_empty() {
 									// Nothing attributed to this variable,
-								// so no capture is emitted.
+									// so no capture is emitted.
 									Prepend::Nothing
 								} else if consumed.iter().all(SymbolicChar::is_wildcard) {
-								// A capture of only wildcards says nothing about
-								// the variable's value;
-								// record an unconstrained gap rather than a vacuous
-								// "this rule matched" result.
+									// A capture of only wildcards says nothing about
+									// the variable's value;
+									// record an unconstrained gap rather than a vacuous
+									// "this rule matched" result.
 									Prepend::Symbol(SymbolicChar::GlobStar)
 								} else {
 									Prepend::Capture(variable, consumed)

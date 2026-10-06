@@ -131,33 +131,49 @@ pub struct Piece {
 }
 
 impl Placement {
-	/// The part index a following run must start at or after.
+	/// A run produced wholly by one part.
+	fn within_part(
+		part: usize,
+		start_offset: usize,
+		end_offset: usize,
+		text: String,
+		is_rule: bool,
+	) -> Self {
+		Self {
+			start_part: part,
+			end_part: part,
+			start_offset,
+			end_offset,
+			pieces: vec![Piece {
+				part,
+				offset: start_offset,
+				text,
+				is_rule,
+			}],
+		}
+	}
+
+	/// Where this run begins.
+	#[must_use]
+	pub fn start(&self) -> Position {
+		(self.start_part, self.start_offset)
+	}
+
+	/// The position a following run must start at or after.
 	///
 	/// A run that ends inside a rule leaves that rule available to a later run
 	/// (a rule can produce more text after the run), and so does a run ending part-way through
 	/// static text -- the rest of that text is still to come.
-	/// See [`Self::next_available_offset`], which separates the two.
+	/// The two differ only in the offset: it is meaningful only where the placement ends in
+	/// static text, since a rule may emit arbitrarily much more text before the next run begins.
 	#[must_use]
-	pub fn next_available_part(&self) -> usize {
-		match self.pieces.last() {
-			// Still inside the rule; a later run may continue within it.
-			Some(piece) if piece.is_rule => self.end_part,
-			// Static text with more characters left over is likewise still available.
-			_ => self.end_part,
-		}
-	}
-
-	/// The offset within [`Self::next_available_part`] a following run must start at or after.
-	///
-	/// Only meaningful where the placement ends in static text;
-	/// a run ending inside a rule imposes no offset,
-	/// since the rule may emit arbitrarily much more text before the next run begins.
-	#[must_use]
-	pub fn next_available_offset(&self) -> usize {
-		match self.pieces.last() {
-			Some(piece) if piece.is_rule => 0,
-			_ => self.end_offset,
-		}
+	pub fn next_available(&self) -> Position {
+		let offset: usize = if self.ends_in_rule() {
+			0
+		} else {
+			self.end_offset
+		};
+		(self.end_part, offset)
 	}
 
 	/// Whether this placement ends inside a rule, leaving no fixed position within the part.
@@ -255,18 +271,13 @@ impl PlacementTable {
 								continue;
 							}
 
-							for_run.push(Placement {
-								start_part: index,
-								end_part: index,
+							for_run.push(Placement::within_part(
+								index,
 								start_offset,
 								end_offset,
-								pieces: vec![Piece {
-									part: index,
-									offset: start_offset,
-									text: run.text.clone(),
-									is_rule: false,
-								}],
-							});
+								run.text.clone(),
+								false,
+							));
 						}
 
 						// Straddle starting in static text: this text supplies a trailing
@@ -298,27 +309,19 @@ impl PlacementTable {
 							},
 							(true, true) => {
 								model.can_start_at(index)
-									&& model.can_end_at(index) && fits.matches_exactly(
-									spec,
-									&variable.name,
-									&run.text,
-								)
+									&& model.can_end_at(index) && fits
+									.matches_exactly(spec, &variable.name, &run.text)
 							},
 						};
 						if fits_here {
-							for_run.push(Placement {
-								start_part: index,
-								end_part: index,
-								// Wholly inside a rule: no fixed position within the part.
-								start_offset: 0,
-								end_offset: 0,
-								pieces: vec![Piece {
-									part: index,
-									offset: 0,
-									text: run.text.clone(),
-									is_rule: true,
-								}],
-							});
+							// Wholly inside a rule: no fixed position within the part.
+							for_run.push(Placement::within_part(
+								index,
+								0,
+								0,
+								run.text.clone(),
+								true,
+							));
 						}
 
 						// Straddle: this rule supplies a leading piece of the run,
@@ -380,23 +383,24 @@ impl PlacementTable {
 
 			// The head is a suffix of this text, so the run begins where that suffix begins.
 			let start_offset: usize = text.chars().count() - head.chars().count();
-			let pieces: Vec<Piece> = vec![Piece {
-				part: index,
-				// The head is a suffix of this text, so the piece begins where that suffix begins.
-				offset: start_offset,
-				text: head,
-				is_rule: false,
-			}];
-			results.extend(Self::extend_straddle(
+			let straddle: Straddle<'_> = Straddle {
 				spec,
 				model,
 				run,
-				index,
+				characters: &characters,
+				fits,
+				start_part: index,
 				start_offset,
+			};
+			results.extend(straddle.extend(
 				index + 1,
 				split,
-				pieces,
-				fits,
+				vec![Piece {
+					part: index,
+					offset: start_offset,
+					text: head,
+					is_rule: false,
+				}],
 			)?);
 		}
 
@@ -418,23 +422,33 @@ impl PlacementTable {
 		fit: &RunFit,
 		fits: &RunFitCache,
 	) -> Option<Vec<Placement>> {
+		// A start-anchored run cannot begin part-way through a rule's output
+		// unless nothing can precede that rule.
+		if run.anchored_start && !model.can_start_at(index) {
+			return Some(Vec::new());
+		}
+
 		let characters: Vec<char> = run.text.chars().collect::<Vec<_>>();
 		let mut results: Vec<Placement> = Vec::new();
+		let straddle: Straddle<'_> = Straddle {
+			spec,
+			model,
+			run,
+			characters: &characters,
+			fits,
+			start_part: index,
+			// Begins inside a rule: no position within the part.
+			start_offset: 0,
+		};
 
 		// `split` is how many leading characters the rule supplies;
 		// it must be a non-empty proper prefix,
 		// since `split == 0` and `split == len` are the non-straddling cases handled elsewhere.
 		for split in 1..characters.len() {
-				// A start-anchored run cannot begin part-way through a rule's output
-				// unless nothing can precede that rule.
-			if run.anchored_start && !model.can_start_at(index) {
-				continue;
-			}
-
 			let head: String = characters[..split].iter().collect::<String>();
-				// `suffixes[split]` only says the rule can *end* with this text. An anchored run
-				// additionally pins the rule's start, so the rule must match the piece exactly;
-				// otherwise `NIn*` would be split as `level=N` even though no level is just `N`.
+			// `suffixes[split]` only says the rule can *end* with this text. An anchored run
+			// additionally pins the rule's start, so the rule must match the piece exactly;
+			// otherwise `NIn*` would be split as `level=N` even though no level is just `N`.
 			let fits_here: bool = if run.anchored_start {
 				model.parts[index]
 					.variable_name()
@@ -446,30 +460,39 @@ impl PlacementTable {
 				continue;
 			}
 
-			let pieces: Vec<Piece> = vec![Piece {
-				part: index,
-				offset: 0,
-				text: head,
-				is_rule: true,
-			}];
-			results.extend(Self::extend_straddle(
-				spec,
-				model,
-				run,
-				index,
-				// Begins inside a rule: no position within the part.
-				0,
+			results.extend(straddle.extend(
 				index + 1,
 				split,
-				pieces,
-				fits,
+				vec![Piece {
+					part: index,
+					offset: 0,
+					text: head,
+					is_rule: true,
+				}],
 			)?);
 		}
 
 		Some(results)
 	}
+}
 
-	/// How many characters a rule at `part` may contribute as a *middle* piece of a run.
+/// A straddle in progress: one run, begun at a fixed position, being traced through the parts
+/// that follow. Holds what is invariant across the recursion in [`Self::extend`].
+struct Straddle<'a> {
+	spec: &'a ParsingSpec,
+	model: &'a ShapeModel,
+	run: &'a Run,
+	/// `run.text` as characters, so that split points index in `O(1)`.
+	characters: &'a [char],
+	fits: &'a RunFitCache,
+	/// The part the run begins in.
+	start_part: usize,
+	/// Where in `start_part`'s static text the run begins; zero inside a rule.
+	start_offset: usize,
+}
+
+impl Straddle<'_> {
+	/// How many characters a rule at `part` may contribute as a *middle* piece of the run.
 	///
 	/// See the call site for why the following shape part pins these candidates.
 	///
@@ -478,12 +501,7 @@ impl PlacementTable {
 	/// The caller must then treat the whole table as incomplete rather than conclude
 	/// the shape cannot match: silently dropping a candidate is a false rejection,
 	/// not an approximation.
-	fn candidate_middle_lengths(
-		model: &ShapeModel,
-		part: usize,
-		characters: &[char],
-		consumed: usize,
-	) -> Option<Vec<usize>> {
+	fn candidate_middle_lengths(&self, part: usize, consumed: usize) -> Option<Vec<usize>> {
 		/// Cap on candidates when nothing in the shape pins the split,
 		/// i.e. between back-to-back rules. Without a bound,
 		/// a chain of adjacent rules multiplies candidates per link.
@@ -492,22 +510,22 @@ impl PlacementTable {
 		/// "no split works", so the caller poisons the table rather than reject the shape.
 		const MAX_UNPINNED_SPLITS: usize = 8;
 
-		let available: usize = characters.len() - consumed;
+		let available: usize = self.characters.len() - consumed;
 		// A middle piece is non-empty and must leave something for the following parts.
 		if available < 2 {
 			return Some(Vec::new());
 		}
 
-		match model.parts.get(part + 1) {
+		match self.model.parts.get(part + 1) {
 			Some(ShapePart::Static(text)) => {
 				// The run must continue with `text`, so the rule's piece ends where `text` begins.
 				let Some(boundary) = text.chars().next() else {
 					return Some(Vec::new());
 				};
 				// Every candidate is tried, so this side is always complete.
-				Some(Vec::from_iter(
-					(1..available).filter(|&take| characters[consumed + take] == boundary),
-				))
+				Some(Vec::from_iter((1..available).filter(|&take| {
+					self.characters[consumed + take] == boundary
+				})))
 			},
 			// Nothing pins the boundary, so every split must be tried. A middle piece is non-empty
 			// and must leave something for the following parts,
@@ -529,7 +547,46 @@ impl PlacementTable {
 		}
 	}
 
-	/// Completes a straddle: given `consumed` characters of `run` already supplied by parts
+	/// The completed placement, once every character of the run has been supplied.
+	///
+	/// `None` if the run is end-anchored but does not end the message:
+	/// every later part must be able to vanish,
+	/// and the run must reach the end of the part it finishes in.
+	/// (A piece that ends inside a *rule* is handled where that piece is produced,
+	/// which is the only place that knows whether the rule may emit more after it.)
+	fn complete(&self, pieces: Vec<Piece>) -> Option<Placement> {
+		let last: Option<&Piece> = pieces.last();
+		let end_part: usize = last.map_or(self.start_part, |piece| piece.part);
+		// A straddle's final piece starts at the beginning of its part (the run flows into it),
+		// so the end offset is just that piece's length --
+		// and is meaningless if the piece is a rule.
+		let end_offset: usize = match last {
+			Some(piece) if !piece.is_rule => piece.text.chars().count(),
+			_ => 0,
+		};
+
+		if self.run.anchored_end {
+			let ends_cleanly: bool = match (last, &self.model.parts[end_part]) {
+				(Some(piece), ShapePart::Static(text)) if !piece.is_rule => {
+					end_offset == text.chars().count()
+				},
+				_ => true,
+			};
+			if !ends_cleanly || !self.model.can_end_at(end_part) {
+				return None;
+			}
+		}
+
+		Some(Placement {
+			start_part: self.start_part,
+			end_part,
+			start_offset: self.start_offset,
+			end_offset,
+			pieces,
+		})
+	}
+
+	/// Completes the straddle: given `consumed` characters of the run already supplied by parts
 	/// up to `part - 1`, matches the remainder against `part` onwards.
 	///
 	/// Shared by both straddle directions (starting from static text or from a rule).
@@ -546,77 +603,31 @@ impl PlacementTable {
 	/// Returns `None` if any candidate split had to be dropped,
 	/// which means the placement set would be incomplete and nothing may be concluded from it.
 	/// An empty `Some` is a real answer: no completion exists.
-	#[allow(clippy::too_many_arguments)]
-	fn extend_straddle(
-		spec: &ParsingSpec,
-		model: &ShapeModel,
-		run: &Run,
-		start_part: usize,
-		start_offset: usize,
-		part: usize,
-		consumed: usize,
-		pieces: Vec<Piece>,
-		fits: &RunFitCache,
-	) -> Option<Vec<Placement>> {
-		let characters: Vec<char> = run.text.chars().collect::<Vec<_>>();
-
+	fn extend(&self, part: usize, consumed: usize, pieces: Vec<Piece>) -> Option<Vec<Placement>> {
 		// The run is fully produced: this is a complete placement.
-		if consumed == characters.len() {
-			let last: Option<&Piece> = pieces.last();
-			let end_part: usize = last.map_or(start_part, |piece| piece.part);
-			// A straddle's final piece starts at the beginning of its part (the run flows into it),
-			// so the end offset is just that piece's length --
-			// and is meaningless if the piece is a rule.
-			let end_offset: usize = match last {
-				Some(piece) if !piece.is_rule => piece.text.chars().count(),
-				_ => 0,
-			};
-
-			// An end-anchored run must be the last thing the message emits.
-			// Every later part must be able to vanish,
-			// and the run must reach the end of the part it finishes in.
-			// (A piece that ends inside a *rule* is handled where that piece is produced,
-			// which is the only place that knows whether the rule may emit more after it.)
-			if run.anchored_end {
-				let ends_cleanly: bool = match (last, &model.parts[end_part]) {
-					(Some(piece), ShapePart::Static(text)) if !piece.is_rule => {
-						end_offset == text.chars().count()
-					},
-					_ => true,
-				};
-				if !ends_cleanly || !model.can_end_at(end_part) {
-					return Some(Vec::new());
-				}
-			}
-
-			return Some(vec![Placement {
-				start_part,
-				end_part,
-				start_offset,
-				end_offset,
-				pieces,
-			}]);
+		if consumed == self.characters.len() {
+			return Some(Vec::from_iter(self.complete(pieces)));
 		}
 
 		// Ran out of shape before the run was fully produced.
-		let Some(next) = model.parts.get(part) else {
+		let Some(next) = self.model.parts.get(part) else {
 			return Some(Vec::new());
 		};
 
-		let remaining: String = characters[consumed..].iter().collect::<String>();
+		let remaining: &[char] = &self.characters[consumed..];
 
 		match next {
 			ShapePart::Static(text) => {
 				// The static text must supply the next characters from its very start.
 				let available: usize = text.chars().count();
-				let take: usize = available.min(remaining.chars().count());
-				let head: String = remaining.chars().take(take).collect::<String>();
+				let take: usize = available.min(remaining.len());
+				let head: String = remaining[..take].iter().collect::<String>();
 				if !text.starts_with(&head) {
 					return Some(Vec::new());
 				}
 				// If the run continues past this part, it must have consumed all of the text;
 				// otherwise there would be leftover literal text between the run's pieces.
-				if ((consumed + take) < characters.len()) && (take < available) {
+				if (take < remaining.len()) && (take < available) {
 					return Some(Vec::new());
 				}
 
@@ -629,31 +640,24 @@ impl PlacementTable {
 					text: head,
 					is_rule: false,
 				});
-				Self::extend_straddle(
-					spec,
-					model,
-					run,
-					start_part,
-					start_offset,
-					part + 1,
-					consumed + take,
-					pieces,
-					fits,
-				)
+				self.extend(part + 1, consumed + take, pieces)
 			},
 			ShapePart::Variable(variable) => {
 				let mut results: Vec<Placement> = Vec::new();
+				let remaining: String = remaining.iter().collect::<String>();
 
 				// The rule finishes the run: it can begin with everything that remains.
 				//
-					// `prefixes[consumed]` only says the rule can *begin* with the remainder,
-					// leaving it free to emit more afterwards. An end-anchored run forbids that,
-					// so the rule must match the remainder exactly and nothing may follow it.
-				let fit: Arc<RunFit> = fits.get(spec, &variable.name, &run.text);
-				let finishes_here: bool = if run.anchored_end {
-					model.can_end_at(part)
-						&& fits.matches_exactly(spec, &variable.name, &remaining)
+				// `prefixes[consumed]` only says the rule can *begin* with the remainder,
+				// leaving it free to emit more afterwards. An end-anchored run forbids that,
+				// so the rule must match the remainder exactly and nothing may follow it.
+				let finishes_here: bool = if self.run.anchored_end {
+					self.model.can_end_at(part)
+						&& self
+							.fits
+							.matches_exactly(self.spec, &variable.name, &remaining)
 				} else {
+					let fit: Arc<RunFit> = self.fits.get(self.spec, &variable.name, &self.run.text);
 					fit.prefixes.get(consumed).copied().unwrap_or(false)
 				};
 				if finishes_here {
@@ -661,40 +665,43 @@ impl PlacementTable {
 					pieces.push(Piece {
 						part,
 						offset: 0,
-						text: remaining.clone(),
+						text: remaining,
 						is_rule: true,
 					});
 					results.push(Placement {
-						start_part,
+						start_part: self.start_part,
 						end_part: part,
-						start_offset,
+						start_offset: self.start_offset,
 						// Ends inside a rule, so there is no position within the part.
 						end_offset: 0,
 						pieces,
 					});
 				}
 
-					// Or the rule produces exactly a middle piece,
-					// and the run continues into the next part.
-					// The piece must be matched *exactly*: a run has no wildcards,
-					// so the rule cannot emit anything beyond it.
-					//
-					// The candidate split points are not arbitrary.
-					// Whatever follows this rule in the shape pins them:
-					//
-					// - static text: the run must continue with that text,
-					//   so the rule's piece ends exactly where the text's first character
-					//   next occurs in the run -- a handful of candidates,
-					//   found by substring search, not one per length;
-					// - another rule (back-to-back, no literal boundary): nothing pins the split,
-					//   so every length must be tried. `candidate_middle_lengths` refuses to answer
-					//   when it cannot try them all,
-					//   which poisons the table rather than dropping a possible match.
-				for take in Self::candidate_middle_lengths(model, part, &characters, consumed)? {
-					let middle: String = characters[consumed..(consumed + take)]
+				// Or the rule produces exactly a middle piece,
+				// and the run continues into the next part.
+				// The piece must be matched *exactly*: a run has no wildcards,
+				// so the rule cannot emit anything beyond it.
+				//
+				// The candidate split points are not arbitrary.
+				// Whatever follows this rule in the shape pins them:
+				//
+				// - static text: the run must continue with that text,
+				//   so the rule's piece ends exactly where the text's first character
+				//   next occurs in the run -- a handful of candidates,
+				//   found by substring search, not one per length;
+				// - another rule (back-to-back, no literal boundary): nothing pins the split,
+				//   so every length must be tried. `candidate_middle_lengths` refuses to answer
+				//   when it cannot try them all,
+				//   which poisons the table rather than dropping a possible match.
+				for take in self.candidate_middle_lengths(part, consumed)? {
+					let middle: String = self.characters[consumed..(consumed + take)]
 						.iter()
 						.collect::<String>();
-					if !fits.matches_exactly(spec, &variable.name, &middle) {
+					if !self
+						.fits
+						.matches_exactly(self.spec, &variable.name, &middle)
+					{
 						continue;
 					}
 					let mut pieces: Vec<Piece> = pieces.clone();
@@ -704,17 +711,7 @@ impl PlacementTable {
 						text: middle,
 						is_rule: true,
 					});
-					results.extend(Self::extend_straddle(
-						spec,
-						model,
-						run,
-						start_part,
-						start_offset,
-						part + 1,
-						consumed + take,
-						pieces,
-						fits,
-					)?);
+					results.extend(self.extend(part + 1, consumed + take, pieces)?);
 				}
 
 				Some(results)
@@ -730,81 +727,88 @@ impl PlacementTable {
 /// it is always zero for a position inside a rule, where no fixed position exists.
 pub type Position = (usize, usize);
 
-/// The distinct positions a composition can be in, sorted.
+/// The composition feasibility DP over `(run index, earliest available position)`.
 ///
-/// The DP state is a position rather than a part index, so the state space must be discretised:
+/// `reachable[i][p]` is true when runs `i..` can all be placed without starting before
+/// position `p`. Solved by a reverse sweep, since every placement advances both coordinates.
+///
+/// The state is a *position* rather than a part index, so the state space is discretised:
 /// only positions where some placement starts, or where some placement leaves off,
-/// can ever be visited.
-#[must_use]
-pub fn positions_of(table: &PlacementTable, num_parts: usize) -> Vec<Position> {
-	let mut positions: Vec<Position> = vec![(0, 0), (num_parts, 0)];
-
-	for placements in table.placements.iter() {
-		for placement in placements.iter() {
-			positions.push((placement.start_part, placement.start_offset));
-			positions.push((
-				placement.next_available_part(),
-				placement.next_available_offset(),
-			));
-		}
-	}
-
-	positions.sort_unstable();
-	positions.dedup();
-	positions
+/// can ever be visited. Keeping this as bits, separate from enumerating the compositions,
+/// is what lets a shape be rejected in polynomial time even when the number of compositions
+/// is large, and bounds memory on shapes with tens of thousands of parts.
+#[derive(Clone, Debug)]
+pub struct Reachability {
+	/// The distinct positions a composition can be in, sorted.
+	positions: Vec<Position>,
+	/// `reachable[(run * positions.len()) + position]`.
+	reachable: Vec<bool>,
 }
 
-/// The index of `position` in `positions`.
-///
-/// Panics if absent,
-/// which would mean [`positions_of`] and the DP disagree about the state space.
-#[must_use]
-pub fn index_of(positions: &[Position], position: Position) -> usize {
-	positions
-		.binary_search(&position)
-		.expect("position was collected")
+impl Reachability {
+	#[must_use]
+	pub fn compute(table: &PlacementTable, num_parts: usize) -> Self {
+		let mut positions: Vec<Position> = vec![(0, 0), (num_parts, 0)];
+		for placement in table.placements.iter().flatten() {
+			positions.push(placement.start());
+			positions.push(placement.next_available());
+		}
+		positions.sort_unstable();
+		positions.dedup();
+
+		let num_runs: usize = table.placements.len();
+		let width: usize = positions.len();
+		let mut this: Self = Self {
+			positions,
+			reachable: vec![false; (num_runs + 1) * width],
+		};
+
+		// With no runs left, every position is fine.
+		for position in 0..width {
+			this.reachable[(num_runs * width) + position] = true;
+		}
+
+		for run in (0..num_runs).rev() {
+			for position in 0..width {
+				this.reachable[(run * width) + position] =
+					table.placements[run].iter().any(|placement| {
+						(placement.start() >= this.positions[position])
+							&& this.is_reachable(run + 1, this.index_of(placement.next_available()))
+					});
+			}
+		}
+
+		this
+	}
+
+	/// Whether runs `run..` can all be placed without starting before `positions[position]`.
+	#[must_use]
+	pub fn is_reachable(&self, run: usize, position: usize) -> bool {
+		self.reachable[(run * self.positions.len()) + position]
+	}
+
+	/// The sorted positions the DP ranges over; `position` indices refer into this.
+	#[must_use]
+	pub fn positions(&self) -> &[Position] {
+		&self.positions
+	}
+
+	/// The index of `position` in [`Self::positions`].
+	///
+	/// Panics if absent, which would mean the DP disagrees with itself about the state space.
+	#[must_use]
+	pub fn index_of(&self, position: Position) -> usize {
+		self.positions
+			.binary_search(&position)
+			.expect("position was collected")
+	}
 }
 
 /// Whether the runs can be placed left to right without overlapping.
 ///
-/// This is the composition feasibility question, answered by a reverse DP sweep over
-/// `(run index, earliest available position)`:
-/// `reachable[i][p]` is true when runs `i..` can all be placed
-/// without starting before position `p`.
-/// Answering it separately from *enumerating* the compositions means a shape can be rejected
-/// in polynomial time even when the number of compositions is large.
+/// Answering this separately from *enumerating* the compositions means a shape can be rejected
+/// cheaply even when the number of compositions is large; see [`Reachability`].
 #[must_use]
 pub fn can_compose(table: &PlacementTable, num_parts: usize) -> bool {
-	if table.is_impossible() {
-		return false;
-	}
-
-	let positions: Vec<Position> = positions_of(table, num_parts);
-	let num_runs: usize = table.placements.len();
-	let width: usize = positions.len();
-	let mut reachable: Vec<bool> = vec![false; (num_runs + 1) * width];
-
-	// With no runs left, every position is fine.
-	for position in 0..width {
-		reachable[(num_runs * width) + position] = true;
-	}
-
-	for run in (0..num_runs).rev() {
-		for position in 0..width {
-			reachable[(run * width) + position] = table.placements[run].iter().any(|placement| {
-				((placement.start_part, placement.start_offset) >= positions[position]) && {
-					let next: usize = index_of(
-						&positions,
-						(
-							placement.next_available_part(),
-							placement.next_available_offset(),
-						),
-					);
-					reachable[((run + 1) * width) + next]
-				}
-			});
-		}
-	}
-
-	reachable[0]
+	!table.is_impossible() && Reachability::compute(table, num_parts).is_reachable(0, 0)
 }
