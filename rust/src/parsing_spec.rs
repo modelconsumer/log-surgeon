@@ -1,6 +1,8 @@
 mod encoding;
 mod rule;
 mod spec_file;
+#[cfg(test)]
+mod test;
 
 use std::collections::BTreeMap;
 use std::num::NonZero;
@@ -14,7 +16,7 @@ pub use rule::RootRule;
 pub use rule::RuleIdx;
 pub use rule::RuleInfo;
 
-use crate::dfa::CompressedDfa;
+use crate::dfa::FlattenedDfa;
 use crate::dfa::Tdfa;
 use crate::nfa::Tnfa;
 use crate::parser::Parser;
@@ -30,8 +32,8 @@ pub struct ParsingSpecBuilder {
 	placeholders: BTreeMap<String, Regex>,
 	encodings: Vec<Arc<Encoding>>,
 
-	/// Cached (canonicalized) DFA for [`ParsingSpec::main_dfa`].
-	maybe_cached_dfa: Option<CompressedDfa>,
+	/// Cached (canonicalized) DFA for [`ParsingSpec::dfa_for_parsing`].
+	maybe_cached_dfa: Option<FlattenedDfa>,
 
 	delimiters: String,
 }
@@ -51,11 +53,10 @@ pub struct ParsingSpec {
 
 	pub encodings: Vec<Arc<Encoding>>,
 
-	/// DFA used for lexing/parsing;
-	/// determine which root rule matched, without tags for matching sub-rules.
-	pub dfa_for_parsing: Tdfa,
-	pub compressed_dfa_for_parsing: CompressedDfa,
-	pub nfa_for_search: Tnfa,
+	/// DFA used for lexing/parsing:
+	/// determine which root rule matched, without executing tags for matching sub-rules.
+	/// Should be constructed and executed with anchor/lookaround characters.
+	pub dfa_for_parsing: FlattenedDfa,
 
 	/// Derived from `delimiters`.
 	pub ascii_delimiters: [bool; 0x80],
@@ -241,7 +242,7 @@ impl ParsingSpecBuilder {
 		Ok(self)
 	}
 
-	pub fn set_cached_dfa(&mut self, cached: CompressedDfa) -> &mut Self {
+	pub fn set_cached_dfa(&mut self, cached: FlattenedDfa) -> &mut Self {
 		// cached.initialize_ascii_cache();
 		self.maybe_cached_dfa = Some(cached);
 		self
@@ -265,30 +266,27 @@ impl ParsingSpecBuilder {
 			}
 		}
 
-		let compressed_dfa_for_parsing: CompressedDfa =
-			self.maybe_cached_dfa.unwrap_or_else(|| {
-				debug!("[dfa] determinizing main dfa for parsing...");
-				now!(t0);
-				let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
-				now!(t1);
-				debug!(
-					"[dfa] determinizing took {} ms. canonicalizing...",
-					millis!(t0, t1)
-				);
-				let minimized: Tdfa = main_dfa.canonicalize();
-				now!(t2);
-				debug!("[dfa] canonicalizing took {} ms.", millis!(t1, t2));
-				now!(t3);
-				let compressed_dfa_for_parsing: CompressedDfa = minimized.compress();
-				now!(t4);
-				debug!(
-					"[dfa] compressing main dfa for parsing took {} ms.",
-					millis!(t3, t4)
-				);
-				compressed_dfa_for_parsing
-			});
-
-		let nfa_for_search: Tnfa = Tnfa::for_rules(&rules, &self.delimiters, &self.encodings);
+		let dfa_for_parsing: FlattenedDfa = self.maybe_cached_dfa.unwrap_or_else(|| {
+			debug!("[dfa] determinizing main dfa for parsing...");
+			now!(t0);
+			let main_dfa: Tdfa = Tdfa::for_rules(&rules, &self.delimiters, &self.encodings);
+			now!(t1);
+			debug!(
+				"[dfa] determinizing took {} ms. canonicalizing...",
+				millis!(t0, t1)
+			);
+			let minimized: Tdfa = main_dfa.canonicalize();
+			now!(t2);
+			debug!("[dfa] canonicalizing took {} ms.", millis!(t1, t2));
+			now!(t3);
+			let dfa_for_parsing: FlattenedDfa = minimized.flatten();
+			now!(t4);
+			debug!(
+				"[dfa] compressing main dfa for parsing took {} ms.",
+				millis!(t3, t4)
+			);
+			dfa_for_parsing
+		});
 
 		let mut ascii_delimiters: [bool; 0x80] = [false; 0x80];
 		let mut non_ascii_delimiters: String = String::new();
@@ -307,9 +305,7 @@ impl ParsingSpecBuilder {
 			placeholders: self.placeholders,
 			delimiters: self.delimiters,
 			encodings: self.encodings,
-			dfa_for_parsing: Tdfa::BLANK,
-			compressed_dfa_for_parsing,
-			nfa_for_search,
+			dfa_for_parsing,
 			ascii_delimiters,
 			non_ascii_delimiters,
 			shape_models: ShapeModelCache::new(),
@@ -332,9 +328,7 @@ pub static BLANK: ParsingSpec = ParsingSpec {
 	placeholders: BTreeMap::new(),
 	delimiters: String::new(),
 	encodings: Vec::new(),
-	dfa_for_parsing: Tdfa::BLANK,
-	compressed_dfa_for_parsing: CompressedDfa::BLANK,
-	nfa_for_search: Tnfa::BLANK,
+	dfa_for_parsing: FlattenedDfa::BLANK,
 	ascii_delimiters: [false; 0x80],
 	non_ascii_delimiters: String::new(),
 	shape_models: ShapeModelCache::new(),
@@ -531,62 +525,5 @@ impl std::ops::Index<EncodingIdx> for ParsingSpec {
 
 	fn index(&self, idx: EncodingIdx) -> &Self::Output {
 		&self.encodings[usize::from(u16::from(idx) - 1)]
-	}
-}
-
-#[cfg(test)]
-mod test {
-	use super::*;
-	use crate::log_event::LogEvent;
-	use crate::parser::Parser;
-
-	#[test]
-	fn number_encoding() {
-		let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
-		builder
-			.add_rule("has_number", r"\w*\d\w*")
-			.unwrap()
-			.add_rule("ip_address", r"(?<first>\d+)(\.\d+){3}")
-			.unwrap()
-			.add_encoding("int", Regex::from_pattern(r"\d+").unwrap())
-			.unwrap();
-
-		let spec: ParsingSpec = builder.build();
-		assert_eq!(spec.rules.len(), 2);
-
-		let mut parser: Parser = Arc::new(spec).create_parser();
-
-		let event: LogEvent<'_> = parser.next_event("a1b", &mut 0).unwrap();
-		assert_eq!(event.all_matches.len(), 1);
-		assert_eq!(
-			event.all_matches[0].rule_idx,
-			RuleIdx::from(NonZero::new(1).unwrap())
-		);
-		assert_eq!(event.all_matches[0].encoding_idx, None);
-
-		let event: LogEvent<'_> = parser.next_event("123", &mut 0).unwrap();
-		assert_eq!(event.all_matches.len(), 1);
-		assert_eq!(
-			event.all_matches[0].rule_idx,
-			RuleIdx::from(NonZero::new(1).unwrap())
-		);
-		assert_eq!(
-			event.all_matches[0].encoding_idx.unwrap(),
-			NonZero::new(1).unwrap()
-		);
-
-		let event: LogEvent<'_> = parser.next_event("12.34.56.78", &mut 0).unwrap();
-		assert_eq!(event.message.as_str(), "12.34.56.78");
-		println!("matches are {:?}", event.all_matches.as_slice());
-		assert_eq!(event.all_matches.len(), 2);
-		assert_eq!(
-			event.all_matches[0].rule_idx,
-			RuleIdx::from(NonZero::new(2).unwrap())
-		);
-		assert_eq!(event.all_matches[0].encoding_idx, None);
-		assert_eq!(
-			event.all_matches[1].encoding_idx.unwrap(),
-			NonZero::new(1).unwrap()
-		);
 	}
 }

@@ -6,7 +6,7 @@ use nom::Parser;
 use nom::error::Error as NomError;
 use nom::error::ParseError;
 
-use crate::dfa::CompressedDfa;
+use crate::dfa::FlattenedDfa;
 use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::ParsingSpecBuilder;
 use crate::regex::AnchoredRegex;
@@ -69,7 +69,7 @@ impl ParsingSpec {
 		.chain(std::iter::once(String::new()))
 		.chain(std::iter::once(format!("===")))
 		.chain(std::iter::once(
-			serde_json::to_string_pretty(&self.compressed_dfa_for_parsing).unwrap(),
+			serde_json::to_string_pretty(&self.dfa_for_parsing).unwrap(),
 		))
 		.fold(String::new(), |mut accumulated, line| {
 			accumulated.push_str(&line);
@@ -176,7 +176,7 @@ impl ParsingSpecBuilder {
 		}
 
 		if let Some(cached) = maybe_cached_dfa {
-			match serde_json::from_str::<CompressedDfa>(&cached) {
+			match serde_json::from_str::<FlattenedDfa>(&cached) {
 				Ok(dfa) => {
 					builder.set_cached_dfa(dfa);
 				},

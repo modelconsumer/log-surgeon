@@ -106,9 +106,7 @@ impl Lexer {
 		input: &'input [u8],
 		char_before: u32,
 	) -> Option<MatchedRule<'input>> {
-		self.spec
-			.compressed_dfa_for_parsing
-			.execute(input, char_before)
+		self.spec.dfa_for_parsing.execute(input, char_before)
 	}
 
 	/// See the [document on parsing](docs/parsing.md).

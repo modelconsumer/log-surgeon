@@ -10,7 +10,7 @@ mod test_generated;
 /// Internally, just an ordered list of non-overlapping intervals;
 /// lookups are `O(log(n))` with binary search.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct IntervalTree<T: Number, V: Clone> {
+pub struct IntervalTree<T: Number, V> {
 	intervals: Vec<(Interval<T>, V)>,
 }
 
@@ -55,7 +55,7 @@ pub struct PolicyUnique;
 #[derive(Debug)]
 pub struct PolicyFunction<T>(T);
 
-impl<T: Number, V: Clone> IntervalTree<T, V> {
+impl<T: Number, V> IntervalTree<T, V> {
 	pub const fn new() -> Self {
 		Self {
 			intervals: Vec::new(),
@@ -69,9 +69,7 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 	pub fn is_empty(&self) -> bool {
 		self.intervals.is_empty()
 	}
-}
 
-impl<T: Number, V: Clone> IntervalTree<T, V> {
 	pub fn iter(&self) -> impl Iterator<Item = (Interval<T>, &V)> {
 		self.intervals
 			.iter()
@@ -101,7 +99,7 @@ where
 	}
 }
 
-impl<T: Number, V: Clone> IntervalTree<T, V> {
+impl<T: Number, V> IntervalTree<T, V> {
 	/// Lookup the value associated with the interval containing `pos` (if any).
 	pub fn lookup(&self, pos: T) -> Option<&V> {
 		self.lookup_entry(pos).map(|(_, value)| value)
@@ -112,6 +110,16 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 		self.lookup_entry(pos).map(|(interval, _)| interval)
 	}
 
+	/// Retain entries satisfying `predicate`.
+	pub fn retain<P>(&mut self, predicate: P)
+	where
+		P: FnMut(&(Interval<T>, V)) -> bool,
+	{
+		self.intervals.retain(predicate);
+	}
+}
+
+impl<T: Number, V: Clone> IntervalTree<T, V> {
 	/// Insert a new value for the given interval.
 	/// The `policy` determines how to merge values
 	/// where the new interval overlaps with existing intervals.
@@ -178,14 +186,6 @@ impl<T: Number, V: Clone> IntervalTree<T, V> {
 		#[cfg(debug_assertions)]
 		self.check_invariants();
 	}
-
-	/// Retain entries satisfying `predicate`.
-	pub fn retain<P>(&mut self, predicate: P)
-	where
-		P: FnMut(&(Interval<T>, V)) -> bool,
-	{
-		self.intervals.retain(predicate);
-	}
 }
 
 impl<T: Number, V: Clone + PartialEq> IntervalTree<T, V> {
@@ -233,7 +233,7 @@ impl<T: Number, V: Clone + PartialEq> IntervalTree<T, V> {
 	}
 }
 
-impl<T: Number, V: Clone> IntervalTree<T, V> {
+impl<T: Number, V> IntervalTree<T, V> {
 	/// Lookup the entry for the interval containing `pos`.
 	fn lookup_entry(&self, pos: T) -> Option<(Interval<T>, &V)> {
 		let index: usize = self.partition_point(pos);

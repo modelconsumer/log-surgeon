@@ -4,7 +4,7 @@
 //!
 //! [tdfa]: https://arxiv.org/abs/2206.01398
 
-mod compressed;
+mod flattened;
 #[cfg(test)]
 mod test;
 
@@ -16,7 +16,7 @@ use std::num::NonZero;
 use std::range::Range;
 use std::sync::Arc;
 
-pub use compressed::CompressedDfa;
+pub use flattened::FlattenedDfa;
 
 use crate::graph::Csr;
 use crate::interval_tree::Interval;
@@ -871,6 +871,20 @@ impl Tdfa {
 }
 
 impl Tdfa {
+	pub fn all_intervals(&self) -> Vec<Interval<u32>> {
+		use crate::interval_tree::PolicyNoop;
+
+		let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
+		for state in self.states.iter() {
+			for (interval, _) in state.transitions.iter() {
+				all_intervals.insert(interval, (), PolicyNoop);
+			}
+		}
+		Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
+	}
+}
+
+impl Tdfa {
 	/// Compute the canonical (minimal) DFA.
 	///
 	/// This should not be used with a TDFA (DFA with tagged transitions).
@@ -949,28 +963,18 @@ impl Tdfa {
 	/// Hopcroft's DFA minimization algorithm.
 	#[tracing::instrument(skip_all, level = "trace")]
 	fn partition_states(&self) -> Vec<Vec<usize>> {
-		use crate::interval_tree::PolicyNoop;
-
 		if self.states.is_empty() {
 			return Vec::new();
 		}
 
-		let all_classes: Vec<Interval<u32>> = {
-			let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
-			for state in self.states.iter() {
-				for (interval, _) in state.transitions.iter() {
-					all_intervals.insert(interval, (), PolicyNoop);
-				}
-			}
-			Vec::from_iter(all_intervals.iter().map(|(interval, &())| interval))
-		};
+		let all_intervals: Vec<Interval<u32>> = self.all_intervals();
 
 		// CSR for reversed edges (predecessors).
 		let csr: Csr<(u32, u32)> = Csr::build(
 			self.states.len(),
 			self.states.iter().enumerate().flat_map(|(source, state)| {
 				// We need `move` for `source`, but not `all_classes`.
-				let all_classes: &[Interval<u32>] = &all_classes;
+				let all_classes: &[Interval<u32>] = &all_intervals;
 				state.transitions.iter().map(move |(interval, transition)| {
 					let first: usize =
 						all_classes.partition_point(|class| class.end() < interval.start());
@@ -1020,7 +1024,7 @@ impl Tdfa {
 
 		// Snapshot of states of currently-processing block.
 		let mut splitter: Vec<usize> = Vec::new();
-		let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); all_classes.len()];
+		let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); all_intervals.len()];
 		let mut dirty_classes: Vec<usize> = Vec::new();
 		let mut dirty_partitions: Vec<usize> = Vec::new();
 

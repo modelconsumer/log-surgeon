@@ -2,48 +2,55 @@ use crate::dfa::BackupState;
 use crate::dfa::MatchedRule;
 use crate::dfa::Tdfa;
 use crate::interval_tree::Interval;
-use crate::interval_tree::IntervalTree;
 use crate::parsing_spec::EncodingIdx;
 use crate::parsing_spec::RuleIdx;
 
-/// If set in a transition value, the target state is accepting (has a non-`None`
-/// [`accepts_for_rule`](CompressedDfa::accepts_for_rule) entry),
-/// and the low bits are the target state index.
+/// Transition target states are stored as 16-bit values;
+/// if the MSB is set, the target state is accepting
+/// (has a non-`None` [`FlattenedDfa::accepts_for_rule`],
+/// so there are 15 bits for the target state index.
 ///
 /// This lets the hot loop test acceptance with a single load (the transition itself)
 /// instead of a second dependent load into `accepts_for_rule` for every character.
-const ACCEPTING_BIT: u16 = 0x8000;
+const ACCEPTING_BIT: u16 = 1 << (u16::BITS - 1);
 const STATE_MASK: u16 = !ACCEPTING_BIT;
 
+const _: () = {
+	assert!(STATE_MASK == i16::MAX as u16);
+};
+
+/// A dense table representation of a DFA (untagged);
+/// a "struct of arrays" for improved data locality accessing transitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompressedDfa {
-	pub intervals: Vec<Interval<u32>>,
-	pub accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>>,
+pub struct FlattenedDfa {
+	all_intervals: Vec<Interval<u32>>,
+	accepts_for_rule: Vec<Option<(RuleIdx, Option<EncodingIdx>)>>,
 	/// Flattened `states.len() * 0x80` table of encoded transitions for ASCII bytes,
 	/// indexed by `state * 0x80 + byte`.
 	///
 	/// Encoded values: target state index in the low bits,
 	/// plus [`ACCEPTING_BIT`] if the target state is accepting.
 	///
-	/// `0` means "no transition".
-	pub ascii_transitions: Vec<u16>,
-	pub non_ascii_transitions: Vec<u16>,
+	/// `0`, normally indexing to the start state, means "no transition",
+	/// since by construction there are no transitions to the start state.
+	///
+	/// It would make more sense to store these as `Vec<[u16; 0x80]>`,
+	/// but Serde chokes on arrays...
+	/// <https://github.com/serde-rs/serde/issues/1937>.
+	ascii_transitions: Vec<u16>,
+	non_ascii_transitions: Vec<u16>,
 }
 
 impl Tdfa {
-	pub fn compress(&self) -> CompressedDfa {
-		use crate::interval_tree::PolicyNoop;
+	/// Panics if the number of states is greater than [`STATE_MASK`]
+	/// (`2 ** 15` or approximately 32k states as of 2026-10-06).
+	pub fn flatten(&self) -> FlattenedDfa {
+		assert!(
+			self.states.len() <= usize::from(STATE_MASK),
+			"too many DFA states to encode"
+		);
 
-		let mut all_intervals: IntervalTree<u32, ()> = IntervalTree::new();
-		for state in self.states.iter() {
-			for (interval, _transition) in state.transitions.iter() {
-				all_intervals.insert(interval, (), PolicyNoop);
-			}
-		}
-		let mut all_intervals: Vec<Interval<u32>> = all_intervals
-			.iter()
-			.map(|(interval, _transition)| interval)
-			.collect::<Vec<_>>();
+		let mut all_intervals: Vec<Interval<u32>> = self.all_intervals();
 
 		all_intervals.retain(|interval| interval.end() >= 0x80);
 		if let Some(first) = all_intervals.first_mut() {
@@ -57,11 +64,6 @@ impl Tdfa {
 		let mut ascii_transitions: Vec<u16> = vec![0; self.states.len() * 0x80];
 		let mut non_ascii_transitions: Vec<u16> =
 			Vec::with_capacity(self.states.len() * all_intervals.len());
-
-		assert!(
-			self.states.len() <= usize::from(STATE_MASK),
-			"too many DFA states to encode"
-		);
 
 		let encode = |target: usize| -> u16 {
 			let state: u16 = u16::try_from(target).unwrap();
@@ -91,8 +93,8 @@ impl Tdfa {
 			}
 		}
 
-		CompressedDfa {
-			intervals: all_intervals,
+		FlattenedDfa {
+			all_intervals,
 			accepts_for_rule,
 			ascii_transitions,
 			non_ascii_transitions,
@@ -100,9 +102,9 @@ impl Tdfa {
 	}
 }
 
-impl CompressedDfa {
+impl FlattenedDfa {
 	pub const BLANK: Self = Self {
-		intervals: Vec::new(),
+		all_intervals: Vec::new(),
 		accepts_for_rule: Vec::new(),
 		ascii_transitions: Vec::new(),
 		non_ascii_transitions: Vec::new(),
@@ -214,7 +216,7 @@ impl CompressedDfa {
 			if char_class == usize::MAX {
 				return None;
 			}
-			self.non_ascii_transitions[(current_state * self.intervals.len()) + char_class]
+			self.non_ascii_transitions[(current_state * self.all_intervals.len()) + char_class]
 		};
 		// `0` means no transition. Valid transitions always have a nonzero target state.
 		(encoded != 0).then_some(encoded)
@@ -223,9 +225,9 @@ impl CompressedDfa {
 	fn char_to_class(&self, ch: u32) -> usize {
 		// TODO refactor with interval tree
 		let i: usize = self
-			.intervals
+			.all_intervals
 			.partition_point(|interval| interval.end() < ch);
-		if let Some(interval) = self.intervals.get(i) {
+		if let Some(interval) = self.all_intervals.get(i) {
 			if interval.start() <= ch {
 				return i;
 			}

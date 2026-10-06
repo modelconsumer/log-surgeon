@@ -348,10 +348,10 @@ fn captures_of(rule: &RootRule, input: &str) -> Vec<(u16, usize, usize)> {
 
 /// The compressed parsing DFA for a spec with a single rule.
 #[track_caller]
-fn compressed_for_pattern(pattern: &str) -> CompressedDfa {
+fn compressed_for_pattern(pattern: &str) -> FlattenedDfa {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
 	builder.add_rule("rule", pattern).unwrap();
-	builder.build().compressed_dfa_for_parsing
+	builder.build().dfa_for_parsing
 }
 
 /// The compressed DFA must decode non-ASCII scalars
@@ -360,7 +360,7 @@ fn compressed_for_pattern(pattern: &str) -> CompressedDfa {
 /// and report its full byte length as the lexeme.
 #[test]
 fn compressed_execute_non_ascii_scalars() {
-	let compressed: CompressedDfa = compressed_for_pattern("a.b");
+	let compressed: FlattenedDfa = compressed_for_pattern("a.b");
 
 	// 2-byte scalar in the middle of an otherwise-ASCII lexeme.
 	let input: &str = "a\u{e9}b";
@@ -379,7 +379,7 @@ fn compressed_execute_non_ascii_scalars() {
 
 	// A non-nullable any-char repetition consumes the entire non-ASCII input,
 	// exercising every scalar width as the *first* byte decoded.
-	let any: CompressedDfa = compressed_for_pattern(".+");
+	let any: FlattenedDfa = compressed_for_pattern(".+");
 	let input: &str = "\u{e9}\u{4e16}\u{1f600}";
 	let matched: MatchedRule<'_> = any.execute(input.as_bytes(), u32::from('\n')).unwrap();
 	assert_eq!(&*matched.lexeme, input);
@@ -392,7 +392,7 @@ fn compressed_execute_non_ascii_scalars() {
 #[test]
 #[should_panic(expected = "invalid UTF-8")]
 fn compressed_execute_rejects_invalid_utf8() {
-	let compressed: CompressedDfa = compressed_for_pattern("a.b");
+	let compressed: FlattenedDfa = compressed_for_pattern("a.b");
 	// A lone continuation byte, which is not a valid scalar.
 	let input: &[u8] = b"a\x80b";
 	let _ = compressed.execute(input, u32::from('\n'));
@@ -403,7 +403,7 @@ fn compressed_execute_rejects_invalid_utf8() {
 /// the truncated case panics as invalid UTF-8 rather than panicking on an index.
 #[test]
 fn compressed_execute_non_ascii_at_end() {
-	let compressed: CompressedDfa = compressed_for_pattern("a.b");
+	let compressed: FlattenedDfa = compressed_for_pattern("a.b");
 
 	let input: &str = "a\u{e9}b";
 	assert_eq!(
