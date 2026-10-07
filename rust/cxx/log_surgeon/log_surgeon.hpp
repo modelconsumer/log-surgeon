@@ -30,6 +30,8 @@ class Parser;
 class LogEvent;
 struct LeafQuery;
 
+// Copy-and-swap: the by-value `operator=` is both copy and move assignment.
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
 class ParsingSpecBuilder {
 public:
     ParsingSpecBuilder();
@@ -46,14 +48,24 @@ public:
     ParsingSpecBuilder(std::string_view definition);
 
     ~ParsingSpecBuilder();
+    /**
+     * Copying a moved-from or built (null) builder results in a null builder.
+     */
     ParsingSpecBuilder(ParsingSpecBuilder const& other);
+    /**
+     * Afterwards, `other` is in a well-defined but invalid (null) state, as after `build()`.
+     */
     ParsingSpecBuilder(ParsingSpecBuilder&& other) noexcept;
+    /**
+     * Copy-and-swap: the single assignment operator for both copy and move assignment.
+     * `other` is taken by value (copy or move constructed at the call site),
+     * so a separate `ParsingSpecBuilder&&` overload would be ambiguous.
+     */
     auto operator=(ParsingSpecBuilder other) noexcept -> ParsingSpecBuilder&;
-    auto operator=(ParsingSpecBuilder&& other) noexcept -> ParsingSpecBuilder&;
 
     /**
      * Conventional `swap` function, declared using `friend` for ADL.
-     * Also the second critical piece for the copy-and-swap idiom.
+     * Used to implement the copy-and-swap idiom.
      *
      * @param first
      * @param second
@@ -87,17 +99,29 @@ private:
  * searches (`search_by_name`, `search_by_log_shapes`) are performed directly on the spec. The
  * underlying Rust `ParsingSpec` is shared via `Arc`; copies of this handle share it.
  */
+// Copy-and-swap: the by-value `operator=` is both copy and move assignment.
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
 class ParsingSpec {
 public:
     ~ParsingSpec();
+    /**
+     * Copying a moved-from (null) spec results in a null spec.
+     */
     ParsingSpec(ParsingSpec const& other);
+    /**
+     * Afterwards, `other` is in a well-defined but invalid (null) state.
+     */
     ParsingSpec(ParsingSpec&& other) noexcept;
+    /**
+     * Copy-and-swap: the single assignment operator for both copy and move assignment.
+     * `other` is taken by value (copy or move constructed at the call site),
+     * so a separate `ParsingSpec&&` overload would be ambiguous.
+     */
     auto operator=(ParsingSpec other) noexcept -> ParsingSpec&;
-    auto operator=(ParsingSpec&& other) noexcept -> ParsingSpec&;
 
     /**
      * Conventional `swap` function, declared using `friend` for ADL.
-     * Also the second critical piece for the copy-and-swap idiom.
+     * Used to implement the copy-and-swap idiom.
      *
      * @param first
      * @param second
@@ -148,12 +172,6 @@ private:
     Arc<imp::ParsingSpec>* m_spec{};
 
     /**
-     * Last piece of copy-and-swap;
-     * private since we only want this for copy-and-swap.
-     */
-    ParsingSpec() noexcept = default;
-
-    /**
      * Takes ownership of the given shared spec handle.
      */
     explicit ParsingSpec(Arc<imp::ParsingSpec>* spec) noexcept;
@@ -172,17 +190,29 @@ private:
             -> std::vector<LeafQuery>;
 };
 
+// Copy-and-swap: the by-value `operator=` is both copy and move assignment.
+// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
 class Parser {
 public:
     ~Parser();
+    /**
+     * Copying a moved-from (null) parser results in a null parser.
+     */
     Parser(Parser const& other);
+    /**
+     * Afterwards, `other` is in a well-defined but invalid (null) state.
+     */
     Parser(Parser&& other) noexcept;
+    /**
+     * Copy-and-swap: the single assignment operator for both copy and move assignment.
+     * `other` is taken by value (copy or move constructed at the call site),
+     * so a separate `Parser&&` overload would be ambiguous.
+     */
     auto operator=(Parser other) noexcept -> Parser&;
-    auto operator=(Parser&& other) noexcept -> Parser&;
 
     /**
      * Conventional `swap` function, declared using `friend` for ADL.
-     * Also the second critical piece for the copy-and-swap idiom.
+     * Used to implement the copy-and-swap idiom.
      *
      * @param first
      * @param second
@@ -193,6 +223,8 @@ public:
      * Get the next log event, as a handle.
      * Conceptually, `pos` is the current position/offset to parse the next event;
      * specifically, it's passed as a pointer so log surgeon advances it before returning.
+	 *
+	 * The data of the current log event is invalidated after the next call to `next_event()`.
      *
      * @param input A view of the entire input text.
      * @param pos Pointer to an offset value in the text.
@@ -213,12 +245,6 @@ private:
     imp::LogEvent* m_event{};
 
     /**
-     * Last piece of copy-and-swap;
-     * private since we only want this for copy-and-swap.
-     */
-    Parser() noexcept = default;
-
-    /**
      * Creates a parser (handle) for the given parsing spec.
      *
      * @param spec The spec to parse with; this parser shares ownership of it.
@@ -230,7 +256,6 @@ class LogEvent {
 public:
     /**
      * @param event A borrowed `imp::LogEvent const*` (doesn't take ownership).
-     * @param parser A borrowed `imp::Parser const*` (doesn't take ownership).
      */
     LogEvent(imp::LogEvent const* event);
 
@@ -278,36 +303,21 @@ inline ParsingSpecBuilder::~ParsingSpecBuilder() {
 }
 
 inline ParsingSpecBuilder::ParsingSpecBuilder(ParsingSpecBuilder const& other)
-        : ParsingSpecBuilder{} {
-    // Copy-and swap idiom: The first "centerpiece";
-    // the "semantics" of this type's resource management must be
-    // bona fide implemented here.
-    m_builder = imp::log_surgeon_parsing_spec_builder_clone(other.m_builder);
-}
+        // Copy-and-swap idiom: The resource management semantics are implemented here.
+        // Don't delegate to the default constructor, which allocates a new builder.
+        : m_builder{
+                  nullptr == other.m_builder
+                          ? nullptr
+                          : imp::log_surgeon_parsing_spec_builder_clone(other.m_builder)
+          } {}
 
 inline ParsingSpecBuilder::ParsingSpecBuilder(ParsingSpecBuilder&& other) noexcept
-        : ParsingSpecBuilder{} {
-    // Copy-and-swap idiom: The move constructor is handled by the same
-    // `swap` mechanism used to safely implement copy assignment.
-    swap(*this, other);
-}
+        : m_builder{std::exchange(other.m_builder, nullptr)} {}
 
 inline auto ParsingSpecBuilder::operator=(ParsingSpecBuilder other) noexcept
         -> ParsingSpecBuilder& {
-    // Copy-and-swap idiom: It is important that `other` is taken by value.
-    // This would handle both copy and move assignment;
-    // when called with an rvalue reference,
-    // the compiler would use the move constructor to create `other`,
-    // which we then swap with.
-    // Supposedly, that allows for better optimization opportunities too.
-    swap(*this, other);
-    return *this;
-}
-
-inline auto ParsingSpecBuilder::operator=(ParsingSpecBuilder&& other) noexcept
-        -> ParsingSpecBuilder& {
-    // Copy-and-swap idiom: Duplicate of copy assignment;
-    // lints aren't smart enough to realize that this would be covered as above.
+    // Copy-and-swap idiom: `other` is copy or move constructed at the call site,
+    // so this handles both copy and move assignment (and self-assignment).
     swap(*this, other);
     return *this;
 }
@@ -328,6 +338,9 @@ inline auto ParsingSpecBuilder::build() -> ParsingSpec {
 }
 
 inline auto ParsingSpecBuilder::set_delimiters(std::string_view delimiters) -> void {
+    if (nullptr == m_builder) {
+        throw std::invalid_argument("builder already constructed");
+    }
     imp::log_surgeon_parsing_spec_builder_set_delimiters(
             m_builder,
             CCharArray::from_string_view(delimiters)
@@ -382,33 +395,17 @@ inline ParsingSpec::~ParsingSpec() {
     }
 }
 
-inline ParsingSpec::ParsingSpec(ParsingSpec const& other) : ParsingSpec{} {
-    // Copy-and swap idiom: The first "centerpiece";
-    // the "semantics" of this type's resource management must be
-    // bona fide implemented here.
-    m_spec = imp::log_surgeon_parsing_spec_clone(other.m_spec);
-}
+inline ParsingSpec::ParsingSpec(ParsingSpec const& other)
+        // Copy-and-swap idiom: The resource management semantics are implemented here.
+        : m_spec{nullptr == other.m_spec ? nullptr
+                                         : imp::log_surgeon_parsing_spec_clone(other.m_spec)} {}
 
-inline ParsingSpec::ParsingSpec(ParsingSpec&& other) noexcept : ParsingSpec{} {
-    // Copy-and-swap idiom: The move constructor is handled by the same
-    // `swap` mechanism used to safely implement copy assignment.
-    swap(*this, other);
-}
+inline ParsingSpec::ParsingSpec(ParsingSpec&& other) noexcept
+        : m_spec{std::exchange(other.m_spec, nullptr)} {}
 
 inline auto ParsingSpec::operator=(ParsingSpec other) noexcept -> ParsingSpec& {
-    // Copy-and-swap idiom: It is important that `other` is taken by value.
-    // This would handle both copy and move assignment;
-    // when called with an rvalue reference,
-    // the compiler would use the move constructor to create `other`,
-    // which we then swap with.
-    // Supposedly, that allows for better optimization opportunities too.
-    swap(*this, other);
-    return *this;
-}
-
-inline auto ParsingSpec::operator=(ParsingSpec&& other) noexcept -> ParsingSpec& {
-    // Copy-and-swap idiom: Duplicate of copy assignment;
-    // lints aren't smart enough to realize that this would be covered as above.
+    // Copy-and-swap idiom: `other` is copy or move constructed at the call site,
+    // so this handles both copy and move assignment (and self-assignment).
     swap(*this, other);
     return *this;
 }
@@ -518,7 +515,7 @@ inline auto ParsingSpec::get_delimiters() const -> std::string_view {
     return imp::log_surgeon_parsing_spec_get_delimiters(m_spec);
 }
 
-inline Parser::Parser(Arc<imp::ParsingSpec> const* spec) : Parser{} {
+inline Parser::Parser(Arc<imp::ParsingSpec> const* spec) {
     if (nullptr == spec) {
         throw std::invalid_argument("spec must not be null");
     }
@@ -535,34 +532,22 @@ inline Parser::~Parser() {
     }
 }
 
-inline Parser::Parser(Parser const& other) : Parser{} {
-    // Copy-and swap idiom: The first "centerpiece";
-    // the "semantics" of this type's resource management must be
-    // bona fide implemented here.
-    m_parser = imp::log_surgeon_parser_clone(other.m_parser);
-    m_event = imp::log_surgeon_log_event_clone(other.m_event);
-}
+inline Parser::Parser(Parser const& other)
+        // Copy-and-swap idiom: The resource management semantics are implemented here.
+        : m_parser{
+                  nullptr == other.m_parser ? nullptr
+                                            : imp::log_surgeon_parser_clone(other.m_parser)
+          },
+          m_event{nullptr == other.m_event ? nullptr
+                                           : imp::log_surgeon_log_event_clone(other.m_event)} {}
 
-inline Parser::Parser(Parser&& other) noexcept : Parser{} {
-    // Copy-and-swap idiom: The move constructor is handled by the same
-    // `swap` mechanism used to safely implement copy assignment.
-    swap(*this, other);
-}
+inline Parser::Parser(Parser&& other) noexcept
+        : m_parser{std::exchange(other.m_parser, nullptr)},
+          m_event{std::exchange(other.m_event, nullptr)} {}
 
 inline auto Parser::operator=(Parser other) noexcept -> Parser& {
-    // Copy-and-swap idiom: It is important that `other` is taken by value.
-    // This would handle both copy and move assignment;
-    // when called with an rvalue reference,
-    // the compiler would use the move constructor to create `other`,
-    // which we then swap with.
-    // Supposedly, that allows for better optimization opportunities too.
-    swap(*this, other);
-    return *this;
-}
-
-inline auto Parser::operator=(Parser&& other) noexcept -> Parser& {
-    // Copy-and-swap idiom: Duplicate of copy assignment;
-    // lints aren't smart enough to realize that this would be covered as above.
+    // Copy-and-swap idiom: `other` is copy or move constructed at the call site,
+    // so this handles both copy and move assignment (and self-assignment).
     swap(*this, other);
     return *this;
 }

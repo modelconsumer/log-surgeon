@@ -133,7 +133,7 @@ impl Tnfa {
 				transitions: Transitions::Spontaneous(Vec::new()),
 				maybe_accepting_data: None,
 			}],
-			tags: BTreeSet::new(),
+			tags: self.tags.clone(),
 		};
 
 		while let Some((pair, state)) = stack.pop() {
