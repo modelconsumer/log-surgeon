@@ -345,11 +345,68 @@ fn text_matched_by_static_text_is_preserved() {
 	let spec: ParsingSpec = test_spec();
 	// The run is satisfied by the shape's static text: no rule is constrained,
 	// but the query's characters must still appear.
-	// The run covers the whole of `id=`, so the value carries no wildcard on either side --
+	// The run covers the whole of `id=`, so there is no wildcard *before* it --
 	// a static value must glob-match its part's text exactly, and `'*id='` would not match `id=`.
+	// The trailing `*` is not padding for `id=` but for the omitted `%digits%` after it;
+	// see `omitted_trailing_variables_leave_a_trailing_wildcard`.
 	assert_eq!(
-		vec!["'id='"],
+		vec!["'id=*'"],
 		interpretations_of(&spec, "id=%digits%", "*id=*")
+	);
+}
+
+/// Rule references after the last constrained part are omitted,
+/// but they still emit text: if the rendering ends in static text,
+/// nothing else stands for it, so that value must end with `*`.
+/// Without it `'id='` would claim the message ends after `id=`.
+#[test]
+fn omitted_trailing_variables_leave_a_trailing_wildcard() {
+	let spec: ParsingSpec = test_spec();
+	// The shape ends in the omitted variable.
+	assert_eq!(
+		vec!["'id=*'"],
+		interpretations_of(&spec, "id=%digits%", "*id=*")
+	);
+	assert_eq!(
+		vec!["'id=*'"],
+		interpretations_of(&spec, "id=%digits%", "id=*")
+	);
+	// Several omitted variables, still a single wildcard.
+	assert_eq!(
+		vec!["'id=*'"],
+		interpretations_of(&spec, "id=%digits%%word%", "*id=*")
+	);
+	// Static text after the omitted variable already carries the wildcard; nothing changes.
+	assert_eq!(
+		vec!["'id=*'"],
+		interpretations_of(&spec, "id=%digits% end", "*id=*")
+	);
+	// Nothing is omitted, so nothing is added: the run covers the whole shape.
+	assert_eq!(vec!["'abc'"], interpretations_of(&spec, "abc", "*abc*"));
+	// A trailing *capture* is padded by its own rule, not by this.
+	assert_eq!(
+		vec!["'id=' <digits=7*>"],
+		interpretations_of(&spec, "id=%digits%", "*id=7*")
+	);
+}
+
+/// Compositions that differ only in *where* text sits inside a static part
+/// are one decomposition, and must be reported once.
+#[test]
+fn compositions_differing_only_in_static_offsets_are_merged() {
+	let spec: ParsingSpec = test_spec();
+	// `aa` at offset 0 (`'aa*'`) or 1 (`'*aa'`): one decomposition.
+	assert_eq!(vec!["'*aa*'"], interpretations_of(&spec, "aaa", "*aa*"));
+	// Three ways to place `a` then `a` in `aaa`.
+	assert_eq!(vec!["'*a*a*'"], interpretations_of(&spec, "aaa", "*a*a*"));
+	// Anchoring pins the offset, so there is nothing to merge.
+	assert_eq!(vec!["'*aa'"], interpretations_of(&spec, "aaa", "*aa"));
+	assert_eq!(vec!["'aa*'"], interpretations_of(&spec, "aaa", "aa*"));
+	// Different *parts* are different decompositions, and are kept apart:
+	// the first static part (with `%word%` omitted), the rule, or the last static part.
+	assert_eq!(
+		vec!["'*' <word=*> '*x*'", "'*' <word=*x*> '*'", "'*x*'"],
+		interpretations_of(&spec, "xx%word%xx", "*x*")
 	);
 }
 

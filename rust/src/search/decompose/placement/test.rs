@@ -229,3 +229,70 @@ fn static_text_occurrence_is_required_verbatim() {
 	let (_, _, table) = table_for(&spec, "hello %word%", "*HELLO*");
 	assert!(table.is_impossible());
 }
+
+#[test]
+fn overlapping_occurrences_in_static_text_are_all_placed() {
+	let spec: ParsingSpec = test_spec();
+
+	// `aa` occurs in `aaa` at offsets 0 *and* 1; `str::match_indices` would only find 0.
+	let (_, _, table) = table_for(&spec, "aaa", "*aa*");
+	let starts: Vec<Position> = Vec::from_iter(table.placements[0].iter().map(Placement::start));
+	assert_eq!(vec![(0, 0), (0, 1)], starts);
+
+	// An end-anchored run needs the later occurrence.
+	let (model, _, table) = table_for(&spec, "aaa", "*aa");
+	assert_eq!(1, table.placements[0].len());
+	assert_eq!((0, 1), table.placements[0][0].start());
+	assert!(can_compose(&table, model.parts.len()));
+
+	// Multi-byte characters: offsets are in characters, not bytes.
+	let (_, _, table) = table_for(&spec, "\u{e9}\u{e9}\u{e9}", "*\u{e9}\u{e9}*");
+	let starts: Vec<Position> = Vec::from_iter(table.placements[0].iter().map(Placement::start));
+	assert_eq!(vec![(0, 0), (0, 1)], starts);
+}
+
+#[test]
+fn a_run_passes_through_a_nullable_variable() {
+	let spec: ParsingSpec =
+		spec_with_rules(&[("word", "[a-z]+"), ("optional", r"<(?<pad>[!?]*)>")]);
+
+	// `ab` must cross `optional.pad`, which contributes nothing.
+	let (model, _, table) = table_for(&spec, "a%optional.pad%b", "ab");
+	assert_eq!(vec!["0:'a'+1:<>+2:'b'"], rendered(&table, 0));
+	assert!(can_compose(&table, model.parts.len()));
+
+	// The same from a rule: `word` supplies `x`, the nullable variable nothing, `b` the rest.
+	let (_, _, table) = table_for(&spec, "%word%%optional.pad%b", "*xb*");
+	assert!(
+		rendered(&table, 0).contains(&"0:<x>+1:<>+2:'b'".to_owned()),
+		"got {:?}",
+		rendered(&table, 0)
+	);
+
+	// A non-nullable variable cannot be skipped.
+	let (_, _, table) = table_for(&spec, "a%word%b", "ab");
+	assert!(table.is_impossible());
+}
+
+#[test]
+fn repeated_characters_do_not_blow_the_placement_cap() {
+	let spec: ParsingSpec = test_spec();
+	// Every offset of the banner is an occurrence of `==`,
+	// but interior occurrences are interchangeable, so only a few are kept.
+	let shape: String = format!("%word% {} end", "=".repeat(4 * MAX_PLACEMENTS_PER_RUN));
+
+	let (_, _, table) = table_for(&spec, &shape, "*==*");
+	assert_eq!(1, table.placements[0].len());
+
+	// A second run in the same part needs an occurrence after the first one ends.
+	let (model, _, table) = table_for(&spec, &shape, "*==*==*");
+	assert!(table.placements[1].len() <= 2);
+	assert!(can_compose(&table, model.parts.len()));
+
+	// The occurrence ending the text is a distinct rendering class, so it is kept.
+	let (_, _, table) = table_for(&spec, "a===", "*==");
+	assert_eq!(
+		vec![(0, 2)],
+		Vec::from_iter(table.placements[0].iter().map(Placement::start))
+	);
+}

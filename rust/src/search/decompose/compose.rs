@@ -35,13 +35,16 @@
 //!
 //! A static sub-query's value must glob-match its part's text *exactly*,
 //! so a run covering only part of a stretch is padded with `*` on both sides;
-//! see [`symbolic_value_of`], which decides this from the piece offsets
+//! see [`symbolic_value_of`], which decides this from where the pieces sit
 //! rather than from whether the part is a rule.
+//! Compositions that differ *only* in where pieces sit within static text
+//! are one decomposition, and are merged; see [`merge_by_padding`].
 //!
 //! References *after* the last constrained capture are omitted when the query is not
 //! anchored at the end: its trailing wildcard leaves them unconstrained,
 //! so they add nothing. Their static text is still reported,
-//! since that is where the trailing wildcard applies.
+//! since that is where the trailing wildcard applies;
+//! if the rendering ends in static text, that value gets a trailing `*` for them.
 
 #[cfg(test)]
 mod test;
@@ -84,12 +87,22 @@ pub struct Capture {
 }
 
 /// Query text produced by the shape's static text.
+///
+/// Where in the text the pieces sit is *not* recorded, only whether text of the part remains
+/// before the first piece and after the last. Static text is fixed, so the exact offsets carry no
+/// information for the user; they matter only to the composition DP (which has already run) and
+/// to padding (which these flags decide). Dropping them is what lets [`merge_by_padding`] treat
+/// compositions that differ only in offsets as the one decomposition they are.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Literal {
 	/// Index into [`ShapeModel::parts`].
 	pub part: usize,
 	/// The characters of the query this static text supplies.
 	pub pieces: Vec<PieceRef>,
+	/// Whether text of the part may precede the first piece, so the value must begin with `*`.
+	pub pad_before: bool,
+	/// Whether text of the part may follow the last piece, so the value must end with `*`.
+	pub pad_after: bool,
 }
 
 /// A piece of query text, and the run it came from.
@@ -101,10 +114,17 @@ pub struct Literal {
 pub struct PieceRef {
 	/// Index into the query's runs.
 	pub run: usize,
-	/// Where in the part's static text this piece begins, in characters; zero inside a rule.
-	pub offset: usize,
 	/// The characters supplied.
 	pub text: String,
+}
+
+/// How a part is padded when rendered; see [`symbolic_value_of`].
+#[derive(Clone, Copy, Debug)]
+enum Padding {
+	/// Static text, with the padding decided by [`Literal::pad_before`]/[`Literal::pad_after`].
+	Static { before: bool, after: bool },
+	/// A rule, padded wherever the query permits.
+	Rule,
 }
 
 /// One shape part's contribution to a rendered interpretation.
@@ -180,6 +200,13 @@ impl Composition {
 	///
 	/// Factored out so that rendering and multi-piece verification agree by construction:
 	/// the value checked against a rule is the very one that will be reported.
+	///
+	/// When rule references are omitted past the end of the rendering
+	/// and the rendering ends in static text,
+	/// that static value gets a trailing `*` standing for what the omitted references emit:
+	/// `*id=*` against `id=%digits%` is `'id=*'`, not `'id='`,
+	/// which would claim the message ends after `id=`.
+	/// (A trailing capture is already padded by [`symbolic_value_of`].)
 	fn rendered_parts(&self, model: &ShapeModel, runs: &[Run]) -> Vec<RenderedPart> {
 		// The last part holding any query text. Rule references after it are unconstrained,
 		// so they are omitted rather than reported as vacuous captures.
@@ -217,12 +244,18 @@ impl Composition {
 		let mut rendered: Vec<RenderedPart> = Vec::with_capacity(emissions.len());
 
 		for (index, &(part, pieces)) in emissions.iter().enumerate() {
-			// `Some(length)` for static text, whose value must glob-match that text exactly;
-			// `None` for a rule, which is padded by what the query permits instead.
-			// See `symbolic_value_of`.
-			let static_len: Option<usize> = match &model.parts[part] {
-				ShapePart::Static(text) => Some(text.chars().count()),
-				ShapePart::Variable(_) => None,
+			// Static text's value must glob-match that text exactly;
+			// a rule is padded by what the query permits instead. See `symbolic_value_of`.
+			let padding: Padding = match &model.parts[part] {
+				ShapePart::Static(_) => {
+					let literal: Option<&Literal> =
+						self.literals.iter().find(|literal| literal.part == part);
+					Padding::Static {
+						before: literal.is_some_and(|literal| literal.pad_before),
+						after: literal.is_some_and(|literal| literal.pad_after),
+					}
+				},
+				ShapePart::Variable(_) => Padding::Rule,
 			};
 
 			// The run holding the character emitted just before this part, if any.
@@ -239,7 +272,7 @@ impl Composition {
 
 			rendered.push(RenderedPart {
 				part,
-				value: symbolic_value_of(pieces, runs, preceding_run, following_run, static_len),
+				value: symbolic_value_of(pieces, runs, preceding_run, following_run, padding),
 				piece_count: pieces.len(),
 			});
 		}
@@ -269,6 +302,23 @@ impl Composition {
 				continue;
 			}
 			merged.push(part);
+		}
+
+		// Rule references omitted after the rendering still emit text, which nothing else in the
+		// rendering stands for if it ends in static text.
+		let omits_trailing_variables: bool = model.parts[(last_emitted + 1)..]
+			.iter()
+			.any(ShapePart::is_variable);
+		if omits_trailing_variables
+			&& let Some(last) = merged.last_mut()
+			&& !model.parts[last.part].is_variable()
+		{
+			last.value = condense_wildcards(
+				last.value
+					.iter()
+					.cloned()
+					.chain(std::iter::once(SymbolicChar::GlobStar)),
+			);
 		}
 
 		merged
@@ -341,7 +391,7 @@ fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<Symbol
 /// stays contiguous: `preceding_run` and `following_run` name the runs adjacent
 /// to this part, so a boundary can be told apart from a mere part boundary.
 ///
-/// The two kinds of part are padded on different grounds, so `static_len` distinguishes them.
+/// The two kinds of part are padded on different grounds, so `padding` distinguishes them.
 ///
 /// A **rule** may emit text of its own around the query's characters,
 /// so it is padded wherever the query permits: suppressed where the run continues
@@ -349,18 +399,18 @@ fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<Symbol
 /// or end of the message.
 ///
 /// **Static text** is reproduced verbatim, so its value must be a glob matching
-/// the part's text *exactly*. The padding is therefore decided by the piece offsets
-/// alone -- a wildcard stands for the characters of the part the run does not cover,
-/// and appears if and only if there are some. Anchoring and run continuation need
-/// no special case here: a run flowing in from the previous part necessarily
-/// begins at offset zero, and one flowing out necessarily reaches the text's end,
-/// so both fall out of the offsets.
+/// the part's text *exactly*. The padding is therefore decided by where the pieces sit
+/// ([`Literal::pad_before`]/[`Literal::pad_after`]) -- a wildcard stands for the characters
+/// of the part the run does not cover, and appears if and only if there are some.
+/// Anchoring and run continuation need no special case here: a run flowing in from the previous
+/// part necessarily begins at offset zero, and one flowing out necessarily reaches the text's end,
+/// so both fall out of where the pieces sit.
 fn symbolic_value_of(
 	pieces: &[PieceRef],
 	runs: &[Run],
 	preceding_run: Option<usize>,
 	following_run: Option<usize>,
-	static_len: Option<usize>,
+	padding: Padding,
 ) -> Vec<SymbolicChar> {
 	// A part with no attributed text is a bare `*`, present only to mark its position.
 	if pieces.is_empty() {
@@ -377,9 +427,11 @@ fn symbolic_value_of(
 
 	// Before: for static text, exactly the characters preceding the first piece;
 	// for a rule, whatever the query's wildcard allows it to emit.
-	let pad_before: bool = match static_len {
-		Some(_) => 0 != first.offset,
-		None => !continues_before && !(preceding_run.is_none() && runs[first.run].anchored_start),
+	let pad_before: bool = match padding {
+		Padding::Static { before, .. } => before,
+		Padding::Rule => {
+			!continues_before && !(preceding_run.is_none() && runs[first.run].anchored_start)
+		},
 	};
 	if pad_before {
 		value.push(SymbolicChar::GlobStar);
@@ -398,9 +450,11 @@ fn symbolic_value_of(
 	}
 
 	// And after, by the mirror image of the same reasoning.
-	let pad_after: bool = match static_len {
-		Some(length) => (last.offset + last.text.chars().count()) < length,
-		None => !continues_after && !(following_run.is_none() && runs[last.run].anchored_end),
+	let pad_after: bool = match padding {
+		Padding::Static { after, .. } => after,
+		Padding::Rule => {
+			!continues_after && !(following_run.is_none() && runs[last.run].anchored_end)
+		},
 	};
 	if pad_after {
 		value.push(SymbolicChar::GlobStar);
@@ -531,6 +585,10 @@ pub fn compose(
 		return Composed::Unknown;
 	}
 
+	// Compositions differing only in where text sits within static parts are one decomposition.
+	// Merged before verification, which only inspects captures, so it is unaffected.
+	let mut compositions: Vec<Composition> = merge_by_padding(compositions);
+
 	// A rule holding pieces of several runs was validated one run at a time;
 	// check it against all of them together. An alternation such as `INFO|WARN`
 	// admits either run alone but never both.
@@ -610,16 +668,19 @@ fn enumerate(
 /// (they are separated by text the rule also produces).
 fn build_composition(model: &ShapeModel, table: &PlacementTable, choices: &[usize]) -> Composition {
 	// Keyed by part index to merge pieces, then flattened in shape order.
-	let mut by_part: BTreeMap<usize, Vec<PieceRef>> = BTreeMap::new();
+	// Each piece keeps its offset here only long enough to decide the part's padding.
+	let mut by_part: BTreeMap<usize, Vec<(usize, PieceRef)>> = BTreeMap::new();
 
 	for (run, &choice) in choices.iter().enumerate() {
 		let placement: &Placement = &table.placements[run][choice];
 		for piece in placement.pieces.iter() {
-			by_part.entry(piece.part).or_default().push(PieceRef {
-				run,
-				offset: piece.offset,
-				text: piece.text.clone(),
-			});
+			by_part.entry(piece.part).or_default().push((
+				piece.offset,
+				PieceRef {
+					run,
+					text: piece.text.clone(),
+				},
+			));
 		}
 	}
 
@@ -631,11 +692,61 @@ fn build_composition(model: &ShapeModel, table: &PlacementTable, choices: &[usiz
 			ShapePart::Variable(variable) => captures.push(Capture {
 				part,
 				name: variable.name.clone(),
-				pieces,
+				pieces: Vec::from_iter(pieces.into_iter().map(|(_, piece)| piece)),
 			}),
-			ShapePart::Static(_) => literals.push(Literal { part, pieces }),
+			ShapePart::Static(text) => {
+				let (first_offset, _) = pieces.first().expect("non-empty");
+				let (last_offset, last) = pieces.last().expect("non-empty");
+				let pad_before: bool = 0 != *first_offset;
+				let pad_after: bool =
+					(last_offset + last.text.chars().count()) < text.chars().count();
+				literals.push(Literal {
+					part,
+					pieces: Vec::from_iter(pieces.into_iter().map(|(_, piece)| piece)),
+					pad_before,
+					pad_after,
+				});
+			},
 		}
 	}
 
 	Composition { captures, literals }
+}
+
+/// Merges compositions that differ only in the padding of their static parts.
+///
+/// Such compositions place the same query text in the same parts and differ only in
+/// *where* within some static text it sits (`*aa*` against `aaa` at offset 0 or 1),
+/// which the user cannot observe: the text is fixed. Each is rendered as a different glob
+/// (`'aa*'`, `'*aa'`), so without merging the one decomposition is reported several times.
+///
+/// The merge ORs the padding flags (`'*aa*'`). That is sound: adding a `*` to either end of a
+/// glob that matches the part's text still matches it. It is also no looser than the group
+/// itself, since every member is an instance of the merged value.
+fn merge_by_padding(compositions: Vec<Composition>) -> Vec<Composition> {
+	let mut merged: BTreeMap<Composition, Composition> = BTreeMap::new();
+
+	for composition in compositions.into_iter() {
+		let mut key: Composition = composition.clone();
+		for literal in key.literals.iter_mut() {
+			literal.pad_before = false;
+			literal.pad_after = false;
+		}
+
+		match merged.get_mut(&key) {
+			Some(existing) => {
+				for (mine, theirs) in
+					std::iter::zip(existing.literals.iter_mut(), composition.literals)
+				{
+					mine.pad_before |= theirs.pad_before;
+					mine.pad_after |= theirs.pad_after;
+				}
+			},
+			None => {
+				merged.insert(key, composition);
+			},
+		}
+	}
+
+	Vec::from_iter(merged.into_values())
 }

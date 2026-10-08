@@ -319,11 +319,19 @@ This is the path that actually answers the question, and it never builds a shape
 A run must be produced in full, and there are only three possibilities:
 
 1. **wholly inside a rule** -- `RunFit::fits_wholly`;
-2. **wholly inside static text** -- a `match_indices` substring search
-    (`match_indices` yields byte offsets,
-    which are converted to the character offsets the `Placement` records use);
+2. **wholly inside static text** -- a substring search over *every* occurrence,
+    including overlapping ones
+    (`str::match_indices` would skip them, so `*aa` against `aaa` would find nothing),
+    reporting the character offsets the `Placement` records use.
+    Interior occurrences render identically,
+    so only the earliest one at or after each position the previous run can leave off at is kept
+    (`useful_occurrences`);
+    otherwise a banner of repeated characters would exceed the placement cap;
 3. **straddling** a boundary -- split between a rule and its neighbour,
     recorded via `suffixes` / `prefixes`.
+    A nullable variable in the middle of a straddle may contribute nothing,
+    so a run such as `ab` can cross `a%optional.pad%b`;
+    the variable is then reported as an empty capture.
 
 Anchoring constrains each in both directions:
 
@@ -363,7 +371,7 @@ so a run crossing a part boundary stays contiguous.
 
 The `*` *padding* around a value is decided differently for the two kinds of part,
 because they mean different things --
-this is `symbolic_value_of`'s `static_len` parameter:
+this is `symbolic_value_of`'s `padding` parameter:
 
 - A **rule** may emit text of its own around the query's characters,
     so it is padded wherever the query permits:
@@ -377,6 +385,12 @@ this is `symbolic_value_of`'s `static_len` parameter:
     Anchoring and run continuation need no special case:
     a run flowing in from the previous part necessarily begins at offset 0,
     and one flowing out necessarily reaches the text's end.
+    The offsets are reduced to two flags, `Literal::pad_before`/`pad_after`,
+    when a composition is built,
+    and compositions differing only in those flags are merged by OR-ing them
+    (`merge_by_padding`):
+    the text is fixed, so where within it a run sits is unobservable,
+    and `*aa*` against `aaa` is one decomposition, `'*aa*'`, not `'aa*'` and `'*aa'`.
 
     This is the opposite of the intuition that "static text must match verbatim,
     so it is never padded".
@@ -399,6 +413,10 @@ Rule references after the last *constrained* one are omitted --
 the query's trailing wildcard leaves them unconstrained,
 and each would only be a vacuous capture carrying no information.
 Their static text still appears, as `'*'`, since that is where the trailing wildcard applies.
+If no static text follows them, the rendering ends in whatever precedes them;
+when that is static text it gets a trailing `*` standing for them,
+so `*id=*` against `id=%digits%` is `'id=*'` rather than `'id='`
+(which would claim the message ends after `id=`).
 
 > When the query is end-anchored those trailing references are *not* unconstrained
 > but pinned to the empty string.

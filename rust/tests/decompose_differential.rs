@@ -82,6 +82,15 @@ const SHAPES: &[&str] = &[
 	"id=%digits%%optional.pad%",
 	// Leading nullable variable: a start-anchored query can begin after it.
 	"%optional.pad%%word%",
+	// Repeated characters: a run can occur at *overlapping* offsets in one static part,
+	// each a distinct placement.
+	"aaa",
+	"---",
+	// Nullable variable in the *middle* of a run: the run can pass through it,
+	// with the variable pinned to the empty string.
+	"a%optional.pad%b",
+	"%word%%optional.pad%b",
+	"%word%%optional.pad% tail",
 ];
 
 /// Queries chosen to exercise literal/wildcard interleavings,
@@ -137,6 +146,17 @@ fn queries() -> Vec<String> {
 		"*a*e*",
 		"id=1",
 		"*_*b",
+		// Overlapping occurrences in static text.
+		"*aa",
+		"*aa*",
+		"aa*",
+		"*a*aa*",
+		"*--",
+		// Runs crossing a nullable variable.
+		"ab",
+		"*ab*",
+		"*xb*",
+		"*hello tail",
 	]
 	.iter()
 	.map(|q| (*q).to_owned())

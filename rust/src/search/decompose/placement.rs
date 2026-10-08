@@ -249,11 +249,28 @@ impl PlacementTable {
 			for (index, part) in model.parts.iter().enumerate() {
 				match part {
 					ShapePart::Static(text) => {
+						// Where the previous run can leave off inside this part;
+						// the earliest occurrence after each is what composition can use.
+						let entry_offsets: Vec<usize> = run_index
+							.checked_sub(1)
+							.map(|previous| {
+								Vec::from_iter(
+									placements[previous]
+										.iter()
+										.map(Placement::next_available)
+										.filter(|&(part, _)| part == index)
+										.map(|(_, offset)| offset),
+								)
+							})
+							.unwrap_or_default();
+
 						// The run must appear verbatim in this static text.
-						for (offset, _) in text.match_indices(&run.text) {
-							// Offsets are in characters, not bytes,
-							// so that they can be compared against character counts elsewhere.
-							let start_offset: usize = text[..offset].chars().count();
+						for start_offset in useful_occurrences(
+							Vec::from_iter(overlapping_occurrences(text, &run.text)),
+							run.text.chars().count(),
+							text.chars().count(),
+							&entry_offsets,
+						) {
 							let end_offset: usize = start_offset + run.text.chars().count();
 
 							// A start-anchored run must be the first thing the message emits:
@@ -476,6 +493,68 @@ impl PlacementTable {
 	}
 }
 
+/// The character offsets of every occurrence of `needle` in `haystack`, **including overlapping
+/// ones**.
+///
+/// [`str::match_indices`] skips overlapping occurrences (`aa` in `aaa` only at `0`),
+/// but each occurrence is a distinct placement: `*aa` against `aaa` needs the one at `1`.
+///
+/// Offsets are in characters, not bytes,
+/// so that they can be compared against character counts elsewhere.
+fn overlapping_occurrences<'a>(
+	haystack: &'a str,
+	needle: &'a str,
+) -> impl Iterator<Item = usize> + 'a {
+	haystack
+		.char_indices()
+		.enumerate()
+		.filter(move |&(_, (byte_offset, _))| haystack[byte_offset..].starts_with(needle))
+		.map(|(char_offset, _)| char_offset)
+}
+
+/// The subset of `occurrences` (sorted character offsets of a run in one static part)
+/// that composition can actually make use of.
+///
+/// A long stretch of repeated characters (a banner of `=`, say) holds a run at very many
+/// overlapping offsets; keeping them all would blow [`MAX_PLACEMENTS_PER_RUN`] and push the
+/// whole shape onto the engine. Most are interchangeable:
+///
+/// - **Rendering** of a static part depends only on whether its first piece starts at offset `0`
+///   and whether its last piece reaches the end of the text (see `symbolic_value_of`); runs
+///   within it are always wildcard-separated. So all *interior* occurrences
+///   (`0 < offset` and `offset + run_len < text_len`) render identically.
+/// - **Composition** only needs a placement to start at or after the position the previous run
+///   left off at, and an earlier end leaves strictly more room for the runs after it.
+///
+/// Hence an interior occurrence is only needed if it is the earliest one at or after some
+/// position the previous run can leave off at (`entry_offsets`, plus `0` for entering the part
+/// from an earlier one). The occurrences at offset `0` and ending at `text_len` are distinct
+/// rendering classes, so they are always kept.
+fn useful_occurrences(
+	occurrences: Vec<usize>,
+	run_len: usize,
+	text_len: usize,
+	entry_offsets: &[usize],
+) -> Vec<usize> {
+	let is_interior = |offset: usize| (0 < offset) && ((offset + run_len) < text_len);
+
+	let interior: Vec<usize> =
+		Vec::from_iter(occurrences.iter().copied().filter(|&o| is_interior(o)));
+	let mut useful: Vec<usize> =
+		Vec::from_iter(occurrences.iter().copied().filter(|&o| !is_interior(o)));
+
+	for &entry in std::iter::once(&0).chain(entry_offsets.iter()) {
+		let first_at_or_after: usize = interior.partition_point(|&o| o < entry);
+		if let Some(&offset) = interior.get(first_at_or_after) {
+			useful.push(offset);
+		}
+	}
+
+	useful.sort_unstable();
+	useful.dedup();
+	useful
+}
+
 /// A straddle in progress: one run, begun at a fixed position, being traced through the parts
 /// that follow. Holds what is invariant across the recursion in [`Self::extend`].
 struct Straddle<'a> {
@@ -511,7 +590,8 @@ impl Straddle<'_> {
 		const MAX_UNPINNED_SPLITS: usize = 8;
 
 		let available: usize = self.characters.len() - consumed;
-		// A middle piece is non-empty and must leave something for the following parts.
+		// A middle piece offered here is non-empty and must leave something for the following
+		// parts. (An *empty* middle piece, for a nullable rule, is handled by the caller.)
 		if available < 2 {
 			return Some(Vec::new());
 		}
@@ -592,8 +672,9 @@ impl Straddle<'_> {
 	/// Shared by both straddle directions (starting from static text or from a rule).
 	/// Each following part must supply the run's next characters *contiguously*,
 	/// since a run has no wildcards inside it: static text from its very start,
-	/// and a rule either by finishing the run (it can begin with what remains)
-	/// or by producing exactly a middle piece and handing off to the next part.
+	/// and a rule either by finishing the run (it can begin with what remains),
+	/// by producing exactly a middle piece and handing off to the next part,
+	/// or, if the rule is nullable, by producing nothing and handing off immediately.
 	///
 	/// Returns every completion,
 	/// because a rule in the middle of a run can take any number of characters.
@@ -712,6 +793,22 @@ impl Straddle<'_> {
 						is_rule: true,
 					});
 					results.extend(self.extend(part + 1, consumed + take, pieces)?);
+				}
+
+				// Or the rule produces nothing at all, and the run passes straight through it.
+				// This is the empty middle piece `candidate_middle_lengths` never offers;
+				// without it a run such as `ab` could not cross `a%optional.pad%b`.
+				// The empty piece is still recorded, so the rule is reported as an empty capture,
+				// which is exactly what the run pins it to.
+				if variable.can_match_empty {
+					let mut pieces: Vec<Piece> = pieces;
+					pieces.push(Piece {
+						part,
+						offset: 0,
+						text: String::new(),
+						is_rule: true,
+					});
+					results.extend(self.extend(part + 1, consumed, pieces)?);
 				}
 
 				Some(results)

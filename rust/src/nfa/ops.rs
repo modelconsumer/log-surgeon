@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 
 use crate::graph::Csr;
 use crate::graph::TarjanSccs;
