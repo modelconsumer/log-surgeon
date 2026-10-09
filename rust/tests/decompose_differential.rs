@@ -8,11 +8,6 @@
 //! - **Soundness**: a shape the rejection tier discards must produce no engine match,
 //!   so filtering can never drop a real result.
 //!   This is the property the search path depends on.
-//! - **Containment**: where the rejection tier's `align` does produce a decomposition,
-//!   it must *cover* every capture the engine reports, i.e. be a superset.
-//!   It is deliberately not an equality:
-//!   variables are over-approximated (they may match the empty string, which `[a-z]+` cannot).
-//!   This is why only `align`'s yes/no answer is used, never its decompositions.
 //! - **Transparency**: the public entry point must return exactly what the engine alone would.
 //! - **Satisfiability**: a static sub-query's value must actually be matchable by the shape's
 //!   static text.
@@ -25,10 +20,8 @@ use log_surgeon::parsing_spec::ParsingSpec;
 use log_surgeon::parsing_spec::ParsingSpecBuilder;
 use log_surgeon::search::Interpretation;
 use log_surgeon::search::SearchString;
-use log_surgeon::search::decompose::Budget;
-use log_surgeon::search::decompose::Outcome;
 use log_surgeon::search::decompose::ShapeModel;
-use log_surgeon::search::decompose::align;
+use log_surgeon::search::decompose::can_match;
 
 fn test_spec() -> ParsingSpec {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
@@ -195,21 +188,6 @@ fn queries() -> Vec<String> {
 	queries
 }
 
-/// The set of `(fully_qualified_name, string_value)` captures in an interpretation.
-fn captures_of(interpretation: &Interpretation) -> Vec<(String, String)> {
-	interpretation
-		.leaf_queries
-		.iter()
-		.filter(|leaf_query| !leaf_query.is_static_text())
-		.map(|leaf_query| {
-			(
-				leaf_query.fully_qualified_name.to_string(),
-				leaf_query.string_value.clone(),
-			)
-		})
-		.collect::<Vec<_>>()
-}
-
 /// Strips wildcards, giving the fixed text a value constrains.
 fn fixed_text(value: &str) -> String {
 	value.replace('*', "")
@@ -279,7 +257,7 @@ fn decompose_never_drops_a_match() {
 
 	let mut differing: usize = 0;
 	let mut rejected: usize = 0;
-	let mut decomposable: usize = 0;
+	let mut kept: usize = 0;
 	let mut checked: usize = 0;
 	let mut engine_matched: usize = 0;
 
@@ -303,17 +281,6 @@ fn decompose_never_drops_a_match() {
 			}
 
 			// Transparency: consulting `decompose` must not change *what the result says*.
-			//
-			// Compared modulo wildcard *placement* within values.
-			// Both sides now report static text as sub-queries,
-			// but wildcard placement still differs:
-			// the engine may write `INFO*` where composition writes `*INFO*`,
-			// and the engine appends a synthetic trailing `*`.
-			// Those describe the same decomposition, so `structure_of` strips wildcards.
-			// Positional identity is carried by the vacuous *captures*, which are compared.
-			// Compared as sets: both sides are duplicate-free,
-			// and the order in which decompositions are discovered is an artefact of the search
-			// strategy, not part of the answer.
 			// Matching at all must agree exactly:
 			// the composed path decides yes/no,
 			// so disagreeing here would either drop a real match or invent one.
@@ -348,75 +315,31 @@ fn decompose_never_drops_a_match() {
 				differing += 1;
 			}
 
+			// Soundness of the prefilter: rejecting must never discard a real match.
 			let model: ShapeModel = ShapeModel::new(&spec, shape);
-			let outcome: Outcome = align(&model, query.as_slice(), Budget::default());
-
-			match outcome {
-				Outcome::Rejected => {
-					rejected += 1;
-					// Soundness: rejecting must never discard a real match.
-					assert!(
-						expected.is_empty(),
-						"decompose rejected a matching shape: \
-						 shape={shape:?} query={query_text:?}, \
-						 engine found {expected:?}"
-					);
-				},
-				Outcome::Approximate(alignments) => {
-					decomposable += 1;
-
-					// Containment: every capture the engine reports must appear in some
-					// alignment, with the same rule and the same fixed text.
-					//
-					// Only captures that carry fixed text are compared.
-					// A capture of pure wildcards (the engine's `rule="*"`) asserts nothing
-					// about the rule's value,
-					// and `decompose` deliberately records those as unconstrained gaps instead,
-					// so there is nothing to match against.
-					for interpretation in expected.iter() {
-						for (name, value) in captures_of(interpretation)
-							.into_iter()
-							.filter(|(_, value)| !fixed_text(value).is_empty())
-						{
-							let covered: bool = alignments.iter().any(|alignment| {
-								alignment.fragments.iter().any(|fragment| match fragment {
-									log_surgeon::search::decompose::Fragment::Capture {
-										capture,
-										contents,
-									} => {
-										let contents: String = contents
-											.iter()
-											.map(ToString::to_string)
-											.collect::<String>();
-										(*capture.fully_qualified_name == name)
-											&& (fixed_text(&contents) == fixed_text(&value))
-									},
-									log_surgeon::search::decompose::Fragment::Static(_) => false,
-								})
-							});
-							assert!(
-								covered,
-								"engine capture {name}={value:?} is not covered by any alignment: \
-								 shape={shape:?} query={query_text:?}"
-							);
-						}
-					}
-				},
-				Outcome::Unknown => (),
+			if can_match(&model, query.as_slice()) {
+				kept += 1;
+			} else {
+				rejected += 1;
+				assert!(
+					expected.is_empty(),
+					"decompose rejected a matching shape: \
+					 shape={shape:?} query={query_text:?}, \
+					 engine found {expected:?}"
+				);
 			}
 		}
 	}
 
 	println!(
 		"checked {checked} (query, shape) pairs: {engine_matched} matched the engine, \
-		 {rejected} rejected by `decompose`, {decomposable} decomposable, \
+		 {rejected} rejected by the prefilter ({kept} kept), \
 		 {differing} where the engine's values are strictly tighter"
 	);
 	assert!(
 		0 < rejected,
 		"expected the rejection tier to reject something"
 	);
-	assert!(0 < decomposable, "expected some shape to be decomposable");
 	assert!(
 		0 < engine_matched,
 		"expected some (query, shape) pair to match"

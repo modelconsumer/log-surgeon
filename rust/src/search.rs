@@ -423,13 +423,10 @@ impl<'a> SearchStringView<'a> {
 	/// 3. The engine, when composition declines to conclude (an unreasonable rule, or an exhausted
 	///    budget). This is the slow path that the other two exist to avoid.
 	///
-	/// Note the [`crate::search::decompose::align`] decompositions are *not* usable as a result:
-	/// variables there are over-approximated
-	/// (notably they may match the empty string,
-	/// which a rule like `[a-z]+` cannot),
-	/// so they form a superset of the engine's interpretations.
 	/// Composition is exact because it simulates the rules themselves,
-	/// rather than their charsets.
+	/// whereas the prefilter's `can_match` sees only their coarse charsets
+	/// (and variables there may match the empty string, which a rule like `[a-z]+` cannot),
+	/// so only the prefilter's "no" is a proof.
 	fn interpretations_for_log_shape(
 		&self,
 		spec: &ParsingSpec,

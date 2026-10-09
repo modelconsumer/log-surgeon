@@ -5,7 +5,7 @@
 //! A [`Composition`] chooses one placement per run such that the chosen placements run
 //! left to right and do not overlap. The state is `(run index, earliest usable part)`
 //! and every placement advances both, so the state space is a DAG and is solved
-//! by a reverse sweep -- the same structure as [`crate::search::decompose::align`],
+//! by a reverse sweep -- the same structure as [`crate::search::decompose::prefilter`],
 //! and the reason feasibility can be decided in `O(runs x parts x placements)`
 //! even when the number of compositions is large.
 //!

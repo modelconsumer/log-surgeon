@@ -15,8 +15,8 @@
 //! **Composition**: choose one placement per run such that the placements occur left to right
 //! and do not overlap. This is a reachability problem over `(run index, shape position)` --
 //! every placement advances both -- so it is solved by the same kind of reverse DP sweep as
-//! [`crate::search::decompose::align`], in `O(runs x positions x placements)`, rather than by
-//! enumerating choices.
+//! [`crate::search::decompose::prefilter`], in `O(runs x positions x placements)`, rather than
+//! by enumerating choices.
 //!
 //! # Positional identity
 //!

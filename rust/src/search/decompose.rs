@@ -8,14 +8,13 @@
 //!
 //! It is organised as two tiers, cheapest first:
 //!
-//! 1. **Rejection** ([`align`]) -- a `false` from [`can_match`] *proves* no message of the shape
-//!    can match, so the shape is discarded outright.
+//! 1. **Rejection** ([`prefilter`]) -- a `false` from [`can_match`] *proves* no message of the
+//!    shape can match, so the shape is discarded outright.
 //!    This tier is a true prefilter: it only ever answers "no" or "maybe".
 //!    Its soundness rests on [`Charset`] being a **superset**
 //!    of the characters a rule can emit,
 //!    and on variables being allowed to match empty; both only widen what is
-//!    accepted, so a rejection is never wrong. For the same reason its *decompositions* are not
-//!    usable as a result -- only the yes/no answer is.
+//!    accepted, so a rejection is never wrong.
 //! 2. **Composition** ([`placement`] then [`compose`]) --
 //!    decides where each of the query's runs can sit ([`PlacementTable`]),
 //!    enumerates the consistent assignments, and renders them as the
@@ -31,22 +30,16 @@
 //! Every budget in here degrades to "no conclusion" rather than to a wrong answer; the caller then
 //! falls back to the engine. See `docs/search-by-log-shapes.md` for the full design.
 
-pub mod align;
 pub mod cache;
 pub mod compose;
 pub mod placement;
+pub mod prefilter;
 pub mod run_fit;
 pub mod shape;
 
 #[cfg(test)]
 mod test;
 
-pub use align::Alignment;
-pub use align::Budget;
-pub use align::Fragment;
-pub use align::Outcome;
-pub use align::align;
-pub use align::can_match;
 pub use cache::ShapeModelCache;
 pub use compose::Capture;
 pub use compose::ComposeBudget;
@@ -59,6 +52,7 @@ pub use placement::Position;
 pub use placement::Run;
 pub use placement::can_compose;
 pub use placement::runs_of;
+pub use prefilter::can_match;
 pub use run_fit::RunFit;
 pub use run_fit::RunFitCache;
 pub use shape::ShapeModel;

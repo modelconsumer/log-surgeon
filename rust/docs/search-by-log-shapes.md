@@ -71,7 +71,7 @@ where a symbol is either a literal character or `GlobStar` (`*`).
 The parsed form is **canonical**: adjacent wildcards are collapsed, so `a**b` is `a*b`.
 `**` says exactly what `*` does, and establishing the invariant once at parse
 means nothing downstream has to re-derive it --
-`align`'s transitions, `runs_of`, and the anchoring predicates below all rely on it.
+the prefilter's transitions, `runs_of`, and the anchoring predicates below all rely on it.
 
 #### Anchoring
 
@@ -94,7 +94,7 @@ the same way at both ends:
 
 These are [`SearchString::anchored_start`][search-anchored] / `anchored_end`.
 Nothing is stripped from the query and nothing is restored later;
-the engine, `align`, and composition all see the symbols exactly as parsed.
+the engine, the prefilter, and composition all see the symbols exactly as parsed.
 The predicates are consulted only where a decision genuinely depends on them:
 
 - `truncated_automata` -- an end-anchored query must reach the shape's end, so nothing may be cut;
@@ -123,9 +123,9 @@ not to the intersection, which would otherwise have to guess.
 > and `compute_paths`'s `WILDCARD_END`,
 > which then glued a `*` onto the end of each path.
 > Third, after those were removed the trailing wildcard was still *stripped* into an
-> `AnchoredQuery { view, anchored_end }` and threaded as a flag through `can_match`, `align`,
-> and the engine, which put it back as a `.*` when building the query's automaton --
-> a round trip. Along the way `**` was collapsed in `align` but not elsewhere,
+> `AnchoredQuery { view, anchored_end }` and threaded as a flag through `can_match`,
+> the alignment walk, and the engine, which put it back as a `.*` when building the query's
+> automaton -- a round trip. Along the way `**` was collapsed in the walk but not elsewhere,
 > `*` alone tripped an assertion on the engine path,
 > and the empty query slipped past `compose`'s nullable-tail check because it has no runs.
 > All of that is gone: the query is canonical from `parse`, and anchoring is a predicate.
@@ -284,15 +284,14 @@ decompose::can_match(model: &ShapeModel, symbols: &[SymbolicChar]) -> bool
 ```
 
 `false` **proves** no message of the shape can match.
-It runs the reachability pass of [`decompose::align`][align],
-a DP over `(query cursor, shape cursor)` where every transition advances one or the other,
-so the state space is a DAG solved in one reverse sweep.
-It allocates one bit per state and nothing per alignment.
+It runs a DP over `(query cursor, shape cursor)` where every transition advances one or the
+other, so the state space is a DAG solved in one reverse sweep.
+It allocates one bit per state.
 Acceptance is `query consumed && shape can stop`;
 a trailing wildcard walks the remaining atoms itself, so end anchoring needs no flag.
 
 Variables are approximated by their charset and permitted to match empty.
-Both **widen** the set of accepted alignments, so the result is a superset: a rejection is sound.
+Both **widen** what is accepted, so the result is a superset: a rejection is sound.
 
 There is a cheap sufficient fast path, `is_obviously_not_ruled_out`:
 if the query starts with a wildcard
@@ -304,10 +303,9 @@ and it is the common case on real shapes --
 paying for the full table there once made the rejection tier cost more than it saved.
 When the query is end-anchored, the variable must additionally satisfy `can_end_at`.
 
-> The `align` **decompositions** are deliberately not usable as the result.
-> Because variables are over-approximated,
-> they form a superset of the engine's answers.
-> Only the yes/no answer is taken from this tier.
+Only the yes/no answer is taken from this tier:
+because variables are over-approximated, any decompositions the walk would enumerate
+form a superset of the engine's answers, so none are ever collected.
 
 ### Tier 2: Composition
 
@@ -434,8 +432,6 @@ the differential test compares a normal form that strips wildcards, so this stay
 
 | Constant | Value | On exhaustion |
 | --- | --- | --- |
-| `Budget::max_partial_alignments` | 500 000 | `Outcome::Unknown` |
-| `Budget::max_alignments` | 4 096 | `Outcome::Unknown` |
 | `MAX_PLACEMENTS_PER_RUN` | 2 048 | `PlacementTable::compute` -> `None` (+ `info!`) |
 | `ComposeBudget::max_compositions` | 65 536 | `Composed::Unknown` |
 | `MAX_UNPINNED_SPLITS` | 8 | `PlacementTable::compute` -> `None` (+ `info!`) |
@@ -620,10 +616,6 @@ The properties the implementation must preserve, and where they are pinned:
     This is why every candidate cap that cannot be exhausted completely
     must return "no conclusion" rather than an empty placement set;
     see [Budgets](#budgets).
-- **Containment.**
-    Where a decomposition is produced, it must cover every capture the engine reports --
-    a superset.
-    It is deliberately not an equality, because variables are over-approximated.
 - **Transparency.**
     `search_by_log_shapes` must return exactly what the engine alone would.
     This is what the differential test asserts, comparing rendered structures as sets.
@@ -659,13 +651,13 @@ The properties the implementation must preserve, and where they are pinned:
 
 | Test | What it pins |
 | --- | --- |
-| `tests/decompose_differential.rs` | Transparency and containment over 447 queries x 18 shapes, including end-anchored forms, nullable variables, and pure-static shapes. The primary safety net. Also pins satisfiability of static values (`static_leaf_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
+| `tests/decompose_differential.rs` | Transparency over 447 queries x 18 shapes, including end-anchored forms, nullable variables, and pure-static shapes, plus prefilter soundness. The primary safety net. Also pins satisfiability of static values (`static_leaf_query_values_are_satisfiable`), which the structural comparison cannot see, and the two `MAX_UNPINNED_SPLITS` regressions. |
 | `tests/search_anchoring.rs` | The anchoring semantics through the public entry point, plus `decompose`/engine agreement. |
 | `tests/search_shape_support.rs` | Which shapes are supported, pure-static handling, and the panic contract for unsupported shapes. |
 | `tests/shape_narrowing.rs` | Truncation is transparent, and actually reduces state count. |
 | `tests/decompose_invariant.rs` | The invariant holds over the real HDFS corpus (thousands of shapes). |
 | `src/search/test.rs` | `covers` soundness against true glob containment (`covers_never_claims_an_unsound_containment`) and its partial-order properties in normal form (`covers_is_a_partial_order_in_normal_form`). |
-| `src/search/decompose/*/test.rs` | Unit tests for placement, composition, run fit, align, shape, and cache. |
+| `src/search/decompose/*/test.rs` | Unit tests for placement, composition, run fit, prefilter, shape, and cache. |
 | `tests/local_search.rs::blk_id_full_log_message` | End-to-end corpus run; also a performance baseline. |
 
 The differential test is the one to update when semantics change:
@@ -710,7 +702,7 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 - `src/search.rs` -- the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
     `LeafQuery::covers` and `dedup_covered_interpretations`.
 - `src/search/decompose/shape.rs` -- `ShapeModel`, `Variable`, anchoring helpers.
-- `src/search/decompose/align.rs` -- the reachability DP and its fast path.
+- `src/search/decompose/prefilter.rs` -- the rejection DP and its fast path.
 - `src/search/decompose/placement.rs` -- `Run`, `Placement`, `PlacementTable`,
     `last_reachable_part`, composition DP.
 - `src/search/decompose/compose.rs` -- composition enumeration and rendering.
@@ -737,7 +729,7 @@ Tests: `tests/search_anchoring.rs`, `tests/search_shape_support.rs`, `tests/shap
 [covers]: ../src/search.rs
 [run-fit]: ../src/search/decompose/run_fit.rs
 [run-fit-cache]: ../src/search/decompose/run_fit.rs
-[align]: ../src/search/decompose/align.rs
+[prefilter]: ../src/search/decompose/prefilter.rs
 [last-reachable-part]: ../src/search/decompose/placement.rs
 [split-log-shape]: ../src/parsing_spec.rs
 [intersect]: ../src/nfa.rs
