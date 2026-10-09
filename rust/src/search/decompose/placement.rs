@@ -9,6 +9,9 @@
 //! through a cached [`matches_piece`][crate::search::decompose::RunFitCache::matches_piece] call
 //! (rule side) or a substring search (static-text side), so the cost
 //! is independent of how much static text the shape contains.
+//! Rows are computed left to right: a run's placements in a static part are relative
+//! to where the previous run could leave off there,
+//! which is the invariant [`PlacementTable::compute`] documents.
 //!
 //! If any run has no placement anywhere in the shape, the shape **cannot** match and is rejected
 //! immediately, without touching an automaton.
@@ -28,6 +31,8 @@
 
 #[cfg(test)]
 mod test;
+
+use std::collections::BTreeMap;
 
 use tracing::info;
 
@@ -182,6 +187,15 @@ impl PlacementTable {
 
 	/// Computes the placements for every run of the query against `model`.
 	///
+	/// Rows are computed left to right, and row `i` depends on row `i-1`:
+	/// the placements of a run in static text are recorded relative to where the
+	/// previous run can leave off in the same part. A row is therefore complete
+	/// *relative to its predecessor's endings*, not a standalone "everywhere the
+	/// run can sit" -- `Reachability`, `compose`, and `last_reachable_part` all
+	/// consume rows in order and never revisit an earlier one.
+	/// That restriction is what keeps a run in a banner of repeated characters
+	/// (say `*a*a*` against `aaaa`) polynomial instead of one placement per offset.
+	///
 	/// Returns `None` if the table would be **incomplete** because a resource cap was exceeded --
 	/// either too many placements for one run, or too long a run between back-to-back rules.
 	/// The caller must then not draw a conclusion and should fall back to the engine.
@@ -195,6 +209,9 @@ impl PlacementTable {
 	) -> Option<Self> {
 		let runs: &[Run] = &query.runs;
 		let mut placements: Vec<Vec<Placement>> = Vec::with_capacity(runs.len());
+		// Where the previous run can leave off, per static part: built once per run,
+		// rather than rescanning the previous row per part.
+		let mut previous_exits: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
 
 		for (run_index, run) in runs.iter().enumerate() {
 			let mut for_run: Vec<Placement> = Vec::new();
@@ -202,27 +219,11 @@ impl PlacementTable {
 			for (index, part) in model.parts.iter().enumerate() {
 				match part {
 					ShapePart::Static(text) => {
-						// Where the previous run can leave off inside this part;
-						// the earliest occurrence after each is what composition can use.
-						let entry_offsets: Vec<usize> = run_index
-							.checked_sub(1)
-							.map(|previous| {
-								Vec::from_iter(
-									placements[previous]
-										.iter()
-										.map(Placement::next_available)
-										.filter(|&(part, _)| part == index)
-										.map(|(_, offset)| offset),
-								)
-							})
-							.unwrap_or_default();
-
 						// The run must appear verbatim in this static text.
-						for start_offset in useful_occurrences(
-							Vec::from_iter(overlapping_occurrences(text, &run.text)),
-							run.text.chars().count(),
-							text.chars().count(),
-							&entry_offsets,
+						for start_offset in usable_occurrences(
+							text,
+							&run.text,
+							previous_exits.get(&index).map(Vec::as_slice).unwrap_or(&[]),
 						) {
 							let end_offset: usize = start_offset + run.text.chars().count();
 
@@ -299,6 +300,17 @@ impl PlacementTable {
 					// The table would be incomplete; refuse to answer rather than answer wrongly.
 					return None;
 				}
+			}
+
+			// Where this run can leave off, for the next one.
+			previous_exits = BTreeMap::new();
+			for placement in for_run.iter() {
+				let (part, offset) = placement.next_available();
+				previous_exits.entry(part).or_default().push(offset);
+			}
+			for offsets in previous_exits.values_mut() {
+				offsets.sort_unstable();
+				offsets.dedup();
 			}
 
 			placements.push(for_run);
@@ -437,66 +449,49 @@ impl PlacementTable {
 	}
 }
 
-/// The character offsets of every occurrence of `needle` in `haystack`, **including overlapping
-/// ones**.
+/// The character offsets in `text` where a placement of `run` is worth recording.
 ///
-/// [`str::match_indices`] skips overlapping occurrences (`aa` in `aaa` only at `0`),
-/// but each occurrence is a distinct placement: `*aa` against `aaa` needs the one at `1`.
+/// Enumerating *every* occurrence -- including overlapping ones, which
+/// `str::match_indices` skips -- then discarding what neither composition nor
+/// rendering can distinguish:
 ///
-/// Offsets are in characters, not bytes,
-/// so that they can be compared against character counts elsewhere.
-fn overlapping_occurrences<'a>(
-	haystack: &'a str,
-	needle: &'a str,
-) -> impl Iterator<Item = usize> + 'a {
-	haystack
-		.char_indices()
-		.enumerate()
-		.filter(move |&(_, (byte_offset, _))| haystack[byte_offset..].starts_with(needle))
-		.map(|(char_offset, _)| char_offset)
-}
+/// - **Composition** enters the part at offset `0` or wherever the previous run
+///   left off (`entries`), and only ever needs the earliest occurrence at or after
+///   each such position: an earlier end leaves strictly more room for the runs after.
+/// - **Rendering** reads only *where* a piece sits in the text (its start and
+///   whether it reaches the end), and the compositions that differ only there are
+///   merged (`merge_by_padding`), OR-ing the padding flags. Keeping the
+///   occurrences flush with the text's start or end is what supplies each side
+///   of the merge, so they are always kept.
+///
+/// A long stretch of repeated characters (a banner of `=`, say) holds a run at very
+/// many overlapping offsets; keeping only these keeps a shape out of the
+/// [`MAX_PLACEMENTS_PER_RUN`] cap without losing a placement that matters.
+fn usable_occurrences(text: &str, run: &str, entries: &[usize]) -> Vec<usize> {
+	let run_len: usize = run.chars().count();
+	let text_len: usize = text.chars().count();
+	let occurrences: Vec<usize> = Vec::from_iter(
+		text.char_indices()
+			.enumerate()
+			.filter_map(|(offset, (byte, _))| text[byte..].starts_with(run).then_some(offset)),
+	);
 
-/// The subset of `occurrences` (sorted character offsets of a run in one static part)
-/// that composition can actually make use of.
-///
-/// A long stretch of repeated characters (a banner of `=`, say) holds a run at very many
-/// overlapping offsets; keeping them all would blow [`MAX_PLACEMENTS_PER_RUN`] and push the
-/// whole shape onto the engine. Most are interchangeable:
-///
-/// - **Rendering** of a static part depends only on whether its first piece starts at offset `0`
-///   and whether its last piece reaches the end of the text (see `symbolic_value_of`); runs
-///   within it are always wildcard-separated. So all *interior* occurrences
-///   (`0 < offset` and `offset + run_len < text_len`) render identically.
-/// - **Composition** only needs a placement to start at or after the position the previous run
-///   left off at, and an earlier end leaves strictly more room for the runs after it.
-///
-/// Hence an interior occurrence is only needed if it is the earliest one at or after some
-/// position the previous run can leave off at (`entry_offsets`, plus `0` for entering the part
-/// from an earlier one). The occurrences at offset `0` and ending at `text_len` are distinct
-/// rendering classes, so they are always kept.
-fn useful_occurrences(
-	occurrences: Vec<usize>,
-	run_len: usize,
-	text_len: usize,
-	entry_offsets: &[usize],
-) -> Vec<usize> {
 	let is_interior = |offset: usize| (0 < offset) && ((offset + run_len) < text_len);
-
 	let interior: Vec<usize> =
 		Vec::from_iter(occurrences.iter().copied().filter(|&o| is_interior(o)));
-	let mut useful: Vec<usize> =
+	let mut offsets: Vec<usize> =
 		Vec::from_iter(occurrences.iter().copied().filter(|&o| !is_interior(o)));
 
-	for &entry in std::iter::once(&0).chain(entry_offsets.iter()) {
-		let first_at_or_after: usize = interior.partition_point(|&o| o < entry);
-		if let Some(&offset) = interior.get(first_at_or_after) {
-			useful.push(offset);
+	for &entry in std::iter::once(&0).chain(entries.iter()) {
+		let first_interior_at_or_after: usize = interior.partition_point(|&o| o < entry);
+		if let Some(&offset) = interior.get(first_interior_at_or_after) {
+			offsets.push(offset);
 		}
 	}
 
-	useful.sort_unstable();
-	useful.dedup();
-	useful
+	offsets.sort_unstable();
+	offsets.dedup();
+	offsets
 }
 
 /// A straddle in progress: one run, begun at a fixed position, being traced through the parts

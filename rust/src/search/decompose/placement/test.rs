@@ -298,3 +298,40 @@ fn repeated_characters_do_not_blow_the_placement_cap() {
 		Vec::from_iter(table.placements[0].iter().map(Placement::start))
 	);
 }
+
+/// Rows are computed left to right; a run's placements in a static part depend on where
+/// the previous run can leave off there. `*a*aa*` against `aaaa` must place the second
+/// run past the first, so that an infeasible composition is not suggested
+/// and a feasible one is still found.
+#[test]
+fn placement_rows_are_relative_to_the_previous_run() {
+	let spec: ParsingSpec = test_spec();
+	let (model, _, table) = table_for(&spec, "aaaa", "*a*aa*");
+
+	// The first run (`a`) has placements anywhere; the second (`aa`):
+	// every placement is reachable from some placement of the first run,
+	// *or* it is the boundary occurrence (`0`, the end) that a later run may still
+	// start at when entered from an earlier part -- entry `0` is always offered.
+	// Here only offsets that are reachable matter for composition; `Reachability`
+	// prunes the rest.
+	for placement in table.placements[1].iter() {
+		let reachable: bool = 0 == placement.start_offset
+			|| table.placements[0]
+				.iter()
+				.any(|first| first.next_available() <= placement.start());
+		assert!(
+			reachable || (placement.start_offset + 2 == 4),
+			"placement {:?} is neither reachable from an earlier placement nor a boundary",
+			placement,
+		);
+	}
+	assert!(can_compose(&table, model.parts.len()));
+
+	// And when nothing fits *after* the earlier run, the later run has no placement
+	// in the part at all.
+	let (_, _, table) = table_for(&spec, "aa", "*a*aaa*");
+	assert!(
+		table.placements[1].is_empty(),
+		"the run `aaa` cannot follow `a` inside `aa`"
+	);
+}

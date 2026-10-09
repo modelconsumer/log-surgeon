@@ -323,10 +323,14 @@ A run must be produced in full, and there are only three possibilities:
     including overlapping ones
     (`str::match_indices` would skip them, so `*aa` against `aaa` would find nothing),
     reporting the character offsets the `Placement` records use.
-    Interior occurrences render identically,
-    so only the earliest one at or after each position the previous run can leave off at is kept
-    (`useful_occurrences`);
-    otherwise a banner of repeated characters would exceed the placement cap;
+    Interior occurrences render identically, so a row keeps only the earliest one at or
+    after each position the previous run can leave off at
+    (entries are computed once per run, into a per-part map, rather than the previous row
+    being rescanned per part).
+    Rows are therefore computed left to right and are complete *relative to the previous
+    row's endings*, not as a standalone "everywhere this run can sit" -- the
+    composition DP, `Reachability`, and `last_reachable_part` all respect that order.
+    Otherwise a banner of repeated characters would exceed the placement cap;
 3. **straddling** a boundary -- split between a rule and its neighbour,
     answered the same way with the corresponding end pinned.
     A nullable variable in the middle of a straddle may contribute nothing,
