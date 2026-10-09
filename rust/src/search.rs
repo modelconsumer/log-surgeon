@@ -772,11 +772,10 @@ impl Interpretation {
 				last_was_static_text = false;
 			}
 
-			// No value carries adjacent wildcards:
-			// `**` says exactly what `*` does, and [`LeafQuery::covers`]
-			// is reflexive and transitive only on values without it --
-			// its fast path recognises a lone `*` as universal,
-			// but `**` falls through to the segment loop and fails even against itself.
+			// No value carries adjacent wildcards: `**` says exactly what `*` does,
+			// so the canonical output never has it. Nothing depends on this for correctness
+			// any more ([`LeafQuery::covers`] is exact containment, `**` included);
+			// it is asserted to keep every producer emitting one canonical form.
 			assert!(
 				!query
 					.symbolic_value

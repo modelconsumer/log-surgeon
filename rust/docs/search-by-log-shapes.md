@@ -24,6 +24,7 @@ users should see the [parsing specification][parsing-spec] for user-facing conce
 - Query Semantics
 - Architecture
 - Shape Models
+    - Ambiguous Names
 - Tier 1: Rejection
 - Tier 2: Composition
 - Tier 3: The Engine
@@ -214,8 +215,32 @@ It is a sequence of [`ShapePart`][shape-part]s:
     - `name` -- the rule name as written in the shape, used to label the captures it produces.
     - `charset` -- a **superset** of the characters any match of the rule can contain (see
         [`Charset`][charset]).
-    - `alternatives` -- the sub-rules a capture could name, for positional identity.
+    - `alternatives` -- every row `rules_for_name` resolves the name to;
+        see [Ambiguous names](#ambiguous-names).
     - `can_match_empty` -- whether some alternative is nullable.
+
+#### Ambiguous Names
+
+A shape variable's name can resolve to several rows of `ParsingSpec::rules_for_name`:
+several root rules may share a name
+(`%num%` with `num = [0-9]+` and `num = 0x[0-9a-f]+`),
+or a capture name may occur in several places of one rule
+(`%foo.bar%` with `(?<bar>[a-z]+)|(?<bar>[0-9]+)`).
+
+*Feasibility* is decided over all of them:
+`charset` is their union, `can_match_empty` their disjunction,
+and rule matching goes through `search_by_name`, which tries every row.
+*Rendering* attributes the value to `alternatives.first()`.
+Every row shares the shape's `fully_qualified_name`,
+so the reported sub-query is the same whichever row is picked,
+and for both examples above the decomposer and the engine agree on the reported value.
+What is lost is which `CaptureRef` accepted the value:
+interpretations do not carry it,
+whereas the engine's path records the rule it traversed.
+
+Whether an ambiguous name should be rejected when building the model,
+or reported once per accepting alternative,
+is an open design question; until it is decided, `first()` is kept and documented.
 
 #### Supported Shapes
 
@@ -396,6 +421,11 @@ this is `symbolic_value_of`'s `padding` parameter:
     (`merge_by_padding`):
     the text is fixed, so where within it a run sits is unobservable,
     and `*aa*` against `aaa` is one decomposition, `'*aa*'`, not `'aa*'` and `'*aa'`.
+    The merge is sound but **not exact**: the merged glob can be strictly looser than
+    the group (`L('*aa*')` holds `baab`, which neither member admits),
+    since a union of globs is not in general one glob.
+    It keeps what a user acts on -- which parts the text lands in, and in what order --
+    and the differential tests cannot see the looseness, as they strip wildcards.
 
     This is the opposite of the intuition that "static text must match verbatim,
     so it is never padded".
@@ -557,13 +587,14 @@ the first one kept wins).
 Producers still emit values with no adjacent wildcards --
 `symbolic_value_of` emits at most one leading and one trailing `*`,
 and `condense_wildcards` collapses any doubling introduced by merging --
-and `Interpretation::invariants` asserts it, but `covers` no longer relies on it.
+and `Interpretation::invariants` asserts it, but `covers` no longer relies on it:
+the form is purely canonical output.
 
 The loop itself builds an antichain in one pass per candidate:
 a candidate covered by a survivor is dropped,
 otherwise anything it covers is removed (by `swap_remove`) and it is kept.
-Order is not preserved,
-which is why callers `sort` beforehand only to `dedup` exact duplicates.
+Exact duplicates are removed first, by sorting;
+order is not preserved otherwise.
 
 ### Shape Truncation
 
@@ -639,8 +670,8 @@ The properties the implementation must preserve, and where they are pinned:
 - **Normal form.**
     No value carries adjacent wildcards, and no two static sub-queries are adjacent.
     Both are asserted by `Interpretation::invariants`.
-    The first is not cosmetic: [`LeafQuery::covers`] is reflexive and transitive only without `**`,
-    so dedup would silently misbehave on a value carrying it.
+    The first is canonical form only: `**` says what `*` does,
+    and [`LeafQuery::covers`] is exact containment, so dedup is correct either way.
     See [Covering](#covering).
 - **Satisfiability of static values.**
     A static sub-query's value must glob-match its shape part's text exactly.
@@ -705,6 +736,12 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
     and is only reachable when tier 1 and tier 2 both decline,
     which the tier-2 composition budget makes rare;
     it is still a live crash for an input that gets there.
+- **Padding merges are looser than the group they replace.**
+    See [Rendering](#rendering); sound, but a merged static value can admit strings
+    that no single placement does.
+- **An ambiguous variable name is attributed to its first alternative.**
+    The reported name is right, but which rule accepted the value is not recorded;
+    see [Ambiguous Names](#ambiguous-names).
 
 ### Related Code
 

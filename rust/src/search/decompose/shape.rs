@@ -77,8 +77,22 @@ pub struct Variable {
 	pub charset: Charset,
 	/// The alternatives this name resolves to, each with the capture to attribute a capture to.
 	///
-	/// A name can resolve to several rules (same name, different definitions), so a single
-	/// variable may be reported as any one of them.
+	/// A name can resolve to several rows of [`ParsingSpec::rules_for_name`]:
+	/// several root rules may share a name (`%num%` with `num = [0-9]+` and
+	/// `num = 0x[0-9a-f]+`), and a capture name may occur in several places of one rule
+	/// (`%foo.bar%` with `(?<bar>[a-z]+)|(?<bar>[0-9]+)`).
+	///
+	/// Feasibility is decided over *all* of them -- [`Self::charset`] is their union,
+	/// [`Self::can_match_empty`] their disjunction,
+	/// and rule matching goes through `search_by_name`, which tries every row --
+	/// but rendering attributes the value to the **first** only.
+	/// Every row shares one `fully_qualified_name` (it is the shape's name, by construction),
+	/// so the reported [`crate::search::LeafQuery`] is the same whichever is picked.
+	/// Only the [`CaptureRef`] differs, and interpretations do not carry it;
+	/// a consumer needing to know *which* alternative accepted a value cannot get it from
+	/// the decomposer, whereas the engine's path does record the rule it traversed.
+	/// Whether ambiguous names should instead be rejected, or reported once per accepting
+	/// alternative, is undecided; see `REVIEW-deferred.md` (item 2) if still present.
 	pub alternatives: Vec<ResolvedCapture>,
 	/// Whether some alternative can match the empty string.
 	///

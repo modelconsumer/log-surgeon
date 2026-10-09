@@ -195,6 +195,9 @@ impl Composition {
 				// A name can resolve to several rules, but they occupy the same position,
 				// so emitting more than one would duplicate the slot
 				// and break the positional correspondence.
+				// Every alternative has the same `fully_qualified_name`,
+				// so picking the first loses only which `CaptureRef` accepted the value;
+				// see `Variable::alternatives`.
 				ShapePart::Variable(variable) => {
 					if let Some(capture) = variable.alternatives.first() {
 						leaf_queries.push(LeafQuery::new_rule(
@@ -218,6 +221,9 @@ impl Composition {
 					unreachable!("an end-anchored tail cannot contain static text");
 				};
 				debug_assert!(variable.can_match_empty);
+				// As above: the name is the same for every alternative.
+				// `can_match_empty` is a disjunction, so the first alternative need not be
+				// the nullable one; only the reported name is meaningful here.
 				if let Some(capture) = variable.alternatives.first() {
 					leaf_queries.push(LeafQuery::new_rule(
 						capture.fully_qualified_name.clone(),
@@ -424,8 +430,10 @@ impl Composition {
 
 /// Concatenates values, collapsing the `**` that adjoining wildcards would otherwise produce.
 ///
-/// [`Interpretation::invariants`] forbids a doubled wildcard, and merging two static parts
-/// (each of which may itself begin or end with `*`) can create one.
+/// Merging two static parts (each of which may itself begin or end with `*`) can create one.
+/// `**` says exactly what `*` does, so this is purely about a canonical, readable output:
+/// [`crate::search::LeafQuery::covers`] is exact containment and handles `**` correctly,
+/// and [`Interpretation::invariants`] asserts the form only to keep producers honest.
 fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<SymbolicChar> {
 	let mut value: Vec<SymbolicChar> = Vec::new();
 	for symbol in symbols {
@@ -762,8 +770,19 @@ fn build_composition(model: &ShapeModel, table: &PlacementTable, choices: &[usiz
 /// (`'aa*'`, `'*aa'`), so without merging the one decomposition is reported several times.
 ///
 /// The merge ORs the padding flags (`'*aa*'`). That is sound: adding a `*` to either end of a
-/// glob that matches the part's text still matches it. It is also no looser than the group
-/// itself, since every member is an instance of the merged value.
+/// glob that matches the part's text still matches it, so every message the group matches,
+/// the merged value matches too.
+///
+/// It is **not** exact: the merged value can be strictly looser than the group.
+/// `L('*aa*')` contains `baab`, which neither `'aa*'` nor `'*aa'` admits;
+/// in general the union of the members is not expressible as one glob.
+/// What the merge preserves is what the user can act on --
+/// which parts the query text lands in, and in what order --
+/// and it keeps one decomposition from being reported once per offset.
+/// The differential tests do not observe the difference, because they compare a normal form
+/// that strips wildcards.
+/// Reporting the group unmerged would be exact but multiplies results; that trade-off is
+/// recorded in `REVIEW-deferred.md` (item 1) if still present.
 fn merge_by_padding(compositions: Vec<Composition>) -> Vec<Composition> {
 	let mut merged: BTreeMap<Composition, Composition> = BTreeMap::new();
 
