@@ -124,16 +124,9 @@ impl PartialEq for LeafQuery {
 	}
 }
 
-#[derive(Clone, Copy)]
-struct SearchStringView<'a> {
-	full_string: &'a SearchString,
-	start: usize,
-	end: usize,
-}
-
 /// A shape's automaton, possibly cut short, with what that cut left out.
 ///
-/// See [`SearchStringView::truncated_automata`]. The tail is what lets the rendering stay
+/// See [`SearchString::truncated_automata`]. The tail is what lets the rendering stay
 /// identical to the un-truncated shape's: dropped static text still has to appear as a
 /// trailing `'*'`, because it is text the message contains even though the query does not
 /// constrain it.
@@ -212,29 +205,6 @@ impl Tail {
 	}
 }
 
-impl std::fmt::Debug for SearchStringView<'_> {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		fmt.debug_tuple("SearchStringView")
-			.field(
-				&self
-					.as_str()
-					.iter()
-					.map(SymbolicChar::to_string)
-					.collect::<String>(),
-			)
-			.finish()
-	}
-}
-
-impl std::fmt::Display for SearchStringView<'_> {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		for ch in self.iter() {
-			ch.fmt(fmt)?;
-		}
-		Ok(())
-	}
-}
-
 impl Interpretation {
 	/// Whether every sub-query of `self` covers the corresponding one of `other`,
 	/// so `other` describes nothing `self` does not already describe.
@@ -252,9 +222,9 @@ impl Interpretation {
 	/// [`LeafQuery::covers`] is exact glob containment,
 	/// so the result is a minimal antichain up to interpretations with equal languages.
 	///
-	/// Order is not preserved. Callers sort beforehand only to `dedup` exact duplicates; nothing
-	/// downstream depends on the order, and not preserving it keeps this a single pass over each
-	/// candidate.
+	/// Exact duplicates are removed first (by sorting, so callers need not).
+	/// Order is not preserved: nothing downstream depends on it,
+	/// and not preserving it keeps this a single pass over each candidate.
 	fn dedup_covered_interpretations(interpretations: &mut Vec<Self>) {
 		interpretations.sort();
 		interpretations.dedup();
@@ -295,38 +265,23 @@ impl SearchString {
 		let mut symbols: Vec<SymbolicChar> = Vec::new();
 		let mut last_was_escape: bool = false;
 		for (i, ch) in input.char_indices() {
-			match ch {
-				'*' | '\\' => {
-					symbols.push(if last_was_escape {
-						SymbolicChar::Literal(ch)
-					} else {
-						match ch {
-							'*' => {
-								if symbols.last().is_some_and(SymbolicChar::is_wildcard) {
-									continue;
-								}
-								SymbolicChar::GlobStar
-							},
-							'\\' => {
-								last_was_escape = true;
-								continue;
-							},
-							_ => {
-								unreachable!();
-							},
-						}
-					});
+			match (last_was_escape, ch) {
+				(true, '*' | '\\') => {
+					symbols.push(SymbolicChar::Literal(ch));
+					last_was_escape = false;
 				},
-				_ => {
-					if last_was_escape {
-						let (before, after): (&str, &str) = input.split_at(i);
-						return Err(SearchStringError::InvalidEscape { before, after });
-					} else {
-						symbols.push(SymbolicChar::Literal(ch));
+				(true, _) => {
+					let (before, after): (&str, &str) = input.split_at(i);
+					return Err(SearchStringError::InvalidEscape { before, after });
+				},
+				(false, '\\') => last_was_escape = true,
+				(false, '*') => {
+					if !symbols.last().is_some_and(SymbolicChar::is_wildcard) {
+						symbols.push(SymbolicChar::GlobStar);
 					}
 				},
+				(false, _) => symbols.push(SymbolicChar::Literal(ch)),
 			}
-			last_was_escape = false;
 		}
 		if last_was_escape {
 			return Err(SearchStringError::InvalidEscape {
@@ -367,14 +322,13 @@ impl SearchString {
 	}
 
 	pub fn search_by_name(&self, spec: &ParsingSpec, name: &str) -> Vec<Interpretation> {
-		let rows: Vec<(&RuleInfo, &Regex)> = spec.rules_for_name(name);
-
 		if name.is_empty() {
 			return Vec::new();
 		}
 
-		self.view(0, self.symbols.len())
-			.interpretations_for_name(spec, &rows)
+		let rows: Vec<(&RuleInfo, &Regex)> = spec.rules_for_name(name);
+
+		self.interpretations_for_name(spec, &rows)
 	}
 
 	/// Shape models are cached on `spec` (see [`ParsingSpec::shape_models`]), so searching the
@@ -398,10 +352,9 @@ impl SearchString {
 		let models: Vec<Arc<ShapeModel>> =
 			Vec::from_iter(log_shapes.iter().map(|&shape| cache.get(spec, shape)));
 
-		let view: SearchStringView<'_> = self.view(0, self.symbols.len());
 		std::iter::zip(&models, log_shapes)
 			.map(|(model, &shape)| {
-				view.interpretations_for_log_shape(spec, model, shape, &query, &fits)
+				self.interpretations_for_log_shape(spec, model, shape, &query, &fits)
 			})
 			.collect::<Vec<_>>()
 	}
@@ -435,7 +388,7 @@ impl SearchString {
 		automata: &Tnfa,
 		dropped: &[decompose::ShapePart],
 	) -> Vec<Interpretation> {
-		self.view(0, self.symbols.len()).interpretations_for_shape(
+		self.interpretations_for_shape(
 			spec,
 			&TruncatedShape {
 				// TODO: avoid this clone by borrowing the automaton instead.
@@ -455,34 +408,16 @@ impl SearchString {
 		spec.automata_for_fragments(&fragments)
 			.expect("the model already resolved every rule in the shape")
 	}
-
-	fn view(&self, start: usize, end: usize) -> SearchStringView<'_> {
-		SearchStringView {
-			full_string: self,
-			start,
-			end,
-		}
-	}
 }
 
-impl<'a> SearchStringView<'a> {
-	fn as_str(&self) -> &[SymbolicChar] {
-		&self.full_string.symbols[self.start..self.end]
-	}
-
-	/// Whether a match must run through to the end of the message;
-	/// see [`SearchString::anchored_end`].
-	fn anchored_end(&self) -> bool {
-		!self.as_str().last().is_some_and(SymbolicChar::is_wildcard)
-	}
-
+impl SearchString {
 	/// This query as a regex, symbol for symbol: a wildcard is `.*`.
 	///
 	/// The intersection always runs to the end of the shape,
 	/// so "and then anything" is something the query itself consumes.
 	fn to_regex(&self) -> Regex {
 		Regex::Sequence(Vec::from_iter(
-			self.as_str().iter().map(SymbolicChar::to_regex),
+			self.symbols.iter().map(SymbolicChar::to_regex),
 		))
 	}
 
@@ -648,7 +583,7 @@ impl<'a> SearchStringView<'a> {
 			let rule_nfa: Tnfa = Tnfa::for_single_rule(rule_info.root_idx, regex, &[]);
 
 			let potential_interpretations: Vec<Interpretation> =
-				self.interpretations_for_nfa(spec, &rule_nfa, Some(rule_info));
+				self.interpretations_for_nfa(spec, &rule_nfa, rule_info);
 
 			interpretations.extend(potential_interpretations.into_iter());
 		}
@@ -760,7 +695,7 @@ impl<'a> SearchStringView<'a> {
 		&self,
 		spec: &ParsingSpec,
 		nfa: &Tnfa,
-		maybe_rule_info: Option<&RuleInfo>,
+		rule_info: &RuleInfo,
 	) -> Vec<Interpretation> {
 		let mut interpretations: Vec<Interpretation> = Vec::new();
 
@@ -773,12 +708,7 @@ impl<'a> SearchStringView<'a> {
 		for path in paths.iter() {
 			if let [PathComponent::Literal(contents)] = path.components.as_slice() {
 				let rule: &RootRule = &spec[path.rule_idx];
-				let rule_info: &RuleInfo = if let Some(rule_info) = maybe_rule_info {
-					assert_eq!(rule_info.root_idx, rule.idx);
-					rule_info
-				} else {
-					&rule[None]
-				};
+				assert_eq!(rule_info.root_idx, rule.idx);
 
 				let mut implicit_capture: LeafQuery =
 					LeafQuery::new_rule(rule.name.clone(), contents.clone());
@@ -815,14 +745,6 @@ impl<'a> SearchStringView<'a> {
 		Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		interpretations
-	}
-}
-
-impl std::ops::Deref for SearchStringView<'_> {
-	type Target = [SymbolicChar];
-
-	fn deref(&self) -> &Self::Target {
-		self.as_str()
 	}
 }
 
