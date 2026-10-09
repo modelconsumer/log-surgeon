@@ -33,59 +33,12 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::parsing_spec::ParsingSpec;
-use crate::search::SymbolicChar;
+use crate::search::decompose::Query;
+use crate::search::decompose::Run;
 use crate::search::decompose::RunFit;
 use crate::search::decompose::RunFitCache;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapePart;
-
-/// A maximal stretch of literal characters from a query, with no wildcards.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Run {
-	/// The literal text.
-	pub text: String,
-	/// Whether the run is pinned to the start of the message (no preceding wildcard).
-	pub anchored_start: bool,
-	/// Whether the run is pinned to the end of the message (no following wildcard).
-	pub anchored_end: bool,
-}
-
-/// Splits a query into its literal runs.
-///
-/// Wildcards are separators and are not themselves runs; `anchored_start`/`anchored_end` record
-/// whether a run abuts the query's boundary rather than a wildcard.
-#[must_use]
-pub fn runs_of(symbols: &[SymbolicChar]) -> Vec<Run> {
-	let mut runs: Vec<Run> = Vec::new();
-	let mut current: String = String::new();
-	let mut anchored_start: bool = true;
-
-	for &symbol in symbols.iter() {
-		match symbol {
-			SymbolicChar::Literal(c) => current.push(c),
-			SymbolicChar::GlobStar => {
-				if !current.is_empty() {
-					runs.push(Run {
-						text: std::mem::take(&mut current),
-						anchored_start,
-						anchored_end: false,
-					});
-				}
-				anchored_start = false;
-			},
-		}
-	}
-
-	if !current.is_empty() {
-		runs.push(Run {
-			text: current,
-			anchored_start,
-			anchored_end: true,
-		});
-	}
-
-	runs
-}
 
 /// Where one run sits in a shape.
 ///
@@ -228,7 +181,7 @@ impl PlacementTable {
 		last_run.iter().map(|placement| placement.end_part).max()
 	}
 
-	/// Computes the placements for every run of a query against `model`.
+	/// Computes the placements for every run of the query against `model`.
 	///
 	/// Returns `None` if the table would be **incomplete** because a resource cap was exceeded --
 	/// either too many placements for one run, or too long a run between back-to-back rules.
@@ -238,9 +191,10 @@ impl PlacementTable {
 	pub fn compute(
 		spec: &ParsingSpec,
 		model: &ShapeModel,
-		runs: &[Run],
+		query: &Query<'_>,
 		fits: &RunFitCache,
 	) -> Option<Self> {
+		let runs: &[Run] = &query.runs;
 		let mut placements: Vec<Vec<Placement>> = Vec::with_capacity(runs.len());
 
 		for (run_index, run) in runs.iter().enumerate() {

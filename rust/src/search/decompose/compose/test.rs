@@ -3,9 +3,7 @@ use crate::parsing_spec::ParsingSpec;
 use crate::parsing_spec::ParsingSpecBuilder;
 use crate::search::SearchString;
 use crate::search::SymbolicChar;
-use crate::search::decompose::Run;
 use crate::search::decompose::RunFitCache;
-use crate::search::decompose::runs_of;
 
 fn spec_with_rules(rules: &[(&str, &str)]) -> ParsingSpec {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
@@ -19,16 +17,6 @@ fn test_spec() -> ParsingSpec {
 	spec_with_rules(&[("digits", "[0-9]+"), ("word", "[a-z]+")])
 }
 
-/// The query's symbols, exactly as written.
-///
-/// Runs are taken from the raw symbols:
-/// whether the query ends in a wildcard is precisely what tells [`runs_of`]
-/// whether the last run is anchored at the end,
-/// so neither adding nor removing one here is harmless.
-fn symbols_of(query: &str) -> Vec<SymbolicChar> {
-	SearchString::parse(query).unwrap().as_slice().to_vec()
-}
-
 /// The texts of `pieces`, comma separated.
 fn texts(pieces: &[PieceRef]) -> String {
 	pieces
@@ -39,30 +27,30 @@ fn texts(pieces: &[PieceRef]) -> String {
 }
 
 fn composed_for(spec: &ParsingSpec, shape: &str, query: &str) -> (ShapeModel, Composed) {
-	let (model, composed, _) = composed_and_runs_for(spec, shape, query);
-	(model, composed)
+	composed_for_parts(spec, shape, query).0
 }
 
-fn composed_and_runs_for(
+/// The model and the composition for `query` against `shape`,
+/// plus the full [`Query`] for rendering.
+fn composed_for_parts(
 	spec: &ParsingSpec,
 	shape: &str,
 	query: &str,
-) -> (ShapeModel, Composed, Vec<Run>) {
+) -> ((ShapeModel, Composed), SearchString) {
 	let model: ShapeModel = ShapeModel::new(spec, shape);
 	let parsed: SearchString = SearchString::parse(query).unwrap();
-	let runs: Vec<Run> = runs_of(parsed.as_slice());
+	let decomposed: Query<'_> = Query::new(&parsed);
 	let fits: RunFitCache = RunFitCache::new();
-	let table: PlacementTable = PlacementTable::compute(spec, &model, &runs, &fits).unwrap();
+	let table: PlacementTable = PlacementTable::compute(spec, &model, &decomposed, &fits).unwrap();
 	let composed: Composed = compose(
 		spec,
 		&model,
 		&table,
-		&runs,
-		parsed.anchored_end(),
+		&decomposed,
 		&fits,
 		ComposeBudget::default(),
 	);
-	(model, composed, runs)
+	((model, composed), parsed)
 }
 
 /// Renders a composition as sorted `part=text` entries, marking captures with `<>`.
@@ -193,15 +181,15 @@ fn wildcard_only_query_has_one_empty_composition() {
 fn exhausted_budget_is_unknown_not_impossible() {
 	let spec: ParsingSpec = test_spec();
 	let model: ShapeModel = ShapeModel::new(&spec, "A%word%B%word%C%word%D");
-	let runs: Vec<Run> = runs_of(&symbols_of("*q*q*q*"));
+	let parsed: SearchString = SearchString::parse("*q*q*q*").unwrap();
+	let decomposed: Query<'_> = Query::new(&parsed);
 	let fits: RunFitCache = RunFitCache::new();
-	let table: PlacementTable = PlacementTable::compute(&spec, &model, &runs, &fits).unwrap();
+	let table: PlacementTable = PlacementTable::compute(&spec, &model, &decomposed, &fits).unwrap();
 	let composed: Composed = compose(
 		&spec,
 		&model,
 		&table,
-		&runs,
-		false,
+		&decomposed,
 		&fits,
 		ComposeBudget {
 			max_compositions: 1,
@@ -231,13 +219,16 @@ fn render_interpretation(interpretation: &crate::search::Interpretation) -> Stri
 }
 
 fn interpretations_of(spec: &ParsingSpec, shape: &str, query: &str) -> Vec<String> {
-	let (model, composed, runs) = composed_and_runs_for(spec, shape, query);
+	let ((model, composed), parsed) = composed_for_parts(spec, shape, query);
+	let decomposed: Query<'_> = Query::new(&parsed);
 	let Composed::Compositions(compositions) = &composed else {
 		panic!("expected compositions, got {composed:?}");
 	};
 	let mut out: Vec<String> = compositions
 		.iter()
-		.map(|composition| render_interpretation(&composition.to_interpretation(&model, &runs)))
+		.map(|composition| {
+			render_interpretation(&composition.to_interpretation(&model, &decomposed))
+		})
 		.collect::<Vec<_>>();
 	out.sort();
 	out.dedup();
@@ -288,15 +279,20 @@ fn every_literal_character_survives_rendering() {
 	let mut checked: usize = 0;
 	for shape in SHAPES.iter() {
 		for query in QUERIES.iter() {
-			let (model, composed, runs) = composed_and_runs_for(&spec, shape, query);
+			let ((model, composed), parsed) = composed_for_parts(&spec, shape, query);
+			let decomposed: Query<'_> = Query::new(&parsed);
 			let Composed::Compositions(compositions) = &composed else {
 				continue;
 			};
 			// What the query itself asks for.
-			let expected: Vec<String> = runs.iter().map(|run| run.text.clone()).collect::<Vec<_>>();
+			let expected: Vec<String> = decomposed
+				.runs
+				.iter()
+				.map(|run| run.text.clone())
+				.collect::<Vec<_>>();
 
 			for composition in compositions.iter() {
-				let interpretation = composition.to_interpretation(&model, &runs);
+				let interpretation = composition.to_interpretation(&model, &decomposed);
 				assert_eq!(
 					expected,
 					runs_accounted_for(&interpretation),

@@ -26,10 +26,9 @@ use log_surgeon::parsing_spec::ParsingSpecBuilder;
 use log_surgeon::search::Interpretation;
 use log_surgeon::search::SearchString;
 use log_surgeon::search::decompose::PlacementTable;
-use log_surgeon::search::decompose::Run;
+use log_surgeon::search::decompose::Query;
 use log_surgeon::search::decompose::RunFitCache;
 use log_surgeon::search::decompose::ShapeModel;
-use log_surgeon::search::decompose::runs_of;
 
 fn test_spec() -> ParsingSpec {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();
@@ -65,9 +64,8 @@ fn last_reachable_for(
 	model: &ShapeModel,
 	query: &SearchString,
 ) -> Option<usize> {
-	let runs: Vec<Run> = runs_of(query.as_slice());
 	let fits: RunFitCache = RunFitCache::new();
-	let table: PlacementTable = PlacementTable::compute(spec, model, &runs, &fits)?;
+	let table: PlacementTable = PlacementTable::compute(spec, model, &Query::new(query), &fits)?;
 	table.last_reachable_part()
 }
 

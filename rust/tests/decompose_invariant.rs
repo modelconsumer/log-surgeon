@@ -6,11 +6,10 @@ use log_surgeon::search::SymbolicChar;
 use log_surgeon::search::decompose::ComposeBudget;
 use log_surgeon::search::decompose::Composed;
 use log_surgeon::search::decompose::PlacementTable;
-use log_surgeon::search::decompose::Run;
+use log_surgeon::search::decompose::Query;
 use log_surgeon::search::decompose::RunFitCache;
 use log_surgeon::search::decompose::ShapeModel;
 use log_surgeon::search::decompose::compose;
-use log_surgeon::search::decompose::runs_of;
 
 fn render(interpretation: &Interpretation) -> String {
 	interpretation
@@ -74,25 +73,27 @@ fn invariant_holds_on_corpus() {
 
 	for query_text in QUERIES.iter() {
 		let query: SearchString = SearchString::parse(query_text).unwrap();
-		// Runs come from the raw symbols:
-		// a trailing wildcard is exactly what marks the last run as unanchored,
-		// so it must be neither added nor removed here.
-		let runs: Vec<Run> = runs_of(query.as_slice());
-		let expected: Vec<String> = runs.iter().map(|r| r.text.clone()).collect::<Vec<_>>();
+		// The runs and anchoring come from the Query,
+		// which is what carries the end-anchoring for a runless query.
+		let decomposed: Query<'_> = Query::new(&query);
+		let expected: Vec<String> = decomposed
+			.runs
+			.iter()
+			.map(|r| r.text.clone())
+			.collect::<Vec<_>>();
 		let fits: RunFitCache = RunFitCache::new();
 
 		for shape in LOG_SHAPES.iter() {
 			let model: ShapeModel = ShapeModel::new(&spec, shape);
 			// A cap was exceeded, so the table is incomplete; nothing to check for this shape.
-			let Some(table) = PlacementTable::compute(&spec, &model, &runs, &fits) else {
+			let Some(table) = PlacementTable::compute(&spec, &model, &decomposed, &fits) else {
 				continue;
 			};
 			let composed: Composed = compose(
 				&spec,
 				&model,
 				&table,
-				&runs,
-				query.anchored_end(),
+				&decomposed,
 				&fits,
 				ComposeBudget::default(),
 			);
@@ -103,7 +104,7 @@ fn invariant_holds_on_corpus() {
 				shapes_with_output += 1;
 			}
 			for composition in compositions.iter() {
-				let interpretation = composition.to_interpretation(&model, &runs);
+				let interpretation = composition.to_interpretation(&model, &decomposed);
 				assert_eq!(
 					expected,
 					runs_accounted_for(&interpretation),

@@ -57,7 +57,7 @@ use crate::search::LeafQuery;
 use crate::search::SymbolicChar;
 use crate::search::decompose::Placement;
 use crate::search::decompose::PlacementTable;
-use crate::search::decompose::Run;
+use crate::search::decompose::Query;
 use crate::search::decompose::RunFitCache;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapePart;
@@ -163,9 +163,13 @@ impl Composition {
 	/// where the query had one, i.e. between characters of different runs;
 	/// characters of the *same* run stay adjacent, with no wildcard introduced
 	/// between them even when they straddle a part boundary.
+	///
+	/// Runs and end-anchoring are read from `query` rather than passed separately,
+	/// since the runs alone cannot tell the empty query (anchored at both ends,
+	/// with no runs at all) from `*` (anchored nowhere).
 	#[must_use]
-	pub fn to_interpretation(&self, model: &ShapeModel, runs: &[Run]) -> Interpretation {
-		let rendered: Vec<RenderedPart> = self.rendered_parts(model, runs);
+	pub fn to_interpretation(&self, model: &ShapeModel, query: &Query<'_>) -> Interpretation {
+		let rendered: Vec<RenderedPart> = self.rendered_parts(model, query);
 
 		// Nothing is constrained, so the query is satisfied without attributing text anywhere.
 		if rendered.is_empty() {
@@ -207,7 +211,7 @@ impl Composition {
 	/// `*id=*` against `id=%digits%` is `'id=*'`, not `'id='`,
 	/// which would claim the message ends after `id=`.
 	/// (A trailing capture is already padded by [`symbolic_value_of`].)
-	fn rendered_parts(&self, model: &ShapeModel, runs: &[Run]) -> Vec<RenderedPart> {
+	fn rendered_parts(&self, model: &ShapeModel, query: &Query<'_>) -> Vec<RenderedPart> {
 		// The last part holding any query text. Rule references after it are unconstrained,
 		// so they are omitted rather than reported as vacuous captures.
 		let last_constrained: Option<usize> = self
@@ -272,7 +276,7 @@ impl Composition {
 
 			rendered.push(RenderedPart {
 				part,
-				value: symbolic_value_of(pieces, runs, preceding_run, following_run, padding),
+				value: symbolic_value_of(pieces, query, preceding_run, following_run, padding),
 				piece_count: pieces.len(),
 			});
 		}
@@ -336,9 +340,13 @@ impl Composition {
 	/// including whether it is padded, which decides whether the rule may emit
 	/// anything around it.
 	#[must_use]
-	pub fn captures_to_verify(&self, model: &ShapeModel, runs: &[Run]) -> Vec<(String, String)> {
+	pub fn captures_to_verify(
+		&self,
+		model: &ShapeModel,
+		query: &Query<'_>,
+	) -> Vec<(String, String)> {
 		Vec::from_iter(
-			self.rendered_parts(model, runs)
+			self.rendered_parts(model, query)
 				.into_iter()
 				.filter_map(|rendered| {
 					match &model.parts[rendered.part] {
@@ -407,7 +415,7 @@ fn condense_wildcards(symbols: impl Iterator<Item = SymbolicChar>) -> Vec<Symbol
 /// so both fall out of where the pieces sit.
 fn symbolic_value_of(
 	pieces: &[PieceRef],
-	runs: &[Run],
+	query: &Query<'_>,
 	preceding_run: Option<usize>,
 	following_run: Option<usize>,
 	padding: Padding,
@@ -430,7 +438,7 @@ fn symbolic_value_of(
 	let pad_before: bool = match padding {
 		Padding::Static { before, .. } => before,
 		Padding::Rule => {
-			!continues_before && !(preceding_run.is_none() && runs[first.run].anchored_start)
+			!continues_before && !(preceding_run.is_none() && query.runs[first.run].anchored_start)
 		},
 	};
 	if pad_before {
@@ -453,7 +461,7 @@ fn symbolic_value_of(
 	let pad_after: bool = match padding {
 		Padding::Static { after, .. } => after,
 		Padding::Rule => {
-			!continues_after && !(following_run.is_none() && runs[last.run].anchored_end)
+			!continues_after && !(following_run.is_none() && query.runs[last.run].anchored_end)
 		},
 	};
 	if pad_after {
@@ -514,16 +522,10 @@ pub fn compose(
 	spec: &ParsingSpec,
 	model: &ShapeModel,
 	table: &PlacementTable,
-	runs: &[Run],
-	anchored_end: bool,
+	query: &Query<'_>,
 	fits: &RunFitCache,
 	budget: ComposeBudget,
 ) -> Composed {
-	debug_assert!(
-		runs.last()
-			.is_none_or(|run| run.anchored_end == anchored_end),
-		"runs disagree with the query about end anchoring"
-	);
 	if table.is_impossible() {
 		return Composed::Impossible;
 	}
@@ -538,7 +540,7 @@ pub fn compose(
 	//
 	// Read off the query rather than the last run, so the empty query --
 	// anchored at both ends, with no runs at all -- is deferred too.
-	if anchored_end && model.parts.last().is_some_and(ShapePart::can_be_empty) {
+	if query.anchored_end && model.parts.last().is_some_and(ShapePart::can_be_empty) {
 		return Composed::Unknown;
 	}
 
@@ -547,7 +549,7 @@ pub fn compose(
 		// With no runs the query is either `*`, which constrains nothing and has exactly one
 		// (empty) decomposition, or the empty query, which pins *every* part to producing
 		// nothing -- a constraint only the engine can express (as above).
-		if anchored_end {
+		if query.anchored_end {
 			return Composed::Unknown;
 		}
 		return Composed::Compositions(vec![Composition {
@@ -594,7 +596,7 @@ pub fn compose(
 	// admits either run alone but never both.
 	compositions.retain(|composition| {
 		composition
-			.captures_to_verify(model, runs)
+			.captures_to_verify(model, query)
 			.iter()
 			.all(|(name, value)| fits.can_produce_all_text(spec, name, value))
 	});

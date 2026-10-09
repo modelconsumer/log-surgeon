@@ -18,10 +18,11 @@ fn test_spec() -> ParsingSpec {
 	])
 }
 
-/// The query's symbols, exactly as written:
-/// a trailing wildcard is what tells [`runs_of`] the last run is unanchored.
-fn symbols_of(query: &str) -> Vec<SymbolicChar> {
-	SearchString::parse(query).unwrap().as_slice().to_vec()
+/// The query as the decomposer sees it: symbols, runs, and anchoring derived once.
+fn decomposed(query: &str) -> (SearchString, Vec<Run>) {
+	let parsed: SearchString = SearchString::parse(query).unwrap();
+	let runs: Vec<Run> = Query::new(&parsed).runs;
+	(parsed, runs)
 }
 
 fn table_for(
@@ -30,10 +31,11 @@ fn table_for(
 	query: &str,
 ) -> (ShapeModel, Vec<Run>, PlacementTable) {
 	let model: ShapeModel = ShapeModel::new(spec, shape);
-	let runs: Vec<Run> = runs_of(&symbols_of(query));
+	let (parsed, _) = decomposed(query);
 	let fits: RunFitCache = RunFitCache::new();
-	let table: PlacementTable = PlacementTable::compute(spec, &model, &runs, &fits).unwrap();
-	(model, runs, table)
+	let table: PlacementTable =
+		PlacementTable::compute(spec, &model, &Query::new(&parsed), &fits).unwrap();
+	(model, Query::new(&parsed).runs, table)
 }
 
 /// Renders a placement as `part:text` pieces, marking rules with `<>`.
@@ -61,32 +63,32 @@ fn rendered(table: &PlacementTable, run: usize) -> Vec<String> {
 
 #[test]
 fn splits_a_query_into_runs() {
-	let runs: Vec<Run> = runs_of(&symbols_of("*abc*def*"));
+	let (_, runs) = decomposed("*abc*def*");
 	assert_eq!(2, runs.len());
 	assert_eq!("abc", runs[0].text);
 	assert_eq!("def", runs[1].text);
 	assert!(!runs[0].anchored_start);
 
 	// A query with no leading wildcard anchors its first run.
-	let runs: Vec<Run> = runs_of(&symbols_of("abc*"));
+	let (_, runs) = decomposed("abc*");
 	assert_eq!(1, runs.len());
 	assert!(runs[0].anchored_start);
 
 	// A query with no trailing wildcard anchors its last run.
-	let runs: Vec<Run> = runs_of(&symbols_of("*abc"));
+	let (_, runs) = decomposed("*abc");
 	assert!(runs[0].anchored_end);
 
 	// Adjacent wildcards collapse at parse, so they neither add runs nor change anchoring.
-	let runs: Vec<Run> = runs_of(&symbols_of("**abc**"));
+	let (_, runs) = decomposed("**abc**");
 	assert_eq!(1, runs.len());
 	assert!(!runs[0].anchored_start);
 	assert!(!runs[0].anchored_end);
 
 	// A wildcard-only query has no runs at all, so it constrains nothing;
 	// so does the empty query, which constrains everything -- the runs cannot tell them apart,
-	// which is why `compose` takes the query's anchoring separately.
-	assert!(runs_of(&symbols_of("*")).is_empty());
-	assert!(runs_of(&symbols_of("")).is_empty());
+	// which is why anchoring is stored on the [`Query`], not on its runs.
+	assert!(decomposed("*").1.is_empty());
+	assert!(decomposed("").1.is_empty());
 }
 
 #[test]

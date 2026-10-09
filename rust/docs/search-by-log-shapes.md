@@ -100,9 +100,9 @@ The predicates are consulted only where a decision genuinely depends on them:
 - `truncated_automata` -- an end-anchored query must reach the shape's end, so nothing may be cut;
 - `compose` -- an end-anchored query pins trailing nullable parts to the empty string,
     which composition cannot render, so it defers to the engine
-    (this needs the query's predicate, not the last run's:
+    (the predicate comes from the `Query`, not from its runs:
     the empty query has no runs at all, yet is anchored);
-- `drop_trailing_unconstrained` -- only an unanchored query leaves the tail unconstrained;
+- the unanchored-tail rule -- only an unanchored query leaves the tail unconstrained;
 - `is_obviously_not_ruled_out` -- an end-anchored query must be able to *finish* at the variable.
 
 The cost of a trailing `.*`,
@@ -161,7 +161,8 @@ Tier 3 lives in [`nfa::search_decomposition`][engine].
 
 ```
                       +-----------------------+
-   per query -------->|  runs_of(raw symbols) |  once, reused for every shape
+   per query -------->|  Query{symbols, runs,    |  once, reused for every shape
+                      |  anchored_*}            |
                       |  RunFitCache          |
                       +-----------+-----------+
                                   |
@@ -190,13 +191,13 @@ Tier 3 lives in [`nfa::search_decomposition`][engine].
 
 Two pieces of per-query state are computed once and shared across all shapes:
 
-- **Runs** -- `decompose::runs_of(&self.symbols)`.
+- **`Query`** -- the symbols exactly as parsed, the runs split out of them,
+    and the anchoring predicates, read off the symbols once.
     A *run* is a maximal stretch of literal characters,
     carrying `anchored_start`/`anchored_end`.
     Only the first run can be start-anchored and only the last end-anchored;
-    the flags are the query's own predicates, recorded on the run that needs them.
-    They cannot replace the query's predicates entirely,
-    because `*` and the empty query both have no runs.
+    the predicates live on the query rather than being re-derived from its runs,
+    because `*` and the empty query both have no runs yet differ in anchoring.
 - **RunFitCache** -- see below.
 
 ### Shape Models
@@ -702,6 +703,7 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 - `src/search.rs` -- the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
     `LeafQuery::covers` and `dedup_covered_interpretations`.
 - `src/search/decompose/shape.rs` -- `ShapeModel`, `Variable`, anchoring helpers.
+- `src/search/decompose/query.rs` -- the `Query` the decomposer sees: symbols, runs, anchoring.
 - `src/search/decompose/prefilter.rs` -- the rejection DP and its fast path.
 - `src/search/decompose/placement.rs` -- `Run`, `Placement`, `PlacementTable`,
     `last_reachable_part`, composition DP.
