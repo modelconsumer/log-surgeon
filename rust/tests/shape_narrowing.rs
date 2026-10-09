@@ -167,11 +167,8 @@ fn truncation_is_transparent() {
 			// The truncated automaton's answer, built exactly as the search path builds it.
 			let fragments: Vec<LogShapeFragment> = model.fragments_in(0, end);
 			let truncated: Tnfa = spec.automata_for_fragments(&fragments).unwrap();
-			let dropped_static: bool = model.parts[(end + 1)..]
-				.iter()
-				.any(|part| !part.is_variable());
 			let actual: Vec<Interpretation> =
-				query.interpretations_for_automata(&spec, &truncated, dropped_static);
+				query.interpretations_for_automata(&spec, &truncated, &model.parts[(end + 1)..]);
 
 			assert_eq!(
 				expected.iter().map(render).collect::<Vec<_>>(),
@@ -220,13 +217,10 @@ fn long_tail_is_truncated_away() {
 	);
 
 	// And the answer must still be the same.
-	let dropped_static: bool = model.parts[(end + 1)..]
-		.iter()
-		.any(|part| !part.is_variable());
 	let expected: Vec<Interpretation> =
 		query.interpretations_for_log_shape_via_engine(&spec, &shape);
 	let actual: Vec<Interpretation> =
-		query.interpretations_for_automata(&spec, &truncated, dropped_static);
+		query.interpretations_for_automata(&spec, &truncated, &model.parts[(end + 1)..]);
 	assert_eq!(
 		expected.iter().map(render).collect::<Vec<_>>(),
 		actual.iter().map(render).collect::<Vec<_>>(),

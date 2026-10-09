@@ -58,9 +58,9 @@ Two further methods expose the engine directly and exist for tests, not users:
 - `interpretations_for_log_shape_via_engine` -- bypasses `decompose` entirely,
     so the [differential test][differential] can pin the fast paths against the engine they stand in
     for.
-- `interpretations_for_automata` -- takes an already-built automaton plus a `dropped_static` flag
-    saying whether that automaton is a truncation of a longer shape,
-    so the [truncation test][narrowing] can compare a truncated shape against the full one.
+- `interpretations_for_automata` -- takes an already-built automaton plus the shape parts
+    the automaton is a truncation of, so the [truncation test][narrowing] can compare
+    a truncated shape against the full one.
 
 ### Query Semantics
 
@@ -411,11 +411,16 @@ so it needs no automaton or simulation.
 Rule references after the last *constrained* one are omitted --
 the query's trailing wildcard leaves them unconstrained,
 and each would only be a vacuous capture carrying no information.
-Their static text still appears, as `'*'`, since that is where the trailing wildcard applies.
-If no static text follows them, the rendering ends in whatever precedes them;
-when that is static text it gets a trailing `*` standing for them,
-so `*id=*` against `id=%digits%` is `'id=*'` rather than `'id='`
-(which would claim the message ends after `id=`).
+What sits past the last constrained part is rendered by the **tail rule**
+(`crate::search::Tail`), shared with the engine:
+
+- dropped *variables* are omitted;
+- dropped *static text* still appears, because the message contains it:
+  on a trailing static sub-query it becomes a `'*'`,
+  and a rendering ending in a bare capture gets one `'*'` of its own
+  to stand for the static text that followed.
+  `*id=*` against `id=%digits%` is `'id=*'`, not `'id='`
+  (which would claim the message ends after `id=`).
 
 > When the query is end-anchored those trailing references are *not* unconstrained
 > but pinned to the empty string.
@@ -424,10 +429,12 @@ so `*id=*` against `id=%digits%` is `'id=*'` rather than `'id='`
 > which reports the exact empty captures.
 
 The rendering deliberately does **not** reproduce the engine's wildcard *placement* inside a value
-(the engine may write `INFO*` where composition writes `*INFO*`)
-nor the engine's synthetic trailing `*`.
+(the engine may write `INFO*` where composition writes `*INFO*`).
 Both describe the same decomposition;
 the differential test compares a normal form that strips wildcards, so this stays pinned.
+A trailing `*` is emitted only when something actually follows the last constrained part --
+the engine obeys the same rule for the parts its automaton was truncated past,
+so neither path appends it unconditionally.
 
 #### Budgets
 
@@ -502,8 +509,9 @@ Because a path now always reaches an accepting state, every capture it opened wa
 and reports a capture's contents exactly as the rule produced them --
 including *empty*, where the query pins the rule to producing nothing.
 
-Two renderings then reconcile the engine's output with composition's,
-both applied only when the query is unanchored (`drop_trailing_unconstrained`):
+The parts of the shape the engine's automaton was truncated past and what it dropped on the
+engine's own tail are reconciled by the [tail rule](#rendering) (`Tail`),
+applied only when the query is unanchored:
 
 - **Trailing captures are dropped.**
     Past the query's last literal character every rule reference is unconstrained
@@ -596,11 +604,11 @@ Four subtleties, all learned the hard way:
     and invents interpretations the full shape does not have.
 - **Never truncate when end-anchored.**
     The truncated parts are precisely the ones an end-anchored query still has to match.
-    `truncated_automata` returns `None` in that case.
+    `truncated_automata` still builds from the model's fragments then; `end` is the last part.
 - **A dropped tail containing static text must still be reported**, as a trailing `'*'`,
     because the full shape would have reported it.
-    `TruncatedShape::dropped_static` carries that fact to the rendering,
-    where the wildcard is merged into the final static sub-query if there already is one.
+    `TruncatedShape::dropped` carries that fact to the rendering as a `Tail`,
+    which is the same rule composition uses for its own unconstrained tail.
 
 `PlacementTable` is therefore computed even for shapes composition will not answer,
 purely so the engine fallback can truncate.

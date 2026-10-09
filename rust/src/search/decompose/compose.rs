@@ -155,6 +155,13 @@ impl Composition {
 	/// Rule references after the last constrained one are **omitted**:
 	/// the query's trailing wildcard leaves them unconstrained,
 	/// and reporting each as a vacuous capture would add no information.
+	/// What is left of the shape after the last constrained part is not dropped outright but
+	/// rendered by the tail rule shared with the engine
+	/// (`crate::search::Tail`):
+	/// dropped variables are omitted,
+	/// while dropped static text has to show up as a trailing `'*'`
+	/// (on the last static sub-query, or as one of its own),
+	/// because the message still contains that text.
 	///
 	/// # Invariant
 	///
@@ -197,57 +204,90 @@ impl Composition {
 			}
 		}
 
+		if !query.anchored_end
+			&& let Some(last_constrained) = self.last_constrained()
+		{
+			crate::search::Tail::of_parts(&model.parts[(last_constrained + 1)..])
+				.finish_unanchored(&mut leaf_queries);
+		}
+
 		Interpretation { leaf_queries }
+	}
+
+	/// The last part a run *lands in*, for rendering: straddling runs
+	/// attribute text there. `None` on an empty composition.
+	fn last_constrained(&self) -> Option<usize> {
+		self.captures
+			.iter()
+			.map(|capture| capture.part)
+			.chain(self.literals.iter().map(|literal| literal.part))
+			.max()
+	}
+
+	/// The last part holding *pieces*, which a straddling run can put past
+	/// `last_constrained`: it names where the run ends, which must not be dropped.
+	fn last_attributed(&self) -> Option<usize> {
+		self.captures
+			.iter()
+			.filter(|capture| !capture.pieces.is_empty())
+			.map(|capture| capture.part)
+			.chain(
+				self.literals
+					.iter()
+					.filter(|literal| !literal.pieces.is_empty())
+					.map(|literal| literal.part),
+			)
+			.max()
 	}
 
 	/// The shape parts that contribute a sub-query, with their rendered values.
 	///
+	/// Only parts up to the last *straddled* one are rendered
+	/// (`last_attributed`, which a straddling run can put past `last_constrained`):
+	/// variables past that are unconstrained and omitted,
+	/// and static text past that is what the caller's tail rule stands for --
+	/// see [`crate::search::Tail`].
+	///
 	/// Factored out so that rendering and multi-piece verification agree by construction:
 	/// the value checked against a rule is the very one that will be reported.
-	///
-	/// When rule references are omitted past the end of the rendering
-	/// and the rendering ends in static text,
-	/// that static value gets a trailing `*` standing for what the omitted references emit:
-	/// `*id=*` against `id=%digits%` is `'id=*'`, not `'id='`,
-	/// which would claim the message ends after `id=`.
-	/// (A trailing capture is already padded by [`symbolic_value_of`].)
 	fn rendered_parts(&self, model: &ShapeModel, query: &Query<'_>) -> Vec<RenderedPart> {
-		// The last part holding any query text. Rule references after it are unconstrained,
-		// so they are omitted rather than reported as vacuous captures.
-		let last_constrained: Option<usize> = self
-			.captures
-			.iter()
-			.map(|capture| capture.part)
-			.chain(self.literals.iter().map(|literal| literal.part))
-			.max();
-
-		// The last static part. Trailing static text is still reported, as `*`,
-		// because that is where the query's trailing wildcard applies.
-		let last_static: Option<usize> = model.parts.iter().rposition(|part| !part.is_variable());
-
-		let Some(last_emitted) = last_constrained.max(last_static) else {
+		let Some(last_constrained) = self.last_constrained() else {
 			return Vec::new();
 		};
+		// A run *lands in* the last part it touches; `last_constrained` is the part
+		// past which nothing is still constrained. A straddling run can put the last
+		// part with *text* past it,
+		// so the window runs up to either.
+		let window_end: usize = last_constrained.max(self.last_attributed().expect("constrained"));
 
-		// Every static part is reported, whether or not the query constrains it --
-		// an unconstrained one becomes the value `*`, matching the engine
-		// and `search_by_name`'s output shape. Variables are reported only
-		// up to the last constrained part; beyond that they are unconstrained and omitted.
-		//
-		// Collecting first makes the *next* part's pieces available,
-		// which decides whether a run continues past this part.
-		let emissions: Vec<(usize, &[PieceRef])> = (0..=last_emitted)
+		let pieces_by_part: BTreeMap<usize, &[PieceRef]> = (0..model.parts.len())
 			.map(|part| (part, self.pieces_for(part)))
-			.filter(|&(part, pieces)| {
-				!pieces.is_empty()
-					|| !model.parts[part].is_variable()
-					|| Some(part) <= last_constrained
-			})
-			.collect::<Vec<_>>();
+			.collect();
 
-		let mut rendered: Vec<RenderedPart> = Vec::with_capacity(emissions.len());
+		let emitted: Vec<usize> = (0..=window_end).collect();
 
-		for (index, &(part, pieces)) in emissions.iter().enumerate() {
+		// The run touching the character just before each emitted part,
+		// and the one just after: from one forward pass and one reverse pass respectively.
+		let mut preceding: Vec<Option<usize>> = Vec::with_capacity(emitted.len());
+		let mut previous: Option<usize> = None;
+		for &part in emitted.iter() {
+			preceding.push(previous);
+			if let Some(last) = pieces_by_part[&part].last() {
+				previous = Some(last.run);
+			}
+		}
+		let mut following: Vec<Option<usize>> = vec![None; emitted.len()];
+		let mut next: Option<usize> = None;
+		for index in (0..emitted.len()).rev() {
+			following[index] = next;
+			if let Some(first) = pieces_by_part[&emitted[index]].first() {
+				next = Some(first.run);
+			}
+		}
+
+		let mut rendered: Vec<RenderedPart> = Vec::with_capacity(emitted.len());
+
+		for (index, &part) in emitted.iter().enumerate() {
 			// Static text's value must glob-match that text exactly;
 			// a rule is padded by what the query permits instead. See `symbolic_value_of`.
 			let padding: Padding = match &model.parts[part] {
@@ -262,22 +302,16 @@ impl Composition {
 				ShapePart::Variable(_) => Padding::Rule,
 			};
 
-			// The run holding the character emitted just before this part, if any.
-			let preceding_run: Option<usize> = emissions[..index]
-				.iter()
-				.rev()
-				.find_map(|(_, pieces)| pieces.last())
-				.map(|piece| piece.run);
-			// The run holding the character emitted just after this part, if any.
-			let following_run: Option<usize> = emissions[(index + 1)..]
-				.iter()
-				.find_map(|(_, pieces)| pieces.first())
-				.map(|piece| piece.run);
-
 			rendered.push(RenderedPart {
 				part,
-				value: symbolic_value_of(pieces, query, preceding_run, following_run, padding),
-				piece_count: pieces.len(),
+				value: symbolic_value_of(
+					pieces_by_part[&part],
+					query,
+					preceding[index],
+					following[index],
+					padding,
+				),
+				piece_count: pieces_by_part[&part].len(),
 			});
 		}
 
@@ -285,15 +319,9 @@ impl Composition {
 		// forbids two static sub-queries in a row. A capture is never merged:
 		// its position is what identifies which rule reference it is.
 		//
-		// Concatenation is sound in both ways two static parts can end up adjacent:
-		//
-		// - genuinely adjacent in the shape (`a%%b` escapes a `%` as text):
-		//   each value glob-matches its own text exactly,
-		//   so the concatenation glob-matches the concatenated text exactly;
-		// - separated by an omitted variable,
-		//   which happens only past the last constrained part -- so the later part
-		//   has no attributed text and its value is a bare `*`,
-		//   which is exactly the wildcard the omitted variable's output requires.
+		// The only way two static parts are adjacent is a genuinely-adjacent pair
+		// (`a%%b` escapes a `%` as text): each value glob-matches its own text exactly,
+		// so the concatenation glob-matches the concatenated text.
 		let mut merged: Vec<RenderedPart> = Vec::with_capacity(rendered.len());
 		for part in rendered.into_iter() {
 			if !model.parts[part.part].is_variable()
@@ -306,23 +334,6 @@ impl Composition {
 				continue;
 			}
 			merged.push(part);
-		}
-
-		// Rule references omitted after the rendering still emit text, which nothing else in the
-		// rendering stands for if it ends in static text.
-		let omits_trailing_variables: bool = model.parts[(last_emitted + 1)..]
-			.iter()
-			.any(ShapePart::is_variable);
-		if omits_trailing_variables
-			&& let Some(last) = merged.last_mut()
-			&& !model.parts[last.part].is_variable()
-		{
-			last.value = condense_wildcards(
-				last.value
-					.iter()
-					.cloned()
-					.chain(std::iter::once(SymbolicChar::GlobStar)),
-			);
 		}
 
 		merged
