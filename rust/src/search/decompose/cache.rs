@@ -6,24 +6,26 @@
 //! so rebuilding per query dominates the cost of [`crate::search::decompose`].
 //! The cache makes it a once-per-shape cost instead.
 //!
-//! Uses interior mutability so it can sit behind a shared reference on a long-lived owner such as
-//! [`crate::parsing_spec::ParsingSpec`], and so that filling it does not require `&mut` on the
-//! search path.
+//! Backed by a [`Memo`], so it can sit behind a shared reference on a long-lived owner such as
+//! [`crate::parsing_spec::ParsingSpec`].
 
 #[cfg(test)]
 mod test;
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use crate::parsing_spec::ParsingSpec;
 use crate::search::decompose::ShapeModel;
+use crate::search::decompose::memo::Memo;
 
 /// A shape-keyed cache of [`ShapeModel`]s.
-#[derive(Debug, Default)]
+///
+/// [`Clone`] clones the entries, and the models are behind [`Arc`],
+/// so a clone (as of a [`crate::parser::Parser`]) shares the built models
+/// rather than rebuilding them.
+#[derive(Clone, Debug, Default)]
 pub struct ShapeModelCache {
-	models: Mutex<BTreeMap<Box<str>, Arc<ShapeModel>>>,
+	models: Memo<Box<str>, Arc<ShapeModel>>,
 }
 
 impl ShapeModelCache {
@@ -31,7 +33,7 @@ impl ShapeModelCache {
 	#[must_use]
 	pub const fn new() -> Self {
 		Self {
-			models: Mutex::new(BTreeMap::new()),
+			models: Memo::new(),
 		}
 	}
 
@@ -42,51 +44,24 @@ impl ShapeModelCache {
 	/// Panics if the shape is unsupported; see [`ShapeModel::new`].
 	#[must_use]
 	pub fn get(&self, spec: &ParsingSpec, shape: &str) -> Arc<ShapeModel> {
-		// Note the lock is released before building,
-		// so a slow build does not block other shapes.
-		// Two threads racing on the same missing shape may both build it;
-		// that is wasted work but not a correctness problem,
-		// and is cheaper than holding the lock across the build.
-		if let Some(cached) = self.models.lock().unwrap().get(shape) {
-			return cached.clone();
-		}
-
-		let model: Arc<ShapeModel> = Arc::new(ShapeModel::new(spec, shape));
-
 		self.models
-			.lock()
-			.unwrap()
-			.insert(Box::from(shape), model.clone());
-
-		model
+			.get_or_insert_with(shape, || Arc::new(ShapeModel::new(spec, shape)))
 	}
 
 	/// The number of cached shapes.
 	#[must_use]
 	pub fn len(&self) -> usize {
-		self.models.lock().unwrap().len()
+		self.models.len()
 	}
 
 	/// Whether nothing is cached yet.
 	#[must_use]
 	pub fn is_empty(&self) -> bool {
-		self.models.lock().unwrap().is_empty()
+		self.models.is_empty()
 	}
 
 	/// Drops every cached model.
 	pub fn clear(&self) {
-		self.models.lock().unwrap().clear();
-	}
-}
-
-impl Clone for ShapeModelCache {
-	/// Clones the cached entries.
-	///
-	/// [`crate::parser::Parser`] is [`Clone`], and the models are behind [`Arc`],
-	/// so this shares the built models rather than rebuilding them.
-	fn clone(&self) -> Self {
-		Self {
-			models: Mutex::new(self.models.lock().unwrap().clone()),
-		}
+		self.models.clear();
 	}
 }

@@ -163,6 +163,7 @@ impl ShapeModel {
 	}
 
 	/// The variables of this shape, in order.
+	#[cfg(test)]
 	pub fn variables(&self) -> impl Iterator<Item = &Variable> {
 		self.parts.iter().filter_map(|part| match part {
 			ShapePart::Variable(variable) => Some(variable),
@@ -171,6 +172,7 @@ impl ShapeModel {
 	}
 
 	/// The number of variables.
+	#[cfg(test)]
 	#[must_use]
 	pub fn num_variables(&self) -> usize {
 		self.variables().count()

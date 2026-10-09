@@ -9,7 +9,7 @@
 //! and the reason feasibility can be decided in `O(runs x parts x placements)`
 //! even when the number of compositions is large.
 //!
-//! Enumeration is separated from feasibility ([`crate::search::decompose::can_compose`]),
+//! Enumeration is separated from feasibility (`Reachability`, checked before enumerating),
 //! so that a shape can be *rejected* cheaply, and only a shape that survives pays for
 //! materializing its decompositions. A [`ComposeBudget`] caps enumeration,
 //! so a pathological shape degrades to "no conclusion" instead of exploding.

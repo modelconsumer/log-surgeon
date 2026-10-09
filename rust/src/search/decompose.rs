@@ -32,6 +32,7 @@
 
 pub mod cache;
 pub mod compose;
+pub mod memo;
 pub mod placement;
 pub mod prefilter;
 pub mod query;
@@ -50,6 +51,7 @@ pub use compose::compose;
 pub use placement::Placement;
 pub use placement::PlacementTable;
 pub use placement::Position;
+#[cfg(test)]
 pub use placement::can_compose;
 pub use prefilter::can_match;
 pub use query::Query;
@@ -63,7 +65,9 @@ pub use shape::Variable;
 use crate::interval_tree::Interval;
 use crate::interval_tree::IntervalTree;
 use crate::interval_tree::PolicyNoop;
+#[cfg(test)]
 use crate::parsing_spec::ParsingSpec;
+#[cfg(test)]
 use crate::parsing_spec::RuleInfo;
 use crate::regex::Regex;
 
@@ -139,6 +143,7 @@ impl Charset {
 	}
 
 	/// Adds every character of `other` to the set.
+	#[cfg(test)]
 	pub fn union(&mut self, other: &Self) {
 		for (interval, _) in other.0.iter() {
 			self.insert_interval(interval);
@@ -204,6 +209,7 @@ impl Charset {
 /// A superset of the characters that any match of the (sub)rule(s) named `name` can contain.
 ///
 /// An unresolved name yields the universal set, so that callers never prune on an unknown rule.
+#[cfg(test)]
 #[must_use]
 pub fn charset_for_name(spec: &ParsingSpec, name: &str) -> Charset {
 	let rows: Vec<(&RuleInfo, &Regex)> = spec.rules_for_name(name);

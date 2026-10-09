@@ -262,8 +262,9 @@ if the parts before it can vanish.
 
 [`RunFitCache`][run-fit-cache] answers "can this rule satisfy this piece of the query?"
 for one `(rule name, query)` pair, independent of any shape,
-and memoizes the bool under a mutex
-(releasing the lock while computing, so a slow simulation does not block other keys).
+and memoizes the bool in a `Memo`
+(`src/search/decompose/memo.rs`, the get-or-compute map both decomposer caches share;
+its lock is released while computing, so a slow simulation does not block other keys).
 This is the source of the algorithm's leverage:
 a corpus mentions few distinct rule names relative to the number of rule *references*,
 and a query has few runs,
@@ -712,11 +713,12 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 - `src/search/decompose/shape.rs` -- `ShapeModel`, `Variable`, anchoring helpers.
 - `src/search/decompose/query.rs` -- the `Query` the decomposer sees: symbols, runs, anchoring.
 - `src/search/decompose/prefilter.rs` -- the rejection DP and its fast path.
-- `src/search/decompose/placement.rs` -- `Run`, `Placement`, `PlacementTable`,
+- `src/search/decompose/placement.rs` -- `Placement`, `PlacementTable`,
     `last_reachable_part`, composition DP.
 - `src/search/decompose/compose.rs` -- composition enumeration and rendering.
-- `src/search/decompose/run_fit.rs` -- per-rule run simulation and caches.
+- `src/search/decompose/run_fit.rs` -- `Pinned` and `RunFitCache`, the per-rule match memo.
 - `src/search/decompose/cache.rs` -- `ShapeModelCache`.
+- `src/search/decompose/memo.rs` -- `Memo`, the get-or-compute map behind both caches.
 - `src/parsing_spec.rs` -- `automata_for_shape` / `automata_for_fragments`, `split_log_shape`.
 - `src/nfa.rs`, `src/nfa/search_decomposition.rs` -- the engine.
 

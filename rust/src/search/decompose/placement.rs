@@ -847,6 +847,7 @@ impl Reachability {
 ///
 /// Answering this separately from *enumerating* the compositions means a shape can be rejected
 /// cheaply even when the number of compositions is large; see [`Reachability`].
+#[cfg(test)]
 #[must_use]
 pub fn can_compose(table: &PlacementTable, num_parts: usize) -> bool {
 	!table.is_impossible() && Reachability::compute(table, num_parts).is_reachable(0, 0)

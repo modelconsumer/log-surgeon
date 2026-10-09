@@ -23,11 +23,9 @@
 #[cfg(test)]
 mod test;
 
-use std::collections::BTreeMap;
-use std::sync::Mutex;
-
 use crate::parsing_spec::ParsingSpec;
 use crate::search::SearchString;
+use crate::search::decompose::memo::Memo;
 
 /// Which ends of the rule's match the piece pins.
 ///
@@ -75,9 +73,9 @@ impl Pinned {
 ///
 /// The query string is the cache key: escaped literals and wildcard-bearing
 /// values cannot collide, because an escaped `\*` is never bare `*`.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RunFitCache {
-	matched: Mutex<BTreeMap<(Box<str>, Box<str>), bool>>,
+	matched: Memo<(Box<str>, Box<str>), bool>,
 }
 
 impl RunFitCache {
@@ -116,43 +114,25 @@ impl RunFitCache {
 	/// The memoized answer for `(name, query)`, computing on a miss.
 	fn get(&self, spec: &ParsingSpec, name: &str, query: &str) -> bool {
 		let key: (Box<str>, Box<str>) = (Box::from(name), Box::from(query));
-
-		if let Some(&cached) = self.matched.lock().unwrap().get(&key) {
-			return cached;
-		}
-
-		// The lock is released while computing, so a slow simulation does not block other keys.
-		// Two threads racing on the same key may both compute it; that is wasted work,
-		// not a correctness problem, and is cheaper than holding the lock.
-		let matches: bool = SearchString::parse(query)
-			.map(|parsed| !parsed.search_by_name(spec, name).is_empty())
-			.unwrap_or(false);
-
-		self.matched.lock().unwrap().insert(key, matches);
-
-		matches
+		self.matched.get_or_insert_with(&key, || {
+			SearchString::parse(query)
+				.map(|parsed| !parsed.search_by_name(spec, name).is_empty())
+				.unwrap_or(false)
+		})
 	}
 
 	/// The number of cached `(name, query)` pairs.
 	#[must_use]
 	pub fn len(&self) -> usize {
-		self.matched.lock().unwrap().len()
+		self.matched.len()
 	}
 
 	#[must_use]
 	pub fn is_empty(&self) -> bool {
-		self.matched.lock().unwrap().is_empty()
+		self.matched.is_empty()
 	}
 
 	pub fn clear(&self) {
-		self.matched.lock().unwrap().clear();
-	}
-}
-
-impl Clone for RunFitCache {
-	fn clone(&self) -> Self {
-		Self {
-			matched: Mutex::new(self.matched.lock().unwrap().clone()),
-		}
+		self.matched.clear();
 	}
 }
