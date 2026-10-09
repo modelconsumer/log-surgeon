@@ -745,8 +745,12 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 
 ### Related Code
 
-- `src/search.rs` -- the public API, `anchored`, the tier cascade, `interpretations_for_shape`,
-    `LeafQuery::covers` and `dedup_covered_interpretations`.
+- `src/search.rs` -- the public API (`search_by_name`, `search_by_log_shapes`), the tier
+    cascade, shape truncation, and the engine path (`interpretations_for_shape`).
+- `src/search/query.rs` -- `SearchString`, `SymbolicChar`, parsing, `anchored_start` /
+    `anchored_end`.
+- `src/search/interpretation.rs` -- `Interpretation`, `LeafQuery`, `Tail`,
+    `LeafQuery::covers` / `glob_covers` and `dedup_covered_interpretations`.
 - `src/search/decompose/shape.rs` -- `ShapeModel`, `Variable`, anchoring helpers.
 - `src/search/decompose/query.rs` -- the `Query` the decomposer sees: symbols, runs, anchoring.
 - `src/search/decompose/prefilter.rs` -- the rejection DP and its fast path.
@@ -763,8 +767,8 @@ Tests: `tests/search_anchoring.rs`, `tests/search_shape_support.rs`, `tests/shap
 `tests/decompose_differential.rs`, `tests/decompose_invariant.rs`.
 
 [search-by-log-shapes]: ../src/search.rs
-[search-parse]: ../src/search.rs
-[search-anchored]: ../src/search.rs
+[search-parse]: ../src/search/query.rs
+[search-anchored]: ../src/search/query.rs
 [shape-model]: ../src/search/decompose/shape.rs
 [shape-part]: ../src/search/decompose/shape.rs
 [shape-model-cache]: ../src/search/decompose/cache.rs
@@ -774,7 +778,7 @@ Tests: `tests/search_anchoring.rs`, `tests/search_shape_support.rs`, `tests/shap
 [placement-compute]: ../src/search/decompose/placement.rs
 [compose]: ../src/search/decompose/compose.rs
 [to-interpretation]: ../src/search/decompose/compose.rs
-[covers]: ../src/search.rs
+[covers]: ../src/search/interpretation.rs
 [run-fit]: ../src/search/decompose/run_fit.rs
 [run-fit-cache]: ../src/search/decompose/run_fit.rs
 [prefilter]: ../src/search/decompose/prefilter.rs
