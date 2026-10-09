@@ -637,7 +637,7 @@ pub fn compose(
 		composition
 			.captures_to_verify(model, query)
 			.iter()
-			.all(|(name, value)| fits.can_produce_all_text(spec, name, value))
+			.all(|(name, value)| fits.matches_query(spec, name, value))
 	});
 
 	compositions.sort();

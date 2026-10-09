@@ -258,26 +258,24 @@ a start-anchored run must be the first thing the *message* emits,
 which does not require it to be in the first shape *part*
 if the parts before it can vanish.
 
-#### RunFit
+#### Rule matching
 
-[`RunFit`][run-fit] answers "how can this run sit inside this rule?"
-for one `(rule name, run)` pair, independent of any shape.
+[`RunFitCache`][run-fit-cache] answers "can this rule satisfy this piece of the query?"
+for one `(rule name, query)` pair, independent of any shape,
+and memoizes the bool under a mutex
+(releasing the lock while computing, so a slow simulation does not block other keys).
 This is the source of the algorithm's leverage:
 a corpus mentions few distinct rule names relative to the number of rule *references*,
 and a query has few runs,
 so the number of distinct simulations is tiny.
 
-It records:
-
-- `whole` -- interpretations for the run sitting wholly inside, as `*run*`.
-- `suffixes[k]` -- the rule can *end* with `run[..k]`.
-- `prefixes[k]` -- the rule can *begin* with `run[k..]`.
-
-[`RunFitCache`][run-fit-cache] memoizes these under a mutex,
-releasing the lock while computing so a slow simulation does not block other keys.
-Two threads racing on one key duplicate work but not correctness.
-`matches_exactly` and `can_produce_all_text` share a second, separately-keyed cache,
-because they need a single simulation rather than one per split point.
+A piece is asked about as a search query, with `*` standing for an unpinned end:
+`*piece*` (contained), `piece*` (begin with), `*piece` (end with), `piece` (exactly).
+That is the whole space of pinnings
+([`Pinned { start, end }`][run-fit]),
+so placement asks *only* what it needs --
+`matches_piece` per split point --
+rather than one simulation per split of the run.
 
 ### Tier 1: Rejection
 
@@ -318,7 +316,9 @@ This is the path that actually answers the question, and it never builds a shape
 [`PlacementTable::compute`][placement-compute] asks, for each run, where it could go.
 A run must be produced in full, and there are only three possibilities:
 
-1. **wholly inside a rule** -- `RunFit::fits_wholly`;
+1. **wholly inside a rule** -- `matches_piece(.., Pinned { start, end })` with the query's
+    anchoring for both ends, plus `can_start_at` / `can_end_at` so nullable neighbours
+    can stand aside;
 2. **wholly inside static text** -- a substring search over *every* occurrence,
     including overlapping ones
     (`str::match_indices` would skip them, so `*aa` against `aaa` would find nothing),
@@ -328,7 +328,7 @@ A run must be produced in full, and there are only three possibilities:
     (`useful_occurrences`);
     otherwise a banner of repeated characters would exceed the placement cap;
 3. **straddling** a boundary -- split between a rule and its neighbour,
-    recorded via `suffixes` / `prefixes`.
+    answered the same way with the corresponding end pinned.
     A nullable variable in the middle of a straddle may contribute nothing,
     so a run such as `ab` can cross `a%optional.pad%b`;
     the variable is then reported as an empty capture.
@@ -336,10 +336,10 @@ A run must be produced in full, and there are only three possibilities:
 Anchoring constrains each in both directions:
 
 - A start-anchored run must satisfy `can_start_at(index)` *and* begin at offset 0 of its part;
-    inside a rule it must additionally be a **prefix** of the rule (`prefixes[0]`),
-    not merely contained --
+    inside a rule it is asked with `start: true`,
+    so it must be a prefix of the rule's match, not merely contained --
     otherwise `N*` would be placed in a rule matching `WARN`.
-- The end is the mirror image, via `suffixes[len]` and `can_end_at`.
+- The end is the mirror image: `end: true` and `can_end_at`.
 - Anchored at **both** ends, a rule must match the run *exactly*, with nothing around it.
 
 A cap, `MAX_PLACEMENTS_PER_RUN = 2048`, bounds the table.
@@ -682,18 +682,16 @@ With `Q` = query length, `R` = number of runs, `P` = shape parts, `L` = shape li
 | Tier | Cost | Notes |
 | --- | --- | --- |
 | Runs | `O(Q)` | once per query |
-| RunFit | `O(rule size)` per distinct `(rule, run)` | cached, shape-independent |
+| Rule matching | `O(rule size)` per distinct `(rule, query)` | memoized, shape-independent |
 | 1 (`can_match`) | `O(variables + Q)` fast, `O(P x Q)` worst | bits only |
 | 2 (`compose`) | `O(R x positions x placements)` | plus enumeration, budgeted |
 | 3 (engine) | `O(shape NFA x query NFA)` | shape NFA truncated to the last reachable part when unanchored |
 
 ### Known Limitations
 
-- **`RunFit` re-simulates the rule per split point.**
-    For each split `k` of a run it asks whether the rule can end with `run[..k]`
-    / begin with `run[k..]`,
-    which is one automaton intersection per `k`
-    (`RunFit::compute`, `src/search/decompose/run_fit.rs`).
+- **Each piece of a rule is simulated separately.**
+    `matches_piece` runs one automaton intersection per `(rule, piece, pinning)`
+    (`src/search/decompose/run_fit.rs`).
     A single dynamic program over all substrings of the run would answer every split in one pass.
     This is the largest remaining constant factor in tier 2;
     correctness does not depend on it.

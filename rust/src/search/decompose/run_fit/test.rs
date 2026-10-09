@@ -18,144 +18,208 @@ fn test_spec() -> ParsingSpec {
 	])
 }
 
-/// The split points at which the rule can supply a leading part of the run.
-fn suffix_splits(fit: &RunFit) -> Vec<usize> {
-	Vec::from_iter(
-		fit.suffixes
-			.iter()
-			.enumerate()
-			.filter(|(_, fits)| **fits)
-			.map(|(k, _)| k),
-	)
+/// The split points at which the rule can supply a leading part of the run:
+/// `k` such that the rule can *end* with `run[..k]`, with the end pinned.
+fn suffix_splits(cache: &RunFitCache, spec: &ParsingSpec, name: &str, run: &str) -> Vec<usize> {
+	let characters: Vec<char> = run.chars().collect::<Vec<_>>();
+	Vec::from_iter((0..=characters.len()).filter(|&k| {
+		let piece: String = characters[..k].iter().collect::<String>();
+		cache.matches_piece(
+			spec,
+			name,
+			&piece,
+			Pinned {
+				start: false,
+				end: true,
+			},
+		)
+	}))
 }
 
-/// The split points at which the rule can supply a trailing part of the run.
-fn prefix_splits(fit: &RunFit) -> Vec<usize> {
-	Vec::from_iter(
-		fit.prefixes
-			.iter()
-			.enumerate()
-			.filter(|(_, fits)| **fits)
-			.map(|(k, _)| k),
-	)
+/// The split points at which the rule can supply a trailing part of the run:
+/// `k` such that the rule can *begin* with `run[k..]`, with the start pinned.
+fn prefix_splits(cache: &RunFitCache, spec: &ParsingSpec, name: &str, run: &str) -> Vec<usize> {
+	let characters: Vec<char> = run.chars().collect::<Vec<_>>();
+	Vec::from_iter((0..=characters.len()).filter(|&k| {
+		let piece: String = characters[k..].iter().collect::<String>();
+		cache.matches_piece(
+			spec,
+			name,
+			&piece,
+			Pinned {
+				start: true,
+				end: false,
+			},
+		)
+	}))
 }
 
 #[test]
 fn whole_run_inside_a_rule() {
 	let spec: ParsingSpec = test_spec();
+	let cache: RunFitCache = RunFitCache::new();
+	let unpinned: Pinned = Pinned {
+		start: false,
+		end: false,
+	};
 
-	let fit: RunFit = RunFit::compute(&spec, "digits", "123");
-	assert!(fit.fits_wholly(), "a digit run fits inside a digit rule");
-	assert!(!fit.is_empty());
-
-	// A letter run cannot sit inside a digits-only rule.
-	let fit: RunFit = RunFit::compute(&spec, "digits", "abc");
-	assert!(!fit.fits_wholly());
-	assert!(fit.is_empty(), "no whole fit and no partial fit");
-}
-
-#[test]
-fn whole_fit_carries_interpretations() {
-	let spec: ParsingSpec = test_spec();
-	let fit: RunFit = RunFit::compute(&spec, "digits", "123");
-	// The interpretations are what Stage C will embed into the shape's decomposition,
-	// so they must name the rule.
-	assert!(!fit.whole.is_empty());
 	assert!(
-		fit.whole
-			.iter()
-			.flat_map(|interpretation| interpretation.leaf_queries.iter())
-			.any(|leaf_query| &*leaf_query.fully_qualified_name == "digits")
+		cache.matches_piece(&spec, "digits", "123", unpinned),
+		"a digit run sits inside a digit rule"
+	);
+	assert!(
+		!cache.matches_piece(&spec, "digits", "abc", unpinned),
+		"a letter run cannot sit inside a digits-only rule"
 	);
 }
 
 #[test]
 fn empty_contributions_are_always_available() {
 	let spec: ParsingSpec = test_spec();
-	let fit: RunFit = RunFit::compute(&spec, "digits", "abc");
-	// Supplying *none* of the run is always possible,
-	// and is how a rule that is irrelevant to a run is represented.
-	assert!(fit.suffixes[0]);
-	assert!(fit.prefixes[3]);
+	let cache: RunFitCache = RunFitCache::new();
+
+	// Supplying *none* of the run is always possible --
+	// it wraps to the query `*`, which matches any rule --
+	// and is how a rule irrelevant to the run is represented.
+	for pinned in [
+		Pinned {
+			start: false,
+			end: false,
+		},
+		Pinned {
+			start: false,
+			end: true,
+		},
+		Pinned {
+			start: true,
+			end: false,
+		},
+	] {
+		assert!(
+			cache.matches_piece(&spec, "digits", "", pinned),
+			"{pinned:?}"
+		);
+	}
 }
 
 #[test]
 fn straddle_splits_for_a_partially_matching_run() {
 	let spec: ParsingSpec = test_spec();
+	let cache: RunFitCache = RunFitCache::new();
 
-	// Run `12x`: the digits rule can end with `1` or `12`, but not `12x`.
-	let fit: RunFit = RunFit::compute(&spec, "digits", "12x");
-	assert_eq!(vec![0, 1, 2], suffix_splits(&fit));
+	// Run `12x`: the digits rule can end with `1` or `12`, but not `12x`,
+	// and cannot contain it whole either.
+	assert_eq!(vec![0, 1, 2], suffix_splits(&cache, &spec, "digits", "12x"));
 	assert!(
-		!fit.fits_wholly(),
+		!cache.matches_piece(
+			&spec,
+			"digits",
+			"12x",
+			Pinned {
+				start: false,
+				end: false,
+			},
+		),
 		"`12x` cannot sit wholly inside `[0-9]+`"
 	);
-	assert!(fit.has_partial());
 
 	// Run `x12`: the digits rule can begin with `12` (split at 1) or `2` (split at 2).
-	let fit: RunFit = RunFit::compute(&spec, "digits", "x12");
-	assert_eq!(vec![1, 2, 3], prefix_splits(&fit));
+	assert_eq!(vec![1, 2, 3], prefix_splits(&cache, &spec, "digits", "x12"));
 }
 
 #[test]
 fn straddle_is_bounded_by_the_rules_language() {
 	let spec: ParsingSpec = test_spec();
+	let cache: RunFitCache = RunFitCache::new();
 
-	// `level` is a fixed alternation, so only genuine suffixes of a branch qualify.
-	let fit: RunFit = RunFit::compute(&spec, "level", "INFOx");
-	// The rule can end with `I`? No: it must end with a whole branch... but a *prefix* query `*I`
-	// asks whether some match ends with `I`, which `INFO` does not. Only `INFO` ends a branch.
-	assert_eq!(vec![0, 4], suffix_splits(&fit));
-	assert!(!fit.fits_wholly());
+	// `level` is a fixed alternation, so only genuine suffixes of a branch qualify:
+	// the rule can *end* with a piece of `INFOx` only for the empty piece and `INFO`.
+	assert_eq!(vec![0, 4], suffix_splits(&cache, &spec, "level", "INFOx"));
 }
 
 #[test]
-fn run_with_no_relationship_to_the_rule_is_empty() {
+fn run_with_no_relationship_to_the_rule_matches_nothing() {
 	let spec: ParsingSpec = test_spec();
-	let fit: RunFit = RunFit::compute(&spec, "level", "zzz");
-	assert!(fit.is_empty(), "`zzz` shares nothing with INFO|WARN|ERROR");
+	let cache: RunFitCache = RunFitCache::new();
+
+	assert!(
+		!cache.matches_piece(
+			&spec,
+			"level",
+			"zzz",
+			Pinned {
+				start: false,
+				end: false,
+			},
+		),
+		"`zzz` shares nothing with INFO|WARN|ERROR"
+	);
 }
 
 #[test]
 fn special_characters_in_a_run_are_escaped() {
 	let spec: ParsingSpec = spec_with_rules(&[("star", r"a\*b"), ("slash", r"a\\b")]);
+	let cache: RunFitCache = RunFitCache::new();
+	let unpinned: Pinned = Pinned {
+		start: false,
+		end: false,
+	};
 
 	// A literal `*` in the run must not be read as a wildcard.
-	let fit: RunFit = RunFit::compute(&spec, "star", "a*b");
-	assert!(fit.fits_wholly());
+	assert!(cache.matches_piece(&spec, "star", "a*b", unpinned));
 
 	// A literal backslash likewise.
-	let fit: RunFit = RunFit::compute(&spec, "slash", r"a\b");
-	assert!(fit.fits_wholly());
+	assert!(cache.matches_piece(&spec, "slash", r"a\b", unpinned));
 
 	// And a `*` run must not match a rule that has no literal star.
-	let fit: RunFit = RunFit::compute(&spec, "slash", "a*b");
-	assert!(!fit.fits_wholly());
+	assert!(!cache.matches_piece(&spec, "slash", "a*b", unpinned));
 }
 
 #[test]
-fn unknown_rule_has_no_fit() {
+fn unknown_rule_matches_nothing() {
 	let spec: ParsingSpec = test_spec();
+	let cache: RunFitCache = RunFitCache::new();
+
 	// Callers must treat this as "cannot conclude", not as a proof of no match.
-	let fit: RunFit = RunFit::compute(&spec, "nonexistent", "abc");
-	assert!(!fit.fits_wholly());
+	assert!(!cache.matches_piece(
+		&spec,
+		"nonexistent",
+		"abc",
+		Pinned {
+			start: false,
+			end: false,
+		},
+	));
 }
 
 #[test]
-fn cache_returns_the_same_fit() {
+fn cache_reuses_computations() {
 	let spec: ParsingSpec = test_spec();
 	let cache: RunFitCache = RunFitCache::new();
 	assert!(cache.is_empty());
 
-	let first: Arc<RunFit> = cache.get(&spec, "digits", "123");
+	let unpinned: Pinned = Pinned {
+		start: false,
+		end: false,
+	};
+	assert!(cache.matches_piece(&spec, "digits", "123", unpinned));
 	assert_eq!(1, cache.len());
-	let second: Arc<RunFit> = cache.get(&spec, "digits", "123");
-	assert!(Arc::ptr_eq(&first, &second), "a hit must not recompute");
+
+	// A hit does not add an entry. Note the four pinnings are four queries.
+	assert!(cache.matches_piece(&spec, "digits", "123", unpinned));
 	assert_eq!(1, cache.len());
 
 	// Distinct keys are cached separately.
-	let _ = cache.get(&spec, "digits", "456");
-	let _ = cache.get(&spec, "word", "123");
+	let _ = cache.matches_piece(
+		&spec,
+		"digits",
+		"123",
+		Pinned {
+			start: false,
+			end: true,
+		},
+	);
+	let _ = cache.matches_piece(&spec, "word", "123", unpinned);
 	assert_eq!(3, cache.len());
 
 	cache.clear();
@@ -163,12 +227,17 @@ fn cache_returns_the_same_fit() {
 }
 
 #[test]
-fn cache_clone_shares_fits() {
+fn cache_clone_shares_entries() {
 	let spec: ParsingSpec = test_spec();
 	let cache: RunFitCache = RunFitCache::new();
-	let original: Arc<RunFit> = cache.get(&spec, "digits", "123");
+	let unpinned: Pinned = Pinned {
+		start: false,
+		end: false,
+	};
+	assert!(cache.matches_piece(&spec, "digits", "123", unpinned));
 
 	let cloned: RunFitCache = cache.clone();
 	assert_eq!(1, cloned.len());
-	assert!(Arc::ptr_eq(&original, &cloned.get(&spec, "digits", "123")));
+	// The clone holds the same answer rather than recomputing it.
+	assert!(cloned.matches_piece(&spec, "digits", "123", unpinned));
 }

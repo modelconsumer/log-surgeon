@@ -6,7 +6,8 @@
 //! **Placement** (per run, per position): where can this run go? A run must be produced in full,
 //! and there are only three possibilities -- inside one rule, inside the shape's static text,
 //! or straddling a boundary between a rule and what sits beside it. Each possibility is decided
-//! from a cached [`RunFit`] (rule side) or a substring search (static-text side), so the cost
+//! through a cached [`matches_piece`][crate::search::decompose::RunFitCache::matches_piece] call
+//! (rule side) or a substring search (static-text side), so the cost
 //! is independent of how much static text the shape contains.
 //!
 //! If any run has no placement anywhere in the shape, the shape **cannot** match and is rejected
@@ -28,14 +29,12 @@
 #[cfg(test)]
 mod test;
 
-use std::sync::Arc;
-
 use tracing::info;
 
 use crate::parsing_spec::ParsingSpec;
+use crate::search::decompose::Pinned;
 use crate::search::decompose::Query;
 use crate::search::decompose::Run;
-use crate::search::decompose::RunFit;
 use crate::search::decompose::RunFitCache;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapePart;
@@ -259,30 +258,20 @@ impl PlacementTable {
 						)?);
 					},
 					ShapePart::Variable(variable) => {
-						let fit: Arc<RunFit> = fits.get(spec, &variable.name, &run.text);
-
 						// Anchoring demands more than containment. A start-anchored run must be
-						// the first thing the message emits, so every earlier part must be able to
-						// vanish *and* the rule must *begin* with the run -- `prefixes[0]`,
-						// not `fits_wholly` ("contains it somewhere"). Without this a query of `N*`
-						// would be placed in a rule matching `WARN`. The end is the mirror image,
-						// via `suffixes[len]`; anchored at both ends the rule must match the run
-						// exactly, with nothing around it.
-						let fits_here: bool = match (run.anchored_start, run.anchored_end) {
-							(false, false) => fit.fits_wholly(),
-							(true, false) => {
-								model.can_start_at(index)
-									&& fit.prefixes.first().copied().unwrap_or(false)
-							},
-							(false, true) => {
-								model.can_end_at(index)
-									&& fit.suffixes.last().copied().unwrap_or(false)
-							},
-							(true, true) => {
-								model.can_start_at(index)
-									&& model.can_end_at(index) && fits
-									.matches_exactly(spec, &variable.name, &run.text)
-							},
+						// the first thing the message emits, so every earlier part must be able
+						// to vanish *and* the rule's match must *begin* with the run, not
+						// merely contain it: without that a query of `N*` would be placed in a
+						// rule matching `WARN`. The end is the mirror image; anchored at both
+						// ends the rule must match the run exactly, with nothing around it.
+						let fits_here: bool = {
+							let pinned: Pinned = Pinned {
+								start: run.anchored_start,
+								end: run.anchored_end,
+							};
+							(!run.anchored_start || model.can_start_at(index))
+								&& (!run.anchored_end || model.can_end_at(index))
+								&& fits.matches_piece(spec, &variable.name, &run.text, pinned)
 						};
 						if fits_here {
 							// Wholly inside a rule: no fixed position within the part.
@@ -297,7 +286,7 @@ impl PlacementTable {
 
 						// Straddle: this rule supplies a leading piece of the run,
 						// and the following parts supply the rest.
-						for_run.extend(Self::straddles_from(spec, model, run, index, &fit, fits)?);
+						for_run.extend(Self::straddles_from(spec, model, run, index, fits)?);
 					},
 				}
 
@@ -390,7 +379,6 @@ impl PlacementTable {
 		model: &ShapeModel,
 		run: &Run,
 		index: usize,
-		fit: &RunFit,
 		fits: &RunFitCache,
 	) -> Option<Vec<Placement>> {
 		// A start-anchored run cannot begin part-way through a rule's output
@@ -417,17 +405,19 @@ impl PlacementTable {
 		// since `split == 0` and `split == len` are the non-straddling cases handled elsewhere.
 		for split in 1..characters.len() {
 			let head: String = characters[..split].iter().collect::<String>();
-			// `suffixes[split]` only says the rule can *end* with this text. An anchored run
-			// additionally pins the rule's start, so the rule must match the piece exactly;
+			// An anchored run pins the rule's start as well as its end,
+			// so the rule must match the piece exactly;
 			// otherwise `NIn*` would be split as `level=N` even though no level is just `N`.
-			let fits_here: bool = if run.anchored_start {
-				model.parts[index]
-					.variable_name()
-					.is_some_and(|name| fits.matches_exactly(spec, name, &head))
-			} else {
-				fit.suffixes.get(split).copied().unwrap_or(false)
+			let pinned: Pinned = Pinned {
+				start: run.anchored_start,
+				end: true,
 			};
-			if !fits_here {
+			if !fits.matches_piece(
+				spec,
+				model.parts[index].variable_name().expect("a variable"),
+				&head,
+				pinned,
+			) {
 				continue;
 			}
 
@@ -681,20 +671,18 @@ impl Straddle<'_> {
 				let mut results: Vec<Placement> = Vec::new();
 				let remaining: String = remaining.iter().collect::<String>();
 
-				// The rule finishes the run: it can begin with everything that remains.
-				//
-				// `prefixes[consumed]` only says the rule can *begin* with the remainder,
-				// leaving it free to emit more afterwards. An end-anchored run forbids that,
-				// so the rule must match the remainder exactly and nothing may follow it.
-				let finishes_here: bool = if self.run.anchored_end {
-					self.model.can_end_at(part)
-						&& self
-							.fits
-							.matches_exactly(self.spec, &variable.name, &remaining)
-				} else {
-					let fit: Arc<RunFit> = self.fits.get(self.spec, &variable.name, &self.run.text);
-					fit.prefixes.get(consumed).copied().unwrap_or(false)
+				// The rule finishes the run: it must *begin* with everything that remains.
+				// An end-anchored run additionally forbids the rule from emitting more
+				// afterwards, so the rule must match the remainder exactly
+				// and nothing may follow it (`can_end_at`).
+				let pinned: Pinned = Pinned {
+					start: true,
+					end: self.run.anchored_end,
 				};
+				let finishes_here: bool = (!self.run.anchored_end || self.model.can_end_at(part))
+					&& self
+						.fits
+						.matches_piece(self.spec, &variable.name, &remaining, pinned);
 				if finishes_here {
 					let mut pieces: Vec<Piece> = pieces.clone();
 					pieces.push(Piece {
@@ -733,10 +721,15 @@ impl Straddle<'_> {
 					let middle: String = self.characters[consumed..(consumed + take)]
 						.iter()
 						.collect::<String>();
-					if !self
-						.fits
-						.matches_exactly(self.spec, &variable.name, &middle)
-					{
+					if !self.fits.matches_piece(
+						self.spec,
+						&variable.name,
+						&middle,
+						Pinned {
+							start: true,
+							end: true,
+						},
+					) {
 						continue;
 					}
 					let mut pieces: Vec<Piece> = pieces.clone();

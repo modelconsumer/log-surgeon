@@ -54,7 +54,7 @@ pub use placement::can_compose;
 pub use prefilter::can_match;
 pub use query::Query;
 pub use query::Run;
-pub use run_fit::RunFit;
+pub use run_fit::Pinned;
 pub use run_fit::RunFitCache;
 pub use shape::ShapeModel;
 pub use shape::ShapePart;
