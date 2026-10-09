@@ -177,6 +177,42 @@ fn wildcard_only_query_has_one_empty_composition() {
 	assert!(compositions[0].literals.is_empty());
 }
 
+/// An end-anchored query pins every part past the last constrained one to the
+/// empty string; composition renders that as an empty capture, like the engine.
+#[test]
+fn end_anchored_tail_is_empty_captures() {
+	let spec: ParsingSpec = spec_with_rules(&[
+		("digits", "[0-9]+"),
+		("optional", r"<(?<pad>[!?]*)>"),
+		("word", "[a-z]+"),
+	]);
+
+	// `*hello` against `msg=%word%%optional.pad%`: `%optional.pad%` can vanish,
+	// and placement admits it as the message's end, so it is part of the tail.
+	assert_eq!(
+		vec!["'*' <word=*hello> <optional.pad=>"],
+		interpretations_of(&spec, "msg=%word%%optional.pad%", "*hello")
+	);
+	// A *non*-nullable tail cannot vanish; the shape still does not match.
+	assert!(!composes(&spec, "id=%digits%", "*id="));
+}
+
+/// The empty query, anchored at both ends, pins *every* part to producing nothing.
+#[test]
+fn empty_query_pins_every_variable_to_empty() {
+	let spec: ParsingSpec = spec_with_rules(&[("optional", r"<(?<pad>[!?]*)>")]);
+
+	// A shape of only nullable variables matches the empty query,
+	// each as an empty capture.
+	assert_eq!(
+		vec!["<optional.pad=> <optional.pad=>"],
+		interpretations_of(&spec, "%optional.pad%%optional.pad%", "")
+	);
+	// Static text cannot vanish.
+	assert!(!composes(&spec, "abc", ""));
+	assert!(!composes(&spec, "x%optional.pad%", ""));
+}
+
 #[test]
 fn exhausted_budget_is_unknown_not_impossible() {
 	let spec: ParsingSpec = test_spec();

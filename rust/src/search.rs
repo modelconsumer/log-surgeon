@@ -16,7 +16,7 @@ use crate::regex::Regex;
 use crate::search::decompose::ComposeBudget;
 use crate::search::decompose::Composed;
 use crate::search::decompose::PlacementTable;
-use crate::search::decompose::Run;
+use crate::search::decompose::Query;
 use crate::search::decompose::RunFitCache;
 use crate::search::decompose::ShapeModel;
 use crate::search::decompose::ShapeModelCache;
@@ -133,13 +133,83 @@ struct SearchStringView<'a> {
 
 /// A shape's automaton, possibly cut short, with what that cut left out.
 ///
-/// See [`SearchStringView::truncated_automata`]. The flag is what lets the rendering stay
-/// identical to the full shape's: dropped static text still has to appear as a trailing `'*'`,
-/// because it is text the message contains even though the query does not constrain it.
+/// See [`SearchStringView::truncated_automata`]. The tail is what lets the rendering stay
+/// identical to the un-truncated shape's: dropped static text still has to appear as a
+/// trailing `'*'`, because it is text the message contains even though the query does not
+/// constrain it.
 struct TruncatedShape {
 	automata: Tnfa,
-	/// Whether the parts dropped from the end included any static text.
-	dropped_static: bool,
+	/// What the dropped parts (if any) are made of; [`Tail::Empty`] for a complete shape.
+	dropped: Tail,
+}
+
+/// What the parts after the last rendered one consist of.
+///
+/// An unanchored query's trailing wildcard absorbs them,
+/// but the *rendering* still depends on what they are:
+/// static text must be reported (as a `'*'` on the preceding static sub-query,
+/// or one of its own), while variables are unconstrained captures, which are omitted.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum Tail {
+	/// Nothing follows.
+	Empty,
+	/// Only rule references follow.
+	OnlyVariables,
+	/// Some static text follows.
+	HasStatic,
+}
+
+impl Tail {
+	/// Classifies `parts`, a slice of everything after the last rendered part.
+	fn of_parts(parts: &[decompose::ShapePart]) -> Self {
+		if parts.is_empty() {
+			Self::Empty
+		} else if parts.iter().all(decompose::ShapePart::is_variable) {
+			Self::OnlyVariables
+		} else {
+			Self::HasStatic
+		}
+	}
+
+	/// Classifies a suffix of *rendered* sub-queries, the ones the engine's path dropped.
+	fn of_leaves(leaf_queries: &[LeafQuery]) -> Self {
+		if leaf_queries.is_empty() {
+			Self::Empty
+		} else if leaf_queries.iter().any(LeafQuery::is_static_text) {
+			Self::HasStatic
+		} else {
+			Self::OnlyVariables
+		}
+	}
+
+	/// Combines two tails over disjoint regions: static text in either dominates.
+	fn or(self, other: Self) -> Self {
+		std::cmp::max(self, other)
+	}
+
+	/// Accounts for `tail` in a rendered interpretation covering parts up to it,
+	/// for an unanchored query. One rule, shared by composition and the engine:
+	///
+	/// - nothing rendered at all -> the whole query was unconstrained: a single `'*'`;
+	/// - the last sub-query is static -> it must permit *some*thing after it,
+	///   whenever anything follows (its bare text would assert the message ends there);
+	/// - the last sub-query is a capture -> a `'*'` sub-query is added,
+	///   but only to stand for dropped *static text*;
+	///   dropped variables are unconstrained captures, which are omitted.
+	fn finish_unanchored(self, leaf_queries: &mut Vec<LeafQuery>) {
+		if leaf_queries.is_empty() {
+			leaf_queries.push(LeafQuery::new_static_text(vec![SymbolicChar::GlobStar]));
+			return;
+		}
+		let last: &mut LeafQuery = leaf_queries.last_mut().expect("non-empty");
+		if last.is_static_text() {
+			if Self::Empty != self {
+				last.append_wildcard();
+			}
+		} else if Self::HasStatic == self {
+			leaf_queries.push(LeafQuery::new_static_text(vec![SymbolicChar::GlobStar]));
+		}
+	}
 }
 
 impl std::fmt::Debug for SearchStringView<'_> {
@@ -323,7 +393,7 @@ impl SearchString {
 		// this is where the composition path gets its leverage,
 		// since a corpus mentions the same few rules over and over,
 		// and a rule's behaviour on a run does not depend on the shape referencing it.
-		let runs: Vec<Run> = decompose::runs_of(&self.symbols);
+		let query: Query<'_> = Query::new(self);
 		let fits: RunFitCache = RunFitCache::new();
 
 		// Resolve every shape before searching any, so an unsupported shape fails the call outright
@@ -334,7 +404,7 @@ impl SearchString {
 		let view: SearchStringView<'_> = self.view(0, self.symbols.len());
 		std::iter::zip(&models, log_shapes)
 			.map(|(model, &shape)| {
-				view.interpretations_for_log_shape(spec, model, shape, &runs, &fits)
+				view.interpretations_for_log_shape(spec, model, shape, &query, &fits)
 			})
 			.collect::<Vec<_>>()
 	}
@@ -348,9 +418,9 @@ impl SearchString {
 		spec: &ParsingSpec,
 		log_shape: &str,
 	) -> Vec<Interpretation> {
-		// TODO unwrap
-		let automata: Tnfa = spec.automata_for_shape(log_shape).unwrap();
-		self.interpretations_for_automata(spec, &automata, false)
+		let model: ShapeModel = ShapeModel::new(spec, log_shape);
+		let automata: Tnfa = Self::automata_for_prefix(spec, &model, model.parts.len() - 1);
+		self.interpretations_for_automata(spec, &automata, &[])
 	}
 
 	/// Interpretations for an already-built shape automaton.
@@ -358,24 +428,35 @@ impl SearchString {
 	/// Exposed so that tests can pin a *truncated* automaton (see
 	/// [`ParsingSpec::automata_for_fragments`]) against the full one it stands in for.
 	///
-	/// `dropped_static` says whether the parts cut from the end of the shape included
-	/// any static text; pass `false` for a complete shape.
-	/// It is needed because such text is still reported -- as a trailing `'*'` --
+	/// `dropped` are the parts the automaton is missing from the shape's end, if any.
+	/// It is needed because dropped static text is still reported -- as a trailing `'*'` --
 	/// by the full shape, so a truncated one has to put it back to render identically.
+	/// Pass an empty slice for a complete shape.
 	pub fn interpretations_for_automata(
 		&self,
 		spec: &ParsingSpec,
 		automata: &Tnfa,
-		dropped_static: bool,
+		dropped: &[decompose::ShapePart],
 	) -> Vec<Interpretation> {
 		self.view(0, self.symbols.len()).interpretations_for_shape(
 			spec,
 			&TruncatedShape {
 				// TODO: avoid this clone by borrowing the automaton instead.
 				automata: automata.clone(),
-				dropped_static,
+				dropped: Tail::of_parts(dropped),
 			},
 		)
+	}
+
+	/// Builds the automaton for shape parts `0..=end`, round-tripping through the model's
+	/// fragments so the parts built are exactly the parts placement reasoned about.
+	///
+	/// A `ShapeModel` already resolved every variable (see [`ShapeModel::new`]),
+	/// so building from its fragments cannot fail.
+	fn automata_for_prefix(spec: &ParsingSpec, model: &ShapeModel, end: usize) -> Tnfa {
+		let fragments: Vec<LogShapeFragment> = model.fragments_in(0, end);
+		spec.automata_for_fragments(&fragments)
+			.expect("the model already resolved every rule in the shape")
 	}
 
 	fn view(&self, start: usize, end: usize) -> SearchStringView<'_> {
@@ -432,44 +513,34 @@ impl<'a> SearchStringView<'a> {
 		spec: &ParsingSpec,
 		model: &ShapeModel,
 		shape: &str,
-		runs: &[Run],
+		query: &Query<'_>,
 		fits: &RunFitCache,
 	) -> Vec<Interpretation> {
 		now!(t0);
 
-		if !decompose::can_match(model, self.as_str()) {
+		if !decompose::can_match(model, query.symbols) {
 			trace!("decompose rejected shape {shape:.256}");
 			return Vec::new();
 		}
 
 		// `None` means a resource cap was exceeded, so the table is incomplete and nothing may be
 		// concluded from it; fall back to the engine.
-		let maybe_table: Option<PlacementTable> = PlacementTable::compute(spec, model, runs, fits);
+		let maybe_table: Option<PlacementTable> = PlacementTable::compute(spec, model, query, fits);
 
 		if let Some(table) = maybe_table.as_ref()
 			&& let Some(interpretations) =
-				self.composed_interpretations(spec, model, table, runs, fits)
+				self.composed_interpretations(spec, model, table, query, fits)
 		{
 			now!(t1);
 			trace!("composed shape in {} ms {shape:.256}", millis!(t0, t1));
 			return interpretations;
 		}
 
-		// Composition declined to conclude,
-		// but its placements still bound where the query's literal text can sit,
-		// which is enough to drop the shape's unreachable tail from the automaton.
-		let maybe_truncated: Option<TruncatedShape> = maybe_table
-			.as_ref()
-			.and_then(|table| self.truncated_automata(spec, model, table));
-
-		let truncated: TruncatedShape = match maybe_truncated {
-			Some(truncated) => truncated,
-			// TODO unwrap
-			None => TruncatedShape {
-				automata: spec.automata_for_shape(shape).unwrap(),
-				dropped_static: false,
-			},
-		};
+		// Composition declined to conclude, so build the shape's automaton and use the engine.
+		// The table still bounds where the query's literal text can sit,
+		// which is what decides how much of the shape has to be built;
+		// see [`Self::truncated_automata`].
+		let truncated: TruncatedShape = self.truncated_automata(spec, model, query, &maybe_table);
 		let interpretations: Vec<Interpretation> = self.interpretations_for_shape(spec, &truncated);
 		now!(t1);
 		debug!("- took {} ms", millis!(t0, t1));
@@ -488,6 +559,9 @@ impl<'a> SearchStringView<'a> {
 	/// [`PlacementTable::last_reachable_part`] bounds every placement of every run, so no literal
 	/// character of the query can land beyond it. Truncating there is exactly "do not simulate the
 	/// query's trailing wildcard": the parts dropped are the ones it would have consumed.
+	/// Nothing is truncated when the query is anchored at the end (it must consume the shape
+	/// through to its end), when the last part is reachable anyway, or when the table itself
+	/// was incomplete and so does not bound the reach.
 	///
 	/// Only the *tail* is dropped. The head must be kept verbatim --
 	/// the query's leading wildcard still has to traverse it,
@@ -495,48 +569,44 @@ impl<'a> SearchStringView<'a> {
 	/// letting runs straddle where the real static text forbids it
 	/// and inventing interpretations the full shape does not have.
 	///
-	/// Returns `None` when there is nothing to truncate, so the caller builds the shape as before.
+	/// The automaton for the kept prefix is built from the model's own fragments,
+	/// never from the shape string,
+	/// so the parts built are exactly the parts placement reasoned about
+	/// (see [`SearchString::automata_for_prefix`]).
 	fn truncated_automata(
 		&self,
 		spec: &ParsingSpec,
 		model: &ShapeModel,
-		table: &PlacementTable,
-	) -> Option<TruncatedShape> {
-		// A query anchored at the end must consume the shape through to its end, so nothing may be
-		// dropped: the truncated parts are precisely the ones it still has to match.
-		if self.anchored_end() {
-			return None;
+		query: &Query<'_>,
+		maybe_table: &Option<PlacementTable>,
+	) -> TruncatedShape {
+		let last: usize = model.parts.len() - 1;
+
+		let end: usize = if query.anchored_end {
+			last
+		} else {
+			maybe_table
+				.as_ref()
+				.and_then(PlacementTable::last_reachable_part)
+				.map_or(last, |end| end.min(last))
+		};
+
+		if end < last {
+			trace!(
+				"truncated shape from {} parts to 0..={end}",
+				model.parts.len()
+			);
 		}
 
-		let end: usize = table.last_reachable_part()?;
-		let last: usize = model.parts.len().checked_sub(1)?;
-
-		if end >= last {
-			return None;
+		TruncatedShape {
+			automata: SearchString::automata_for_prefix(spec, model, end),
+			// Dropped static text is still reported by the full shape, as a trailing `'*'` --
+			// it is text the message contains even though the query says nothing about it --
+			// so the truncated rendering has to put that back.
+			// A tail of only rule references needs nothing:
+			// those are unconstrained captures, which are omitted either way.
+			dropped: Tail::of_parts(&model.parts[(end + 1)..]),
 		}
-
-		let fragments: Vec<LogShapeFragment> = model.fragments_in(0, end);
-		let truncated: Tnfa = spec.automata_for_fragments(&fragments).ok()?;
-
-		trace!(
-			"truncated shape from {} parts to 0..={end}",
-			model.parts.len()
-		);
-
-		// Whether the dropped tail contains any static text. If it does,
-		// the full shape would have reported it as a trailing `'*'` --
-		// it is text the message still contains, even though the query says nothing about it --
-		// so the truncated rendering has to put that back.
-		// A tail of only rule references needs nothing:
-		// those are unconstrained captures, which are omitted either way.
-		let dropped_static: bool = model.parts[(end + 1)..]
-			.iter()
-			.any(|part| !part.is_variable());
-
-		Some(TruncatedShape {
-			automata: truncated,
-			dropped_static,
-		})
 	}
 
 	/// Interpretations for `model` via [`crate::search::decompose::compose`].
@@ -548,25 +618,17 @@ impl<'a> SearchStringView<'a> {
 		spec: &ParsingSpec,
 		model: &ShapeModel,
 		table: &PlacementTable,
-		runs: &[Run],
+		query: &Query<'_>,
 		fits: &RunFitCache,
 	) -> Option<Vec<Interpretation>> {
-		match decompose::compose(
-			spec,
-			model,
-			table,
-			runs,
-			self.anchored_end(),
-			fits,
-			ComposeBudget::default(),
-		) {
+		match decompose::compose(spec, model, table, query, fits, ComposeBudget::default()) {
 			Composed::Impossible => Some(Vec::new()),
 			Composed::Unknown => None,
 			Composed::Compositions(compositions) => {
 				let mut interpretations: Vec<Interpretation> = Vec::from_iter(
 					compositions
 						.iter()
-						.map(|composition| composition.to_interpretation(model, runs)),
+						.map(|composition| composition.to_interpretation(model, query)),
 				);
 				// The engine's callers expect a canonical, duplicate-free set;
 				// distinct compositions can render identically once positions collapse
@@ -617,7 +679,7 @@ impl<'a> SearchStringView<'a> {
 	/// which would otherwise have to guess by stopping early.
 	fn interpretations_for_shape(
 		&self,
-		_spec: &ParsingSpec,
+		spec: &ParsingSpec,
 		shape: &TruncatedShape,
 	) -> Vec<Interpretation> {
 		let shape_nfa: &Tnfa = &shape.automata;
@@ -640,29 +702,19 @@ impl<'a> SearchStringView<'a> {
 			return Vec::new();
 		}
 
-		let paths: Vec<Path> = intersection.compute_paths(_spec);
+		let paths: Vec<Path> = intersection.compute_paths(spec);
 
 		for path in paths.iter() {
 			let mut leaf_queries: Vec<LeafQuery> = LeafQuery::from_path(path);
 
 			if !anchored_end {
-				// A truncated tail containing static text was reported by the full shape
-				// as a trailing `'*'`; restore it so both render the same.
-				// It is added before trimming,
-				// so that it is treated exactly like the static part it stands for.
-				//
-				// If the path already ends in static text the two are adjacent,
-				// which [`Interpretation::invariants`] forbids,
-				// so the wildcard joins that value instead of becoming a sub-query of its own --
-				// the same merge composition performs.
-				if shape.dropped_static {
-					match leaf_queries.last_mut() {
-						Some(last) if last.is_static_text() => last.append_wildcard(),
-						_ => leaf_queries
-							.push(LeafQuery::new_static_text(vec![SymbolicChar::GlobStar])),
-					}
-				}
-				Self::drop_trailing_unconstrained(&mut leaf_queries);
+				// An unanchored query says nothing about the tail of the message,
+				// so every rule reference after its last literal character is
+				// unconstrained and is dropped (composition omits exactly these).
+				let trimmed: Tail = Self::truncate_to_last_constrained(&mut leaf_queries);
+				// What was trimmed, together with what truncation dropped from the
+				// shape's automaton, is the tail the rendering must still account for.
+				(trimmed.or(shape.dropped)).finish_unanchored(&mut leaf_queries);
 			}
 
 			interpretations.push(Interpretation { leaf_queries });
@@ -670,35 +722,23 @@ impl<'a> SearchStringView<'a> {
 
 		interpretations.iter().for_each(Interpretation::invariants);
 
-		interpretations.sort();
-		interpretations.dedup();
-
 		Interpretation::dedup_covered_interpretations(&mut interpretations);
 
 		interpretations
 	}
 
-	/// Drops the *captures* past the last sub-query the query constrains.
+	/// Drops the sub-queries past the last one the query constrains, and classifies them.
 	///
-	/// An unanchored query says nothing about the tail of the message,
-	/// so every rule reference after its last literal character is unconstrained:
-	/// each would be reported as a bare `*`, carrying no information.
-	/// Composition omits exactly these,
-	/// so dropping them here is what keeps the two paths reporting the same thing.
+	/// A capture past the last constrained sub-query is vacuous (the query says nothing
+	/// about it); a static one is kept as-is to the left of `last_constrained` only when
+	/// it sits between two constrained parts. Trailing static text is reported by
+	/// [`Tail::finish_unanchored`], so it is classified here rather than kept.
+	///
 	/// Positional identity is unharmed because it is read left to right --
 	/// the first `n` sub-queries still correspond to the first `n` shape parts --
 	/// so only trailing entries may go,
 	/// and a *leading* or *interior* vacuous capture is always retained.
-	///
-	/// Trailing **static text** is kept,
-	/// and given a trailing `*` if it does not already end in one.
-	/// A static value has to glob-match its part's text exactly,
-	/// so a bare `'a'` where the shape continues `a%word%b...`
-	/// would assert the message *ends* at `a` -- false, and matching nothing.
-	/// The wildcard is what the query's own trailing wildcard means at that position,
-	/// and it is added here rather than in the automaton,
-	/// because that is where the shape's remaining text stops being reported.
-	fn drop_trailing_unconstrained(leaf_queries: &mut Vec<LeafQuery>) {
+	fn truncate_to_last_constrained(leaf_queries: &mut Vec<LeafQuery>) -> Tail {
 		let last_constrained: Option<usize> = leaf_queries.iter().rposition(|leaf_query| {
 			leaf_query
 				.symbolic_value
@@ -707,29 +747,16 @@ impl<'a> SearchStringView<'a> {
 		});
 
 		let Some(last) = last_constrained else {
-			// Nothing is constrained at all; a single `*` says exactly that.
+			let tail: Tail = Tail::of_leaves(leaf_queries);
+			// A path that constrains nothing describes a single unrestricted wildcard.
 			leaf_queries.clear();
 			leaf_queries.push(LeafQuery::new_static_text(vec![SymbolicChar::GlobStar]));
-			return;
+			return tail;
 		};
 
-		// Keep a trailing static sub-query: unlike a capture, it is not vacuous --
-		// it names text the message must still contain,
-		// and the query's trailing wildcard covers only what follows *it*.
-		let keep: usize = match leaf_queries.get(last + 1) {
-			Some(next) if next.is_static_text() => last + 2,
-			_ => last + 1,
-		};
-		leaf_queries.truncate(keep);
-
-		// The last sub-query is now where the query's trailing wildcard applies,
-		// so it must permit anything after it.
-		// A capture is already padded by the path itself; static text may not be.
-		if let Some(final_leaf_query) = leaf_queries.last_mut()
-			&& final_leaf_query.is_static_text()
-		{
-			final_leaf_query.append_wildcard();
-		}
+		let tail: Tail = Tail::of_leaves(&leaf_queries[(last + 1)..]);
+		leaf_queries.truncate(last + 1);
+		tail
 	}
 
 	fn interpretations_for_nfa(

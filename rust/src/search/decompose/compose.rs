@@ -178,8 +178,11 @@ impl Composition {
 	pub fn to_interpretation(&self, model: &ShapeModel, query: &Query<'_>) -> Interpretation {
 		let rendered: Vec<RenderedPart> = self.rendered_parts(model, query);
 
-		// Nothing is constrained, so the query is satisfied without attributing text anywhere.
-		if rendered.is_empty() {
+		// Nothing is constrained, so a *runless* query is satisfied without
+		// attributing text anywhere: `*` (unanchored) reports a bare `'*'`,
+		// while the empty query (anchored at both ends) falls through below --
+		// every part must be an empty capture, which the anchored-end tail adds.
+		if rendered.is_empty() && !query.anchored_end {
 			return Interpretation {
 				leaf_queries: vec![LeafQuery::new_static_text(vec![SymbolicChar::GlobStar])],
 			};
@@ -204,14 +207,45 @@ impl Composition {
 			}
 		}
 
-		if !query.anchored_end
-			&& let Some(last_constrained) = self.last_constrained()
-		{
+		if query.anchored_end {
+			// The tail past the last constrained part is pinned to the empty string:
+			// placement already guarantees every part there can vanish
+			// (`can_end_at` admits only those, and `can_be_empty` lets no static
+			// text through), so each is an empty capture -- the engine's own
+			// spelling of "pinned to producing nothing".
+			for part in self.tail_start(model)..model.parts.len() {
+				let ShapePart::Variable(variable) = &model.parts[part] else {
+					unreachable!("an end-anchored tail cannot contain static text");
+				};
+				debug_assert!(variable.can_match_empty);
+				if let Some(capture) = variable.alternatives.first() {
+					leaf_queries.push(LeafQuery::new_rule(
+						capture.fully_qualified_name.clone(),
+						Vec::new(),
+					));
+				}
+			}
+		} else if let Some(last_constrained) = self.last_constrained() {
 			crate::search::Tail::of_parts(&model.parts[(last_constrained + 1)..])
 				.finish_unanchored(&mut leaf_queries);
 		}
 
 		Interpretation { leaf_queries }
+	}
+
+	/// Index of the first part *not* rendered, if any; for the empty composition
+	/// (the empty query) that is the start of the shape, so every part is the tail.
+	///
+	/// Placement already guarantees (`Straddle::complete`, and `extend`'s
+	/// end-anchored branches) that every part after the last constrained one can
+	/// emit nothing: `can_end_at` admits only those, and `can_be_empty` lets no
+	/// static text through.
+	fn tail_start(&self, model: &ShapeModel) -> usize {
+		if self.captures.is_empty() && self.literals.is_empty() {
+			return 0;
+		}
+		self.last_constrained()
+			.map_or(model.parts.len(), |part| part + 1)
 	}
 
 	/// The last part a run *lands in*, for rendering: straddling runs
@@ -541,32 +575,26 @@ pub fn compose(
 		return Composed::Impossible;
 	}
 
-	// An end-anchored query pins the shape's trailing parts to producing *nothing*,
-	// which is a real constraint this module cannot express: rendering is truncated
-	// at the last constrained part (see `rendered_parts`), justified by the query's
-	// trailing wildcard leaving the rest unconstrained. With no such wildcard
-	// those parts are constrained -- to the empty string -- and the engine reports
-	// that precisely, as an empty capture. Defer to it rather than render a `*` that
-	// claims the opposite.
-	//
-	// Read off the query rather than the last run, so the empty query --
-	// anchored at both ends, with no runs at all -- is deferred too.
-	if query.anchored_end && model.parts.last().is_some_and(ShapePart::can_be_empty) {
-		return Composed::Unknown;
-	}
-
 	let num_runs: usize = table.placements.len();
 	if 0 == num_runs {
-		// With no runs the query is either `*`, which constrains nothing and has exactly one
-		// (empty) decomposition, or the empty query, which pins *every* part to producing
-		// nothing -- a constraint only the engine can express (as above).
-		if query.anchored_end {
-			return Composed::Unknown;
+		// With no runs the query constrains nothing (`*`) or everything (the empty query).
+		// For `*` there is exactly one decomposition, the empty one.
+		if !query.anchored_end {
+			return Composed::Compositions(vec![Composition {
+				captures: Vec::new(),
+				literals: Vec::new(),
+			}]);
 		}
-		return Composed::Compositions(vec![Composition {
-			captures: Vec::new(),
-			literals: Vec::new(),
-		}]);
+		// The empty query pins *every* part to producing nothing; a part that
+		// cannot vanish makes the match impossible. A rule that can vanish ends
+		// up as an empty capture; see `to_interpretation`.
+		if model.parts.iter().all(ShapePart::can_be_empty) {
+			return Composed::Compositions(vec![Composition {
+				captures: Vec::new(),
+				literals: Vec::new(),
+			}]);
+		}
+		return Composed::Impossible;
 	}
 
 	// Feasibility first, as *bits*. Keeping this separate from enumeration is what bounds

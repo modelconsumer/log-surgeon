@@ -99,7 +99,7 @@ The predicates are consulted only where a decision genuinely depends on them:
 
 - `truncated_automata` -- an end-anchored query must reach the shape's end, so nothing may be cut;
 - `compose` -- an end-anchored query pins trailing nullable parts to the empty string,
-    which composition cannot render, so it defers to the engine
+    which rendering emits as *empty captures*
     (the predicate comes from the `Query`, not from its runs:
     the empty query has no runs at all, yet is anchored);
 - the unanchored-tail rule -- only an unanchored query leaves the tail unconstrained;
@@ -151,7 +151,8 @@ there is no prefix-truncation.
 
 The empty query is the extreme case: anchored at both ends with no literal text,
 it pins *every* variable to the empty string and matches only a shape that can produce nothing.
-Composition has no runs to place and so defers it to the engine on the same grounds.
+Composition has no runs to place; it renders the shape as a row of empty captures
+(a shape with static text cannot vanish, so such a shape is rejected outright).
 
 ### Architecture
 
@@ -424,9 +425,8 @@ What sits past the last constrained part is rendered by the **tail rule**
 
 > When the query is end-anchored those trailing references are *not* unconstrained
 > but pinned to the empty string.
-> Composition cannot render that,
-> so it returns `Composed::Unknown` and defers to the engine,
-> which reports the exact empty captures.
+> Composition renders exactly that, as one empty capture per trailing variable --
+> the same thing the engine reports.
 
 The rendering deliberately does **not** reproduce the engine's wildcard *placement* inside a value
 (the engine may write `INFO*` where composition writes `*INFO*`).
