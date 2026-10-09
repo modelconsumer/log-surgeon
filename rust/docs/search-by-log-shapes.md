@@ -537,29 +537,26 @@ and `dedup_covered_interpretations` drops interpretations another already covers
 
 [`LeafQuery::covers`][covers] decides
 whether one sub-query's value describes everything another's does.
-It is a **conservative syntactic test, not glob containment**:
-it compares the two values wildcard-segment by wildcard-segment,
-so it only sees a containment when the wildcards line up positionally.
-It reports `false` for `aa*` against `aaa*`,
-even though every string matching the latter matches the former.
+It is **exact glob containment**:
+the names must agree, and every string matching the other value must match this one.
+For globs whose only wildcard is `*`,
+that holds iff this value matches the other value with each of its `*` replaced by a fresh
+symbol no literal equals.
+So `glob_covers` is an ordinary `O(n x m)` glob match in which a `*` of the other value
+is a single token only a `*` of this value can consume.
+It sees, e.g.
+`aa*` covering `aaa*`, which a segment-by-segment comparison would miss.
+Values are query-length, so the quadratic match is cheap.
 
-Only one direction is guaranteed --
-`covers` implies containment, never the converse --
-and that is the direction `dedup_covered_interpretations` needs:
-a missed containment leaves a redundant interpretation,
-whereas a spurious one would delete a real answer.
-Deciding true containment would need a quadratic match over the two patterns,
-which is not worth it merely to tidy the output.
-The result is therefore **not guaranteed to be a minimal antichain**.
-
-`covers` is reflexive and transitive only on values with **no adjacent wildcards**,
-which is what makes the dedup loop reach a fixpoint.
-Its fast path recognises a lone `*` as universal,
-but `**` falls through to the segment loop and fails even against itself.
-Every producer emits values in that normal form --
+Being language containment, `covers` is reflexive and transitive on any values,
+which is what makes the dedup loop reach a fixpoint,
+and the result is a **minimal antichain** up to equal languages
+(two values with the same language, e.g. `a**` and `a*`, cover each other;
+the first one kept wins).
+Producers still emit values with no adjacent wildcards --
 `symbolic_value_of` emits at most one leading and one trailing `*`,
 and `condense_wildcards` collapses any doubling introduced by merging --
-and `Interpretation::invariants` asserts it.
+and `Interpretation::invariants` asserts it, but `covers` no longer relies on it.
 
 The loop itself builds an antichain in one pass per candidate:
 a candidate covered by a survivor is dropped,

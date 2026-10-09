@@ -180,20 +180,16 @@ fn glob_matches(pattern: &[SymbolicChar], text: &[char]) -> bool {
 	}
 }
 
-/// Every value with no adjacent wildcards, up to `length` symbols over `alphabet`.
-fn values_in_normal_form(alphabet: &[char], length: usize) -> Vec<Vec<SymbolicChar>> {
-	let mut found: Vec<Vec<SymbolicChar>> = Vec::new();
+/// Every value up to `length` symbols over `alphabet` and `*`,
+/// including ones with adjacent wildcards.
+fn all_values(alphabet: &[char], length: usize) -> Vec<Vec<SymbolicChar>> {
+	let mut found: Vec<Vec<SymbolicChar>> = vec![Vec::new()];
 	let mut frontier: Vec<Vec<SymbolicChar>> = vec![Vec::new()];
-	found.push(Vec::new());
 
 	for _ in 0..length {
 		let mut next: Vec<Vec<SymbolicChar>> = Vec::new();
 		for value in frontier.iter() {
-			// Adjacent wildcards are excluded: no producer emits them, and `covers` is not even
-			// reflexive on them. See `Interpretation::invariants`.
-			if !matches!(value.last(), Some(SymbolicChar::GlobStar)) {
-				next.push([value.as_slice(), &[SymbolicChar::GlobStar]].concat());
-			}
+			next.push([value.as_slice(), &[SymbolicChar::GlobStar]].concat());
 			for &character in alphabet.iter() {
 				next.push([value.as_slice(), &[SymbolicChar::Literal(character)]].concat());
 			}
@@ -205,24 +201,22 @@ fn values_in_normal_form(alphabet: &[char], length: usize) -> Vec<Vec<SymbolicCh
 	found
 }
 
-/// `covers` must never claim a containment that does not hold.
+/// `covers` is exactly glob containment: it holds iff every word matching the specific
+/// value matches the general one.
 ///
-/// This is the *only* direction the implementation guarantees, and the one
-/// `dedup_covered_interpretations` depends on: a spurious `true` deletes a real answer, whereas a
-/// missed containment merely leaves a redundant one. The converse is deliberately not asserted --
-/// `covers` is a positional test and misses e.g. `aa*` against `aaa*`.
+/// Values are over `{a, b}` and words over `{a, b, c}`, so `c` serves as the fresh symbol:
+/// a failed containment always has a counterexample of at most the specific value's length
+/// (each of its `*` replaced by `c`), which the word bound exceeds.
 #[test]
-fn covers_never_claims_an_unsound_containment() {
-	let alphabet: [char; 2] = ['a', 'b'];
-	let values: Vec<Vec<SymbolicChar>> = values_in_normal_form(&alphabet, 4);
+fn covers_is_exactly_glob_containment() {
+	let values: Vec<Vec<SymbolicChar>> = all_values(&['a', 'b'], 4);
 
-	// Every word the patterns could distinguish, up to a length exceeding the longest pattern.
 	let mut words: Vec<Vec<char>> = vec![Vec::new()];
 	let mut frontier: Vec<Vec<char>> = vec![Vec::new()];
-	for _ in 0..6 {
+	for _ in 0..5 {
 		let mut next: Vec<Vec<char>> = Vec::new();
 		for word in frontier.iter() {
-			for &character in alphabet.iter() {
+			for character in ['a', 'b', 'c'] {
 				next.push([word.as_slice(), &[character]].concat());
 			}
 		}
@@ -230,51 +224,63 @@ fn covers_never_claims_an_unsound_containment() {
 		frontier = next;
 	}
 
-	let languages: Vec<Vec<bool>> = values
-		.iter()
-		.map(|value| Vec::from_iter(words.iter().map(|word| glob_matches(value, word))))
-		.collect::<Vec<_>>();
+	let languages: Vec<Vec<bool>> = Vec::from_iter(
+		values
+			.iter()
+			.map(|value| Vec::from_iter(words.iter().map(|word| glob_matches(value, word)))),
+	);
 
-	let mut checked: usize = 0;
+	let render = |value: &[SymbolicChar]| String::from_iter(value.iter().map(ToString::to_string));
+	let mut covering: usize = 0;
 	for (general, general_language) in values.iter().zip(languages.iter()) {
 		for (specific, specific_language) in values.iter().zip(languages.iter()) {
-			if !LeafQuery::new_static_text(general.clone())
-				.covers(&LeafQuery::new_static_text(specific.clone()))
-			{
-				continue;
-			}
-			checked += 1;
-			let unsound: Option<usize> = specific_language
-				.iter()
-				.zip(general_language.iter())
-				.position(|(&in_specific, &in_general)| in_specific && !in_general);
-			assert!(
-				unsound.is_none(),
-				"{:?} claims to cover {:?}, but {:?} matches only the latter",
-				String::from_iter(general.iter().map(ToString::to_string)),
-				String::from_iter(specific.iter().map(ToString::to_string)),
-				words[unsound.expect("just checked")]
-					.iter()
-					.collect::<String>(),
+			let contained: bool = std::iter::zip(specific_language, general_language)
+				.all(|(&in_specific, &in_general)| !in_specific || in_general);
+			let covers: bool = LeafQuery::new_static_text(general.clone())
+				.covers(&LeafQuery::new_static_text(specific.clone()));
+			assert_eq!(
+				contained,
+				covers,
+				"{:?} against {:?}",
+				render(general),
+				render(specific),
 			);
+			covering += usize::from(covers);
 		}
 	}
-
-	assert!(
-		0 < checked,
-		"expected some pair to be covered, or the test proves nothing"
-	);
-	println!("verified {checked} covering pairs against true glob containment");
+	assert!(0 < covering, "expected some pair to be covered");
 }
 
-/// `covers` is reflexive and transitive on values in normal form, which is what makes
+/// Containments a segment-by-segment comparison would miss.
+#[test]
+fn covers_sees_through_misaligned_wildcards() {
+	let value = |text: &str| {
+		LeafQuery::new_static_text(Vec::from_iter(text.chars().map(|character| {
+			if '*' == character {
+				SymbolicChar::GlobStar
+			} else {
+				SymbolicChar::Literal(character)
+			}
+		})))
+	};
+	assert!(value("aa*").covers(&value("aaa*")));
+	assert!(value("*a*").covers(&value("b*ab")));
+	assert!(value("a*").covers(&value("a**")));
+	assert!(value("a**").covers(&value("a*")));
+	assert!(!value("aa*").covers(&value("a*a")));
+	assert!(!value("").covers(&value("*")));
+	assert!(value("*").covers(&value("")));
+}
+
+/// `covers` is reflexive and transitive, which is what makes
 /// `dedup_covered_interpretations` reach a fixpoint.
 #[test]
-fn covers_is_a_partial_order_in_normal_form() {
-	let values: Vec<LeafQuery> = values_in_normal_form(&['a', 'b'], 3)
-		.into_iter()
-		.map(LeafQuery::new_static_text)
-		.collect::<Vec<_>>();
+fn covers_is_a_partial_order() {
+	let values: Vec<LeafQuery> = Vec::from_iter(
+		all_values(&['a', 'b'], 3)
+			.into_iter()
+			.map(LeafQuery::new_static_text),
+	);
 
 	for value in values.iter() {
 		assert!(

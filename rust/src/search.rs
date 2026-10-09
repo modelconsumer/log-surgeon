@@ -249,11 +249,8 @@ impl Interpretation {
 
 	/// Drops interpretations that another already covers.
 	///
-	/// [`LeafQuery::covers`] is a *conservative* test,
-	/// so the result is not guaranteed to be a minimal antichain:
-	/// a redundant interpretation the test cannot see through is kept.
-	/// That costs an extra result, never a wrong one,
-	/// which is why the cheap test is preferred to deciding glob containment.
+	/// [`LeafQuery::covers`] is exact glob containment,
+	/// so the result is a minimal antichain up to interpretations with equal languages.
 	///
 	/// Order is not preserved. Callers sort beforehand only to `dedup` exact duplicates; nothing
 	/// downstream depends on the order, and not preserving it keeps this a single pass over each
@@ -910,78 +907,16 @@ impl LeafQuery {
 	}
 
 	/// Whether `self` describes everything `other` does:
-	/// `true` implies every string matching `other`'s value also matches `self`'s.
+	/// `true` iff every string matching `other`'s value also matches `self`'s,
+	/// and both name the same capture (or are both static text).
 	///
-	/// This is a **conservative syntactic test, not glob containment**.
-	/// It compares the two values wildcard-segment by wildcard-segment,
-	/// so it only sees a containment when the wildcards line up positionally:
-	/// it reports `false` for `aa*` against `aaa*`,
-	/// even though every string matching the latter matches the former.
-	/// Only the stated implication holds; the converse does not.
-	///
-	/// That is enough for its one caller, [`Interpretation::dedup_covered_interpretations`],
-	/// where a missed containment leaves a redundant interpretation
-	/// and a spurious one would delete a real answer.
-	/// Deciding true containment would need a quadratic match over the two patterns,
-	/// which is not worth it to tidy the output.
-	///
-	/// Note this is reflexive and transitive only for values with no adjacent wildcards,
-	/// which is what every producer emits; see [`Interpretation::invariants`].
+	/// This is exact glob containment; see [`glob_covers`].
+	/// It is therefore reflexive and transitive on any values.
 	fn covers(&self, other: &Self) -> bool {
 		if self.fully_qualified_name != other.fully_qualified_name {
 			return false;
 		}
-		if self.symbolic_value == [SymbolicChar::GlobStar] {
-			return true;
-		}
-		// An empty value is a capture pinned to the empty string
-		// (an end-anchored query against a rule such as `(?<leaf>[a-z]*)`).
-		// It is maximally specific:
-		// it subsumes only another empty value, and nothing subsumes it but itself.
-		if self.symbolic_value.is_empty() || other.symbolic_value.is_empty() {
-			return self.symbolic_value == other.symbolic_value;
-		}
-		// Remark: Always has 1 subslice.
-		let mut other_parts: Vec<&[SymbolicChar]> = other
-			.symbolic_value
-			.split(|&ch| ch == SymbolicChar::GlobStar)
-			.collect::<Vec<_>>();
-		if *other.symbolic_value.last().expect("non-empty") == SymbolicChar::GlobStar {
-			if *self.symbolic_value.last().expect("non-empty") != SymbolicChar::GlobStar {
-				return false;
-			}
-			let last: &[SymbolicChar] = other_parts.pop().expect("always has 1 subslice");
-			assert_eq!(last, []);
-		}
-		let mut i: usize = 0;
-		if *other.symbolic_value.first().expect("non-empty") == SymbolicChar::GlobStar {
-			if *self.symbolic_value.first().expect("non-empty") != SymbolicChar::GlobStar {
-				return false;
-			}
-			assert_eq!(other_parts[0], []);
-			i += 1;
-		}
-		for my_part in self
-			.symbolic_value
-			.split(|&ch| ch == SymbolicChar::GlobStar)
-		{
-			if my_part.is_empty() {
-				continue;
-			}
-			let Some(other_part): Option<&&[SymbolicChar]> = other_parts.get(i) else {
-				return false;
-			};
-			if let Some(suffix) = other_part.strip_prefix(my_part) {
-				if suffix.is_empty() {
-					i += 1;
-				} else {
-					other_parts[i] = suffix;
-				}
-			} else {
-				return false;
-			}
-		}
-		i == other_parts.len()
+		glob_covers(&self.symbolic_value, &other.symbolic_value)
 	}
 
 	/// Appends a trailing wildcard, unless the value already ends in one.
@@ -1016,4 +951,39 @@ impl LeafQuery {
 		}
 		self.append_wildcard();
 	}
+}
+
+/// Whether every string matching the glob `other` also matches the glob `pattern`.
+///
+/// For globs whose only wildcard is `*`, containment holds iff `pattern` matches the
+/// string made from `other` by replacing each `*` with a fresh symbol that no literal
+/// equals:
+///
+/// - if containment holds, that string is itself in `other`'s language;
+/// - conversely, a literal never matches a fresh symbol, so each one is absorbed by
+///   some `*` of `pattern`, which could equally absorb any string in its place.
+///
+/// So this is an ordinary glob match in which a `*` of `other` is a single token that
+/// only a `*` of `pattern` can consume. `O(n x m)` time, `O(m)` space.
+fn glob_covers(pattern: &[SymbolicChar], other: &[SymbolicChar]) -> bool {
+	// `matches[j]`: whether `pattern[i..]` matches `other[j..]`, for the current `i`.
+	let mut matches: Vec<bool> = vec![false; other.len() + 1];
+	matches[other.len()] = true;
+	for symbol in pattern.iter().rev() {
+		match symbol {
+			SymbolicChar::GlobStar => {
+				// Absorb nothing (`matches[j]` as is) or `other[j]` and continue.
+				for j in (0..other.len()).rev() {
+					matches[j] = matches[j] || matches[j + 1];
+				}
+			},
+			SymbolicChar::Literal(_) => {
+				for j in 0..other.len() {
+					matches[j] = (*symbol == other[j]) && matches[j + 1];
+				}
+				matches[other.len()] = false;
+			},
+		}
+	}
+	matches[0]
 }
