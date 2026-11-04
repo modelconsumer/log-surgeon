@@ -373,7 +373,7 @@ impl Tdfa {
 			}
 		}
 		captures
-			.sort_unstable_by_key(|cap| (cap.range.start, Reverse(cap.range.end), cap.capture_id));
+			.sort_unstable_by_key(|cap| (cap.range.start, cap.capture_id, Reverse(cap.range.end)));
 		for i in 0..captures.len() {
 			if let Some(parent_id) = captures[i].parent_id {
 				// Linear scan (backwards) since it should usually be small.

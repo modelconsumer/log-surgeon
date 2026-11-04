@@ -771,3 +771,53 @@ fn negated_class_spans_delimiters() {
 		]],
 	);
 }
+
+/// A nullable capture and a following sibling can start at the same position.
+/// Ordering them by capture ID (pre-order) keeps leaves left-to-right,
+/// so [`LogEvent`]'s `Debug` impl does not attempt to slice backwards.
+#[test]
+fn same_start_leaves_render_left_to_right() {
+	let definition: &str = r#"
+		delimiters: " \t\r\n"
+		r: "(?<a>x?)(?<b>y)"
+	"#;
+	assert_eq!(
+		parse_with(definition, "y"),
+		vec![vec![
+			r#""y""#,
+			r#"#0 r "y" parent=#0"#,
+			r#"#1 r.a "" parent=#0 leaf"#,
+			r#"#2 r.b "y" parent=#0 leaf"#,
+		]],
+	);
+
+	let mut parser: Parser = crate::parser! { definition };
+	let mut pos: usize = 0;
+	let event: LogEvent<'_> = parser.next_event("y", &mut pos).unwrap();
+	assert_eq!(format!("{event:?}"), "(?<r.a>)(?<r.b>y)");
+}
+
+/// Repeated nullable captures produce equal matches.
+/// [`LogEvent::check_invariants`] therefore allows equal adjacent entries,
+/// and `Debug` still renders them left-to-right.
+#[test]
+fn repeated_nullable_captures_are_equal_matches() {
+	let definition: &str = r#"
+		delimiters: " \t\r\n"
+		r: "(?<a>x?)+y"
+	"#;
+	assert_eq!(
+		parse_with(definition, "y"),
+		vec![vec![
+			r#""y""#,
+			r#"#0 r "y" parent=#0"#,
+			r#"#1 r.a "" parent=#0 leaf"#,
+			r#"#2 r.a "" parent=#0 leaf"#,
+		]],
+	);
+
+	let mut parser: Parser = crate::parser! { definition };
+	let mut pos: usize = 0;
+	let event: LogEvent<'_> = parser.next_event("y", &mut pos).unwrap();
+	assert_eq!(format!("{event:?}"), "(?<r.a>)(?<r.a>)y");
+}

@@ -197,6 +197,22 @@ fn nested_captures() {
 	assert_eq!((inner.range.start, inner.range.end), (1, 2));
 }
 
+/// Same start, so the tie-break is the capture ID (assigned in pre-order),
+/// not the end: the nullable earlier sibling comes before the longer later one.
+/// This keeps leaves left-to-right for rendering.
+#[test]
+fn same_start_siblings_sort_by_capture_id() {
+	let rule: RootRule = for_rule("(?<a>x?)(?<b>y)");
+	assert_eq!(captures_of(&rule, "y"), vec![(1, 0, 0), (2, 0, 1)]);
+
+	let mut data: TdfaExecution = rule.dfa.execution_data();
+	assert!(rule.dfa.execute_with_captures("y", &mut data, &rule));
+	assert_eq!(
+		Vec::from_iter(data.captures.iter().map(|cap| cap.parent_index)),
+		vec![0, 0],
+	);
+}
+
 #[test]
 fn nested_repeated_captures() {
 	let rule: RootRule = for_rule("(?<a>(?<b>x)+)");

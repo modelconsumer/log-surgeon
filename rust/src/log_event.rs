@@ -133,14 +133,16 @@ impl<'parser> LogEvent<'parser> {
 	};
 
 	/// See the ordering for [`LogEvent::all_matches`].
+	///
+	/// The ordering is non-strict: repeated nullable captures can produce equal matches.
 	pub fn check_invariants(&self) {
 		assert!(self.all_matches.is_sorted_by(|lhs, rhs| {
 			lhs.range
 				.start
 				.cmp(&rhs.range.start)
-				.then(lhs.range.end.cmp(&rhs.range.end).reverse())
 				.then(lhs.sub_rule_id.cmp(&rhs.sub_rule_id))
-				.is_lt()
+				.then(lhs.range.end.cmp(&rhs.range.end).reverse())
+				.is_le()
 		}));
 	}
 }
