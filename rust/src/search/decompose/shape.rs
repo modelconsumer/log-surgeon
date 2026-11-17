@@ -143,6 +143,16 @@ impl ShapeModel {
 		Self { parts }
 	}
 
+	/// The index of the last part, or `None` for an empty shape.
+	///
+	/// An empty shape is still valid: it matches only the empty message.
+	/// Callers that build an automaton for parts `0..=last` must handle `None`
+	/// rather than subtracting one from an empty part list.
+	#[must_use]
+	pub fn last_part(&self) -> Option<usize> {
+		self.parts.len().checked_sub(1)
+	}
+
 	/// The fragments for parts `start..=end`, for rebuilding a *slice* of the shape's automaton.
 	///
 	/// Round-trips through [`LogShapeFragment`] rather than re-tokenizing the shape string,

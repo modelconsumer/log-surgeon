@@ -67,6 +67,51 @@ fn pure_static_shapes_are_supported() {
 	assert!(search(&spec, "*missing*", shape).is_empty());
 }
 
+/// The empty shape is pure static text of length zero.
+/// It is supported, matches only the empty message,
+/// and the engine agrees with composition instead of underflowing on `parts.len() - 1`.
+#[test]
+fn empty_shape_is_supported() {
+	let spec: ParsingSpec = test_spec();
+
+	let wildcard: SearchString = SearchString::parse("*").unwrap();
+	for interpretations in [
+		wildcard.search_by_log_shapes(&spec, &[""]).pop().unwrap(),
+		wildcard.interpretations_for_log_shape_via_engine(&spec, ""),
+	] {
+		assert_eq!(interpretations.len(), 1);
+		assert_eq!(interpretations[0].leaf_queries.len(), 1);
+		assert!(interpretations[0].leaf_queries[0].is_static_text());
+		assert_eq!(interpretations[0].leaf_queries[0].string_value, "*");
+	}
+
+	let empty: SearchString = SearchString::parse("").unwrap();
+	for interpretations in [
+		empty.search_by_log_shapes(&spec, &[""]).pop().unwrap(),
+		empty.interpretations_for_log_shape_via_engine(&spec, ""),
+	] {
+		assert_eq!(interpretations.len(), 1);
+		assert!(interpretations[0].leaf_queries.is_empty());
+	}
+
+	// A non-empty query cannot match the empty message.
+	for query in ["a", "*a*"] {
+		let query: SearchString = SearchString::parse(query).unwrap();
+		assert!(
+			query
+				.search_by_log_shapes(&spec, &[""])
+				.pop()
+				.unwrap()
+				.is_empty()
+		);
+		assert!(
+			query
+				.interpretations_for_log_shape_via_engine(&spec, "")
+				.is_empty()
+		);
+	}
+}
+
 /// Pure-static shapes must agree with the engine, like any other shape.
 #[test]
 fn pure_static_matches_the_engine() {

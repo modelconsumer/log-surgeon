@@ -230,8 +230,10 @@ impl LeafQuery {
 	}
 
 	/// One sub-query per path component, in order.
+	///
+	/// A path has no components when the intersection accepts only the empty string,
+	/// which is the empty log shape's only message; that yields no sub-queries.
 	pub(super) fn from_path(path: &Path) -> Vec<Self> {
-		assert!(!path.components.is_empty());
 		Vec::from_iter(path.components.iter().map(|token| match token {
 			PathComponent::Literal(contents) => Self::new_static_text(contents.clone()),
 			PathComponent::Capture { capture, contents } => {

@@ -1,6 +1,22 @@
 use super::*;
 use crate::parsing_spec::ParsingSpecBuilder;
 
+/// An empty shape has no parts to truncate.
+/// The fallback path must start from the empty-string automaton,
+/// not subtract one from an empty part list.
+#[test]
+fn truncated_automaton_of_empty_shape_is_epsilon() {
+	let spec: ParsingSpec = ParsingSpecBuilder::new().build();
+	let model: ShapeModel = ShapeModel::new(&spec, "");
+	let shape: SearchString = SearchString::parse("*").unwrap();
+	let query: Query<'_> = Query::new(&shape);
+
+	let truncated: TruncatedShape = shape.truncated_automata(&spec, &model, &query, &None);
+	assert_eq!(truncated.automata.states.len(), 1);
+	assert!(truncated.automata.states[0].is_accepting());
+	assert_eq!(truncated.dropped, Tail::Empty);
+}
+
 #[test]
 fn search_email() {
 	let mut builder: ParsingSpecBuilder = ParsingSpecBuilder::new();

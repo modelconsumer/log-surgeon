@@ -91,7 +91,11 @@ impl SearchString {
 		log_shape: &str,
 	) -> Vec<Interpretation> {
 		let model: ShapeModel = ShapeModel::new(spec, log_shape);
-		let automata: Tnfa = Self::automata_for_prefix(spec, &model, model.parts.len() - 1);
+		let automata: Tnfa = match model.last_part() {
+			Some(last) => Self::automata_for_prefix(spec, &model, last),
+			// An empty shape has no parts; its automaton accepts only the empty message.
+			None => Tnfa::epsilon(),
+		};
 		self.interpretations_for_automata(spec, &automata, &[])
 	}
 
@@ -228,7 +232,13 @@ impl SearchString {
 		query: &Query<'_>,
 		maybe_table: &Option<PlacementTable>,
 	) -> TruncatedShape {
-		let last: usize = model.parts.len() - 1;
+		let Some(last) = model.last_part() else {
+			// An empty shape has no parts to truncate; its automaton accepts only nothing.
+			return TruncatedShape {
+				automata: Tnfa::epsilon(),
+				dropped: Tail::Empty,
+			};
+		};
 
 		let end: usize = if query.anchored_end {
 			last

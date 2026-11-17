@@ -260,7 +260,7 @@ impl Composition {
 	/// the value checked against a rule is the very one that will be reported.
 	fn rendered_parts(&self, model: &ShapeModel, query: &Query<'_>) -> Vec<RenderedPart> {
 		let window: Option<usize> = if query.anchored_end {
-			model.parts.len().checked_sub(1)
+			model.last_part()
 		} else {
 			self.last_constrained()
 		};

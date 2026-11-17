@@ -355,7 +355,7 @@ impl Regex {
 
 impl From<std::convert::Infallible> for RegexError {
 	fn from(infallible: std::convert::Infallible) -> Self {
-		infallible.into()
+		match infallible {}
 	}
 }
 
